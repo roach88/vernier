@@ -12,7 +12,7 @@ import type { ContractRegistry, ContractResult } from "../kernel/contract.js"
 import { failedCheckMessages } from "../kernel/contract.js"
 import { hashObserver, type EffectObservation, type EffectsObserver } from "../kernel/effects.js"
 import type { Decision, Observation } from "../kernel/policy.js"
-import type { Executor, Loop, StepResult } from "../kernel/types.js"
+import type { Executor, Loop, MemoryStore, StepResult } from "../kernel/types.js"
 import { derivedOutputSchema, zeroUsage } from "../kernel/types.js"
 import { journalPath, Ledger, resolveLedgerRoot, resumeKey, KEY_VERSION } from "../ledger/ledger.js"
 
@@ -42,6 +42,13 @@ export interface EngineDeps {
    * pass the git-aware `gitObserver` from kernel/git-effects.ts.
    */
   readonly observer?: EffectsObserver
+  /**
+   * The durable rule store (memory/memory.ts), threaded to executors via
+   * RunContext. Inject ONE store across consecutive runs to let learning
+   * compound — that sharing, not the store itself, is the memory feature.
+   * Only loops with recall/remember steps need it.
+   */
+  readonly memory?: MemoryStore
 }
 
 export interface Run {
@@ -120,7 +127,7 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
   const spec = { ...base, ...(prompt !== undefined ? { prompt } : {}) }
   let result: StepResult
   try {
-    result = await executor.run(spec, { workdir: deps.workdir })
+    result = await executor.run(spec, { workdir: deps.workdir, ...(deps.memory ? { memory: deps.memory } : {}) })
   } catch (error) {
     result = {
       status: "failed",

@@ -66,7 +66,8 @@ Rules:
 `
 }
 
-const gradePrompt: PromptTemplate = (spec) => {
+/** The independent verifier's prompt. Exported: Pilot 3 grades with the same words. */
+export const gradePrompt: PromptTemplate = (spec) => {
   const rubric = String(spec.inputs.rubric)
   const answer = String(spec.inputs.answer)
   return `You are an INDEPENDENT verifier for loop \`${spec.loopId}\`. You did not write the answer below; grade it against the rubric exactly as written.

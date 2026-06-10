@@ -99,3 +99,48 @@ describe("until", () => {
     expect(() => until(() => true, { maxIterations: 0 })).toThrow(/positive integer/)
   })
 })
+
+// ----------------------------------------------- mid-sequence graded step (at)
+
+// Pilot 3's shape: [recall, answer, grade, distill, remember] — grade is
+// graded (`at: "grade"`) but NOT last, so predicate-met must yield the normal
+// positional continue (on to distill), not a hard stop.
+const midPolicy = until((v) => v.passed === true, {
+  at: "grade",
+  maxIterations: 3,
+  restartAt: "answer",
+  feedbackFrom: (v) => String(v.feedback),
+})
+
+const midGrade = (overrides: Partial<Observation> = {}): Observation =>
+  observation({ stepId: "grade", stepIndex: 2, stepCount: 5, ...overrides })
+
+describe("until with a mid-sequence graded step", () => {
+  it("predicate-met yields the positional continue — the loop proceeds to the steps after grade", () => {
+    const decision = midPolicy(midGrade())
+    expect(decision.kind).toBe("continue")
+    expect(decision.classification).toBe("success")
+    expect(decision.summary).toContain("until-predicate was met")
+  })
+
+  it("predicate-unmet still iterates back to restartAt with threaded feedback", () => {
+    const decision = midPolicy(midGrade({ output: { passed: false, feedback: "end with the exact sentence", missing: [] } }))
+    expect(decision.kind).toBe("iterate")
+    expect(decision.restartAt).toBe("answer")
+    expect(decision.retryHint).toBe("end with the exact sentence")
+  })
+
+  it("predicate-unmet at the ceiling escalates — termination holds mid-sequence too", () => {
+    const decision = midPolicy(midGrade({ iteration: 3, output: { passed: false, feedback: "no", missing: [] } }))
+    expect(decision.kind).toBe("escalate")
+  })
+
+  it("steps after the graded step pass through untouched — the genuinely last step still stops", () => {
+    // distill (mid-sequence, no `passed` field) continues; remember (last) stops.
+    const distill = midPolicy(observation({ stepId: "distill", stepIndex: 3, stepCount: 5, output: { rule: "r" } }))
+    expect(distill.kind).toBe("continue")
+    const remember = midPolicy(observation({ stepId: "remember", stepIndex: 4, stepCount: 5, output: { stored: true, id: "x" } }))
+    expect(remember.kind).toBe("stop")
+    expect(remember.classification).toBe("success")
+  })
+})

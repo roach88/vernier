@@ -166,26 +166,37 @@ export function retryPolicy(opts: { maxAttempts: number; base?: Policy }): Polic
 export interface UntilOpts {
   /** Hard iteration ceiling — the termination guarantee. Escalates when reached unmet. */
   readonly maxIterations: number
+  /**
+   * Step id whose successful completion the predicate grades. Default: the
+   * loop's last step (Pilot 2's grade-is-last shape). When the graded step
+   * sits mid-sequence (Pilot 3: grade before distill/remember),
+   * predicate-met simply lets the base decision stand — the normal
+   * positional `continue` — so the loop proceeds to the steps after it.
+   */
+  readonly at?: string
   /** Step id to loop back to when the predicate is unmet. Default: the loop's first step. */
   readonly restartAt?: string
-  /** Extract feedback from the final step's validated output, threaded into the next iteration. */
+  /** Extract feedback from the graded step's validated output, threaded into the next iteration. */
   readonly feedbackFrom?: (output: Readonly<Record<string, unknown>>) => string | undefined
   /** Per-step decision procedure for everything BEFORE the sequence completes. Default: decideNextStep. */
   readonly base?: Policy
 }
 
 /**
- * Combinator: iterate the step sequence until a predicate over the final
+ * Combinator: iterate the step sequence until a predicate over the graded
  * step's validated output is met (the Ax-image loop: produce -> verify ->
  * if-fail-iterate-with-feedback -> until-passed).
  *
- * Composition with retry semantics: `base` governs every mid-sequence
+ * Composition with retry semantics: `base` governs every non-graded
  * outcome unchanged — transient executor/contract failures stay retries of
- * the SAME step. `until` intercepts only the would-be successful stop at the
- * end of the sequence: predicate met -> stop; iterations left -> iterate
- * back to `restartAt`, threading `feedbackFrom(output)` as the retryHint;
- * ceiling reached -> escalate. An `iterate` decision is therefore only ever
- * emitted while iteration < maxIterations, so a run cannot loop forever.
+ * the SAME step. `until` intercepts only the graded step's successful
+ * completion (`at`, default the last step): predicate met -> the base
+ * decision stands, which is the existing positional progression (continue
+ * when steps follow, stop when the graded step is last — no new branch);
+ * iterations left -> iterate back to `restartAt`, threading
+ * `feedbackFrom(output)` as the retryHint; ceiling reached -> escalate. An
+ * `iterate` decision is therefore only ever emitted while iteration <
+ * maxIterations, so a run cannot loop forever.
  */
 export function until(
   predicate: (output: Readonly<Record<string, unknown>>, obs: Observation) => boolean,
@@ -197,7 +208,9 @@ export function until(
   const base = opts.base ?? decideNextStep
   return (obs) => {
     const decision = base(obs)
-    if (decision.kind !== "stop" || decision.classification !== "success") return decision
+    const success = decision.classification === "success" && (decision.kind === "continue" || decision.kind === "stop")
+    const graded = opts.at !== undefined ? obs.stepId === opts.at : obs.stepIndex + 1 >= obs.stepCount
+    if (!success || !graded) return decision
 
     const output = obs.output ?? {}
     if (predicate(output, obs)) {

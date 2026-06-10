@@ -20,13 +20,19 @@ import type { Policy } from "./policy.js"
 
 // ---------------------------------------------------------------- Signature
 
-/** The Ax-style typed `in -> out` boundary. Both sides are validated at runtime. */
+/**
+ * The Ax-style typed `in -> out` boundary. Both sides are validated at
+ * runtime. I and O are the PARSED types; the raw shape a schema accepts is
+ * the schema's business — so a zod transform can derive a step's inputs
+ * from the data plane (e.g. topic from goal, pilot3/loop.ts) and the
+ * signature IS the derivation.
+ */
 export interface Signature<I = unknown, O = unknown> {
-  readonly input: z.ZodType<I>
-  readonly output: z.ZodType<O>
+  readonly input: z.ZodType<I, z.ZodTypeDef, any>
+  readonly output: z.ZodType<O, z.ZodTypeDef, any>
 }
 
-export function sig<I, O>(input: z.ZodType<I>, output: z.ZodType<O>): Signature<I, O> {
+export function sig<I, O>(input: z.ZodType<I, z.ZodTypeDef, any>, output: z.ZodType<O, z.ZodTypeDef, any>): Signature<I, O> {
   return { input, output }
 }
 
@@ -159,11 +165,49 @@ export interface StepResult {
   readonly usage: Usage
 }
 
+// ------------------------------------------------------------------- Memory
+
+/**
+ * One distilled, VERIFIED rule. Memory is the ledger's sibling: append-only,
+ * durable, but queryable by topic and shared ACROSS runs — that sharing is
+ * what makes a self-improving loop genuinely compound (a later run recalls
+ * what an earlier run learned). The store holds reusable rules that passed
+ * verification, never raw failure notes; loops enforce that by shape
+ * (`remember` sits after a passing grade — see pilot3/loop.ts).
+ */
+export interface RuleRecord {
+  /** Content-derived: hash(topic + rule), so re-remembering the same rule re-yields the same id. */
+  readonly id: string
+  /** The reusable rule — one general, imperative sentence, applicable beyond the run that learned it. */
+  readonly rule: string
+  /** Why the rule is believed: the verified answer/artifact that passed the grade. */
+  readonly evidence: string
+  /** Recall key. Retrieval is keyword overlap on this field (see memory/memory.ts). */
+  readonly topic: string
+  readonly sourceRunId: string
+  readonly loopId: string
+  readonly at: string
+}
+
+/**
+ * The memory seam (Ax's primitives): deterministic store ops, no LLM.
+ * `recall(topic) -> rules[]` is a read; `remember(rule, evidence)` is an
+ * append. The JSONL implementation lives in memory/memory.ts; executors
+ * reach it through RunContext.memory, injected via EngineDeps exactly as
+ * contracts and executors are.
+ */
+export interface MemoryStore {
+  recall(topic: string): readonly RuleRecord[]
+  remember(record: Omit<RuleRecord, "id" | "at">): RuleRecord
+}
+
 // ----------------------------------------------------------------- Executor
 
 export interface RunContext {
   /** Absolute path the step may operate in; effect observation is rooted here. */
   readonly workdir: string
+  /** The shared rule store; the recall/remember executors require it (executors/memory.ts). */
+  readonly memory?: MemoryStore
   readonly signal?: AbortSignal
 }
 

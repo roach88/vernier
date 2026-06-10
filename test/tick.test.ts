@@ -270,3 +270,96 @@ describe("tick loop-back (iterate decisions)", () => {
     await expect(runLoop(loop, { goal: "boom" }, d)).rejects.toThrow(/names no step/)
   })
 })
+
+// --------------------------------------- positional advance past a graded step
+
+// Pilot 3's shape, faked: `until` wraps a MID-sequence grade (`at: "grade"`),
+// so predicate-met must CONTINUE positionally to the steps after it
+// (distill, remember) and only the genuinely last step stops the run.
+const gradedMidLoop = (ledgerRoot: string): Loop<{ goal: string }, { answer: string; rule: string; verdict: string }> => ({
+  id: "graded-mid",
+  version: "0.1.0",
+  signature: sig(z.object({ goal: z.string() }), z.object({ answer: z.string(), rule: z.string(), verdict: z.string() })),
+  steps: [
+    {
+      id: "answer",
+      signature: sig(z.object({ goal: z.string() }), z.object({ answer: z.string() })),
+      executor: "script:answer",
+      effects: noEffects(),
+    },
+    {
+      id: "grade",
+      signature: sig(z.object({ answer: z.string() }), z.object({ passed: z.boolean(), feedback: z.string() })),
+      executor: "script:judge",
+      effects: noEffects(),
+    },
+    {
+      id: "distill",
+      signature: sig(z.object({ answer: z.string() }), z.object({ rule: z.string() })),
+      executor: "script:distill",
+      effects: noEffects(),
+    },
+    {
+      id: "remember",
+      signature: sig(z.object({ rule: z.string() }), z.object({ stored: z.boolean() })),
+      executor: "script:remember",
+      effects: noEffects(),
+    },
+  ],
+  policy: until((v) => v.passed === true, { at: "grade", maxIterations: 3, restartAt: "answer", feedbackFrom: (v) => String(v.feedback) }),
+  trust: "dry-run",
+  ledger: { root: ledgerRoot },
+})
+
+describe("tick positional advance (until at a mid-sequence step)", () => {
+  it("grade passes on iteration 2: answer x2, grade x2, then distill, then remember, then stop — ledger proves the order", async () => {
+    const { workdir, ledgerRoot } = temp()
+    const answer = scriptExecutor("script:answer", (spec) => ({
+      output: { answer: spec.retryHint ? "revised answer" : "first draft" },
+    }))
+    let grades = 0
+    const judge = scriptExecutor("script:judge", () => {
+      grades += 1
+      return { output: grades === 1 ? { passed: false, feedback: "revise it" } : { passed: true, feedback: "" } }
+    })
+    const distill = scriptExecutor("script:distill", () => ({ output: { rule: "always revise" } }))
+    const remember = scriptExecutor("script:remember", () => ({ output: { stored: true } }))
+    const d = deps([answer, judge, distill, remember], workdir)
+
+    const outcome = await runLoop(gradedMidLoop(ledgerRoot), { goal: "compound" }, d)
+
+    expect(outcome.state.status).toBe("done")
+    expect(outcome.state.iteration).toBe(2)
+    expect(outcome.output).toEqual({ answer: "revised answer", rule: "always revise", verdict: "success" })
+
+    const entries = Ledger.load(join(ledgerRoot, "runs", outcome.state.runId, "journal.jsonl"))
+    const starts = entries.filter((e) => e.type === "step_started")
+    expect(starts.map((s) => (s.type === "step_started" ? `${s.stepId}@${s.iteration}` : ""))).toEqual([
+      "answer@1",
+      "grade@1",
+      "answer@2",
+      "grade@2",
+      "distill@2",
+      "remember@2",
+    ])
+    const decisions = entries.filter((e) => e.type === "decision").map((e) => (e.type === "decision" ? e.decision.kind : ""))
+    expect(decisions).toEqual(["continue", "iterate", "continue", "continue", "continue", "stop"])
+  })
+
+  it("grade never passes: escalates at the ceiling without ever reaching distill/remember", async () => {
+    const { workdir, ledgerRoot } = temp()
+    const answer = scriptExecutor("script:answer", () => ({ output: { answer: "draft" } }))
+    const judge = scriptExecutor("script:judge", () => ({ output: { passed: false, feedback: "never" } }))
+    const distill = scriptExecutor("script:distill", () => ({ output: { rule: "unreachable" } }))
+    const remember = scriptExecutor("script:remember", () => ({ output: { stored: true } }))
+    const d = deps([answer, judge, distill, remember], workdir)
+
+    const outcome = await runLoop(gradedMidLoop(ledgerRoot), { goal: "impossible" }, d)
+
+    expect(outcome.state.status).toBe("needs_human")
+    const entries = Ledger.load(join(ledgerRoot, "runs", outcome.state.runId, "journal.jsonl"))
+    const started = entries.filter((e) => e.type === "step_started").map((e) => (e.type === "step_started" ? e.stepId : ""))
+    expect(started).not.toContain("distill")
+    expect(started).not.toContain("remember") // no path to the store without a passing grade
+  })
+})

@@ -1,11 +1,17 @@
-// JudgeExecutor: LLM-as-judge behind the same Executor seam.
+// JudgeExecutor: an independent structured-output LLM behind the Executor
+// seam — LLM-as-judge is its first face; LLM-as-distiller is its second.
 //
-// An INDEPENDENT verifier — Ax's `grade` function, not self-critique. Each
-// run() is a fresh provider conversation whose prompt contains only what the
-// loop hands it (the rubric and the evidence to grade); it never shares the
+// INDEPENDENT — Ax's `grade` function, not self-critique. Each run() is a
+// fresh provider conversation whose prompt contains only what the loop
+// hands it (the rubric and the evidence to grade); it never shares the
 // producing step's context. Decorrelating judge from producer further
 // (a different model/provider) is policy-level mitigation the caller can opt
 // into via the injectable worker; independence of invocation is enforced here.
+//
+// The id is configurable because the seam is the point: a `distill` step
+// (verified answer -> one reusable rule, Pilot 3) is the SAME kind of
+// executor — independent, structured-output, read-only — registered as a
+// second instance under its own id: new JudgeExecutor({ id: "distill" }).
 //
 // The verdict is model-emitted STRUCTURED output — the first real use of the
 // StepSpec.outputSchema escape hatch. The engine derives that schema from
@@ -17,8 +23,8 @@
 // effect scope — a judge that can write is not a judge. (CodexExecutor
 // derives its sandbox from the scope; here the ceiling is pinned lower.)
 //
-// Evidence under StepSpec.runDir: judge-prompt.md, judge-events.jsonl,
-// judge-verdict.json — outside the workdir, like every runner-managed file.
+// Evidence under StepSpec.runDir: <id>-prompt.md, <id>-events.jsonl,
+// <id>-verdict.json — outside the workdir, like every runner-managed file.
 
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -29,6 +35,8 @@ import { CodexWorker } from "./vendor/omegacode/codex.js"
 import type { AgentResult, AgentSpec } from "./vendor/omegacode/types.js"
 
 export interface JudgeExecutorOpts {
+  /** Executor id steps resolve against. Default "judge"; Pilot 3 registers a second instance as "distill". */
+  readonly id?: string
   /** Injectable worker (tests pass scripted workers). Default: a fresh CodexWorker. */
   readonly worker?: Worker
   /** Codex binary when constructing the default worker. */
@@ -41,11 +49,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export class JudgeExecutor implements Executor {
-  readonly id = "judge"
+  readonly id: string
   private readonly worker: Worker
   private readonly model: string | undefined
 
   constructor(opts: JudgeExecutorOpts = {}) {
+    this.id = opts.id ?? "judge"
     this.worker = opts.worker ?? new CodexWorker({ bin: opts.bin })
     this.model = opts.model
   }
@@ -72,7 +81,7 @@ export class JudgeExecutor implements Executor {
 
     const prefix = evidencePrefix(spec)
     mkdirSync(spec.runDir, { recursive: true })
-    const promptPath = join(spec.runDir, `${prefix}judge-prompt.md`)
+    const promptPath = join(spec.runDir, `${prefix}${this.id}-prompt.md`)
     writeFileSync(promptPath, spec.prompt, "utf8")
 
     const events: string[] = []
@@ -130,14 +139,14 @@ export class JudgeExecutor implements Executor {
     events: readonly string[],
     verdict: Record<string, unknown> | null,
   ): ArtifactRef[] {
-    const eventsPath = join(spec.runDir, `${prefix}judge-events.jsonl`)
-    const verdictPath = join(spec.runDir, `${prefix}judge-verdict.json`)
+    const eventsPath = join(spec.runDir, `${prefix}${this.id}-events.jsonl`)
+    const verdictPath = join(spec.runDir, `${prefix}${this.id}-verdict.json`)
     writeFileSync(eventsPath, events.join("\n") + (events.length ? "\n" : ""), "utf8")
     writeFileSync(verdictPath, JSON.stringify(verdict, null, 2) + "\n", "utf8")
     return [
-      { role: "judge-prompt", path: promptPath },
-      { role: "judge-events", path: eventsPath },
-      { role: "judge-verdict", path: verdictPath },
+      { role: `${this.id}-prompt`, path: promptPath },
+      { role: `${this.id}-events`, path: eventsPath },
+      { role: `${this.id}-verdict`, path: verdictPath },
     ]
   }
 }
