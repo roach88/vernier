@@ -12,11 +12,17 @@ import { type Worker, type WorkerFactory } from "./index.js"
 import { notImplemented } from "./errors.js"
 import { FakeWorker } from "./fake.js"
 import { CodexWorker } from "./codex.js"
+import { CursorWorker } from "./cursor.js"
+import type { SpawnProcess } from "./subprocess-jsonl.js"
 
 export interface FactoryOpts {
   /** Use the in-process FakeWorker for every provider (smoke tests, --fake). */
   fake?: boolean
   codexBin?: string
+  cursorBin?: string
+  cursorConfigDir?: string
+  cursorSpawnProcess?: SpawnProcess
+  cursorStallTimeoutMs?: number
 }
 
 export class DefaultWorkerFactory implements WorkerFactory {
@@ -37,6 +43,13 @@ export class DefaultWorkerFactory implements WorkerFactory {
     switch (id) {
       case "codex":
         return new CodexWorker({ bin: this.opts.codexBin })
+      case "cursor-agent":
+        return new CursorWorker({
+          ...(this.opts.cursorBin !== undefined ? { bin: this.opts.cursorBin } : {}),
+          ...(this.opts.cursorConfigDir !== undefined ? { configDir: this.opts.cursorConfigDir } : {}),
+          ...(this.opts.cursorSpawnProcess !== undefined ? { spawnProcess: this.opts.cursorSpawnProcess } : {}),
+          ...(this.opts.cursorStallTimeoutMs !== undefined ? { stallTimeoutMs: this.opts.cursorStallTimeoutMs } : {}),
+        })
       case "claude-code":
       case "opencode":
       case "pi":

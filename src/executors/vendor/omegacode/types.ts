@@ -7,7 +7,7 @@
 // contracts the workers compile against are kept here.
 
 /** The closed set of backend providers. Model strings stay open — each backend is authoritative. */
-export const PROVIDER_IDS = ["codex", "claude-code", "opencode", "pi"] as const
+export const PROVIDER_IDS = ["codex", "cursor-agent", "claude-code", "opencode", "pi"] as const
 export type ProviderId = (typeof PROVIDER_IDS)[number]
 
 /** read-only: no writes; workspace-write: write within cwd; danger-full-access: unrestricted. */
