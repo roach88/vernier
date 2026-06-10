@@ -23,7 +23,16 @@ import type { EffectObservation } from "../kernel/effects.js"
 import type { Decision } from "../kernel/policy.js"
 import type { ArtifactRef, LedgerSpec, StepStatus, Usage } from "../kernel/types.js"
 
-export const KEY_VERSION = "loop-v1"
+// loop-v2: iteration + attempt joined the key. hash(stepId + inputs) alone
+// cannot disambiguate ITERATING loops — an `iterate` loop-back re-runs the
+// same step with byte-identical inputs (the verifier's feedback travels as
+// retryHint, not as an input), so v1 keys collided across passes and a
+// resume could have replayed iteration 1's output into iteration 2's slot.
+// The (stepId, iteration, attempt) tuple is strictly increasing along a
+// run, so each execution slot now has exactly one key. Pre-v2 journals
+// still resume (the state fold in engine/resume.ts uses decisions, not
+// keys) but get no mid-tick replay — see resumeRun.
+export const KEY_VERSION = "loop-v2"
 
 /** Stable JSON: object keys sorted recursively so equal values hash equally. (omegacode keys.ts) */
 export function canonical(value: unknown): string {
@@ -42,12 +51,19 @@ function sortDeep(value: unknown): unknown {
   return out
 }
 
-/** The simplified resume key: a step has a stable identity, so this is all lineage needed. */
-export function resumeKey(stepId: string, inputs: unknown): string {
+/**
+ * The simplified resume key: a step has a stable identity, so its lineage is
+ * (stepId, iteration, attempt) plus the canonical inputs. Replaying a slot
+ * additionally requires the inputs to hash equal — omegacode's resume
+ * preconditions, collapsed into the key itself.
+ */
+export function resumeKey(stepId: string, inputs: unknown, iteration: number, attempt: number): string {
   return createHash("sha256")
     .update(KEY_VERSION)
     .update("\0step\0")
     .update(stepId)
+    .update("\0")
+    .update(`${iteration}.${attempt}`)
     .update("\0")
     .update(canonical(inputs ?? null))
     .digest("hex")
@@ -64,6 +80,8 @@ export interface RunMetaEntry {
   readonly trust: string
   readonly inputs: unknown
   readonly keyVersion: string
+  /** Absolute workdir the run started under, so a resume lands in the same place. */
+  readonly workdir?: string
   readonly at: string
 }
 
@@ -164,10 +182,18 @@ export class Ledger {
   }
 }
 
-/** Replay view: completed step results by resume key (last wins), plus the final decision. */
+/**
+ * Replay view: completed step results — and their contract / effects /
+ * decision entries — by resume key (last wins), plus the final decision.
+ * This is what the engine consumes on resume: a completed slot is replayed
+ * from these entries, never re-executed (engine/tick.ts).
+ */
 export interface Replay {
   readonly meta?: RunMetaEntry
   readonly completed: ReadonlyMap<string, StepResultEntry>
+  readonly contracts: ReadonlyMap<string, ContractEntry>
+  readonly effects: ReadonlyMap<string, EffectsEntry>
+  readonly decisions: ReadonlyMap<string, DecisionEntry>
   readonly lastDecision?: DecisionEntry
 }
 
@@ -175,11 +201,19 @@ export function replay(entries: readonly LedgerEntry[]): Replay {
   let meta: RunMetaEntry | undefined
   let lastDecision: DecisionEntry | undefined
   const completed = new Map<string, StepResultEntry>()
+  const contracts = new Map<string, ContractEntry>()
+  const effects = new Map<string, EffectsEntry>()
+  const decisions = new Map<string, DecisionEntry>()
   for (const entry of entries) {
     if (entry.type === "meta") meta = entry
     else if (entry.type === "step_result" && entry.status === "completed") completed.set(entry.key, entry)
-    else if (entry.type === "decision") lastDecision = entry
+    else if (entry.type === "contract") contracts.set(entry.key, entry)
+    else if (entry.type === "effects") effects.set(entry.key, entry)
+    else if (entry.type === "decision") {
+      decisions.set(entry.key, entry)
+      lastDecision = entry
+    }
   }
-  const out: Replay = { completed, ...(meta && { meta }), ...(lastDecision && { lastDecision }) }
+  const out: Replay = { completed, contracts, effects, decisions, ...(meta && { meta }), ...(lastDecision && { lastDecision }) }
   return out
 }

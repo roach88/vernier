@@ -21,7 +21,7 @@ const meta = (): RunMetaEntry => ({
   loopVersion: "0.1.0",
   trust: "dry-run",
   inputs: { a: 1 },
-  keyVersion: "loop-v1",
+  keyVersion: "loop-v2",
   at: "2026-06-10T00:00:00.000Z",
 })
 
@@ -55,12 +55,21 @@ function tempJournal(): string {
 
 describe("resumeKey", () => {
   it("is stable across object key order (canonical hashing)", () => {
-    expect(resumeKey("smoke", { a: 1, b: [2, 3] })).toBe(resumeKey("smoke", { b: [2, 3], a: 1 }))
+    expect(resumeKey("smoke", { a: 1, b: [2, 3] }, 1, 1)).toBe(resumeKey("smoke", { b: [2, 3], a: 1 }, 1, 1))
   })
 
   it("differs by stepId and by inputs", () => {
-    expect(resumeKey("smoke", { a: 1 })).not.toBe(resumeKey("other", { a: 1 }))
-    expect(resumeKey("smoke", { a: 1 })).not.toBe(resumeKey("smoke", { a: 2 }))
+    expect(resumeKey("smoke", { a: 1 }, 1, 1)).not.toBe(resumeKey("other", { a: 1 }, 1, 1))
+    expect(resumeKey("smoke", { a: 1 }, 1, 1)).not.toBe(resumeKey("smoke", { a: 2 }, 1, 1))
+  })
+
+  it("disambiguates iterations and attempts: same step + same inputs never collide across passes", () => {
+    // An `iterate` loop-back re-runs a step with byte-identical inputs (the
+    // feedback travels as retryHint, not as an input) — the key must not
+    // collapse those slots, or a resume could replay pass 1 into pass 2.
+    expect(resumeKey("answer", { goal: "g" }, 1, 1)).not.toBe(resumeKey("answer", { goal: "g" }, 2, 1))
+    expect(resumeKey("answer", { goal: "g" }, 1, 1)).not.toBe(resumeKey("answer", { goal: "g" }, 1, 2))
+    expect(resumeKey("answer", { goal: "g" }, 2, 1)).not.toBe(resumeKey("answer", { goal: "g" }, 1, 2))
   })
 
   it("canonical sorts deeply", () => {
@@ -72,7 +81,7 @@ describe("Ledger", () => {
   it("appends and loads entries in order (append-only round trip)", () => {
     const path = tempJournal()
     const ledger = new Ledger(path)
-    const key = resumeKey("smoke", { a: 1 })
+    const key = resumeKey("smoke", { a: 1 }, 1, 1)
     ledger.append(meta())
     ledger.append(result(key))
     expect(Ledger.load(path).map((e) => e.type)).toEqual(["meta", "step_result"])
@@ -94,7 +103,7 @@ describe("Ledger", () => {
   it("is replayable: completed results recoverable by resume key, last decision surfaced", () => {
     const path = tempJournal()
     const ledger = new Ledger(path)
-    const key = resumeKey("smoke", { a: 1 })
+    const key = resumeKey("smoke", { a: 1 }, 1, 1)
     ledger.append(meta())
     ledger.append(result(key, "failed"))
     ledger.append(result(key, "completed"))

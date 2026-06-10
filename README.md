@@ -57,6 +57,44 @@ npm run pilot1    # LIVE: hermes route + real codex implement in a /tmp scratch 
 LOOPER_LIVE=1 npm test -- pilot1.live   # the same live path as a gated test
 ```
 
+## The CLI
+
+Loops are registered by id in `src/cli/registry.ts`; the `looper` bin
+(`npm run looper -- <cmd>`, or `npx looper` / `npm link` for the bin) drives
+them by name and resumes runs from their ledgers:
+
+```sh
+looper loops                                       # list registered loops (id@version, signature, trust)
+looper run <loopId> [--input '<json>'] [--input-file <path>] [--workdir <dir>]
+looper tick <runId>                                # advance ONE step of an existing run from its ledger
+looper resume <runId>                              # continue an existing run to a terminal state
+looper runs                                        # list runs under the ledger root
+looper show <runId>                                # print a run's journal
+```
+
+Agent-ergonomic by contract: every command takes `--json` (machine output on
+stdout, diagnostics on stderr) and exit codes are classed — `0` success,
+`1` terminal-but-not-success (needs_human/stopped) or failure, `2` usage
+error, `3` run lease held. The ledger root is `$LOOPER_HOME`, else
+`./.looper`.
+
+**Resume is replay of the ledger, not re-execution.** `looper resume`
+rebuilds the run by folding the journal's decisions through the same
+state projection the live tick used, landing on the exact
+(stepId, iteration, attempt) the crashed driver stood at — completed steps
+return their LEDGERED outputs and are never re-run (LLM steps are
+non-deterministic; side-effecting steps must not double-apply). A tick torn
+mid-write (step_result journaled, decision lost) is replayed by resume key
+— `hash(stepId + iteration + attempt + canonical(inputs))`, the `loop-v2`
+key scheme — so even that window re-executes nothing.
+
+**One driver per run.** `run`/`tick`/`resume` take a heartbeat lease
+(`lease.json` in the run dir, pid/host/heartbeat). A live lease blocks a
+second driver with exit 3; a stale lease (heartbeat older than its TTL, or
+a same-host pid that no longer exists) is taken over; the lease is released
+on terminal state or process exit. A crashed driver therefore never wedges
+a run.
+
 `npm test` never needs credentials: agent executors are tested against
 omegacode's deterministic `FakeWorker` and injected subprocess runners.
 The live Pilot 1 paths (`npm run pilot1`, `LOOPER_LIVE=1`) require authed
@@ -111,20 +149,22 @@ mini-language parser needed (the design doc's §7 Python risk dissolves here).
 - **New here**: the five-slot kernel types, the tick interpreter, the
   script executor, the ledger entry types for contracts/effects/decisions
   (the gap omegacode's journal has), the `CodexExecutor` AgentResult →
-  StepResult mapping with EffectScope-derived sandboxing, and the
-  pluggable `EffectsObserver` seam.
+  StepResult mapping with EffectScope-derived sandboxing, the pluggable
+  `EffectsObserver` seam, the resume fold + replay-by-key
+  (`src/engine/resume.ts`, the tick's `replayTick`), the heartbeat run
+  lease (`src/engine/lease.ts`), and the `looper` CLI + loop registry
+  (`src/cli/`).
 
 ## Deliberately deferred (next steps, per the design doc)
 
 - Wiring claude/opencode/pi behind the seam (vendored, not wired; claude
-  needs `@anthropic-ai/claude-agent-sdk`); judge executors.
-- Resume-from-ledger (`replay()` exists; tick does not consume it yet),
-  operation leases, a `looper tick <runId>` CLI.
+  needs `@anthropic-ai/claude-agent-sdk`).
 - Trust/promotion lifecycle enforcement from ledger evidence (today only
-  "draft may not execute" is enforced).
-- Policy combinators beyond `retryPolicy` (`until`, feedback threading);
-  feeding failed contract checks back into the retry prompt (today the
-  retry template is static; the failed checks live in the journal's
-  `retryHint`).
-- Loop cards generated from the Loop object; deleting the Python repo
-  (Tyler's call, after reviewing the trace comparison).
+  "draft may not execute" is enforced); a `looper promote` command.
+- Resuming with effect re-observation across the torn-tick window: when a
+  crash lands between a step_result and its effects entry, replay assumes a
+  clean scope (the before-snapshot is gone). Honest, narrow, documented in
+  `replayTick`.
+- Registering loops from outside this repo (the registry is the four pilot
+  loops, in-tree); loop cards generated from the Loop object; deleting the
+  Python repo (Tyler's call, after reviewing the trace comparison).

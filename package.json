@@ -8,9 +8,13 @@
   "engines": {
     "node": ">=22"
   },
+  "bin": {
+    "looper": "bin/looper.js"
+  },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "looper": "tsx src/cli/main.ts",
     "pilot0": "tsx src/pilot0/run.ts",
     "pilot1": "tsx src/pilot1/run.ts",
     "pilot2": "tsx src/pilot2/run.ts",

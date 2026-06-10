@@ -7,14 +7,15 @@
 // run() stays `while (tick)` so the simple case is one call.
 
 import { randomBytes } from "node:crypto"
+import { existsSync } from "node:fs"
 import { dirname } from "node:path"
 import type { ContractRegistry, ContractResult } from "../kernel/contract.js"
 import { failedCheckMessages } from "../kernel/contract.js"
 import { hashObserver, type EffectObservation, type EffectsObserver } from "../kernel/effects.js"
 import type { Decision, Observation } from "../kernel/policy.js"
-import type { Executor, Loop, MemoryStore, StepResult } from "../kernel/types.js"
+import type { Executor, Loop, MemoryStore, Step, StepResult } from "../kernel/types.js"
 import { derivedOutputSchema, zeroUsage } from "../kernel/types.js"
-import { journalPath, Ledger, resolveLedgerRoot, resumeKey, KEY_VERSION } from "../ledger/ledger.js"
+import { journalPath, Ledger, resolveLedgerRoot, resumeKey, KEY_VERSION, type Replay, type StepResultEntry } from "../ledger/ledger.js"
 
 export type RunStatus = "running" | "done" | "needs_human" | "stopped"
 
@@ -55,17 +56,34 @@ export interface Run {
   readonly loop: Loop
   readonly ledger: Ledger
   state: RunState
+  /**
+   * The ledger's replay view, attached by resumeRun (engine/resume.ts).
+   * When a slot's resume key hits `replayed.completed`, tick() returns the
+   * LEDGERED result instead of executing — LLM steps are non-deterministic
+   * and side-effecting steps must not double-apply, so a completed step is
+   * replayed, never re-run. Fresh runs have no view and always execute.
+   */
+  readonly replayed?: Replay
 }
 
 const now = (): string => new Date().toISOString()
+
+/** Fresh run id: loopId + timestamp + entropy. Exposed so a driver can lease the run dir BEFORE the first journal write. */
+export function newRunId(loop: Loop): string {
+  return `${loop.id}-${now().replace(/[-:T]/g, "").slice(0, 14)}-${randomBytes(3).toString("hex")}`
+}
 
 export function startRun<I>(loop: Loop<I, any>, inputs: I, deps: EngineDeps, opts?: { runId?: string }): Run {
   if (loop.trust === "draft") {
     throw new Error(`Loop \`${loop.id}\` is draft; draft loops may not execute. Promote to dry-run first.`)
   }
   const parsed = loop.signature.input.parse(inputs) as Record<string, unknown>
-  const runId = opts?.runId ?? `${loop.id}-${now().replace(/[-:T]/g, "").slice(0, 14)}-${randomBytes(3).toString("hex")}`
-  const ledger = new Ledger(journalPath(resolveLedgerRoot(loop.ledger), runId))
+  const runId = opts?.runId ?? newRunId(loop)
+  const path = journalPath(resolveLedgerRoot(loop.ledger), runId)
+  if (existsSync(path)) {
+    throw new Error(`Run \`${runId}\` already has a journal at \`${path}\`. Resume it instead of starting it again.`)
+  }
+  const ledger = new Ledger(path)
   ledger.append({
     type: "meta",
     runId,
@@ -75,6 +93,7 @@ export function startRun<I>(loop: Loop<I, any>, inputs: I, deps: EngineDeps, opt
     trust: loop.trust,
     inputs: parsed,
     keyVersion: KEY_VERSION,
+    workdir: deps.workdir,
     at: now(),
   })
   return {
@@ -97,7 +116,16 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
 
   // 1. Render the spec: validate inputs against the step signature.
   const inputs = step.signature.input.parse(state.values) as Record<string, unknown>
-  const key = resumeKey(step.id, inputs)
+  const key = resumeKey(step.id, inputs, state.iteration, state.attempt)
+
+  // RESUME IS REPLAY: when the ledger already holds a completed result for
+  // this exact (stepId, iteration, attempt, inputs) slot — a crash landed
+  // after the step_result but before its decision — the slot is replayed
+  // from the ledger, never re-executed. LLM steps are non-deterministic and
+  // side-effecting steps (codex writes, `remember`) must not double-apply.
+  const journaled = run.replayed?.completed.get(key)
+  if (journaled) return replayTick(run, deps, step, key, journaled)
+
   const executor = deps.executors.get(step.executor)
   if (!executor) throw new Error(`Unknown executor id \`${step.executor}\` for step \`${step.id}\`.`)
 
@@ -192,7 +220,77 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
   return { state: run.state, decision }
 }
 
-function nextState(loop: Loop, state: RunState, decision: Decision, output: Record<string, unknown>): RunState {
+/**
+ * Replay one completed slot from the ledger: the journaled output stands in
+ * for execution (the executor is NOT invoked), the journaled contract and
+ * effects entries stand in for re-observation, and only the missing tail of
+ * the tick — at minimum the decision — is appended. Deterministic pieces
+ * (signature parse; the contract, when its entry is missing) are recomputed;
+ * non-deterministic and side-effecting pieces are never re-run.
+ */
+function replayTick(run: Run, deps: EngineDeps, step: Step, key: string, journaled: StepResultEntry): TickOutcome {
+  const { loop, ledger, state } = run
+  // Tolerant lookup: replaying must not require the executor to be wired.
+  const executorId = deps.executors.get(step.executor)?.id ?? step.executor
+
+  const output = journaled.output
+  const outputParse = step.signature.output.safeParse(output)
+  const outputValid = outputParse.success
+
+  let contractResult: ContractResult | null = null
+  if (step.contract) {
+    const ledgered = run.replayed?.contracts.get(key)
+    if (ledgered) {
+      contractResult = ledgered.result
+    } else {
+      // Crash landed before the contract entry: recompute (deterministic) and append it.
+      contractResult = deps.contracts.lookup(step.contract).validate(output, {
+        traceId: state.traceId,
+        loopId: loop.id,
+        loopVersion: loop.version,
+        workdir: deps.workdir,
+        executorId,
+        runDir: dirname(ledger.path),
+      })
+      ledger.append({ type: "contract", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, result: contractResult, at: now() })
+    }
+  }
+
+  // Effects: replay the ledgered observation. If the crash landed before the
+  // effects entry was written, the before-snapshot is gone and observation is
+  // impossible — assume a clean scope rather than re-executing the step.
+  const effects: EffectObservation =
+    run.replayed?.effects.get(key)?.observation ?? { changed: [], allowed: true, unexpected: [] }
+
+  const validatedOutput = outputValid ? (outputParse.data as Record<string, unknown>) : null
+  const observation: Observation = {
+    loopId: loop.id,
+    loopVersion: loop.version,
+    runId: state.runId,
+    stepId: step.id,
+    stepIndex: state.stepIndex,
+    stepCount: loop.steps.length,
+    attempt: state.attempt,
+    iteration: state.iteration,
+    executorId,
+    executorRan: true, // it ran — before the crash; that execution is what's being replayed
+    stepStatus: journaled.status,
+    outputValid,
+    contractId: step.contract ?? null,
+    contractValid: contractResult ? contractResult.valid : true,
+    contractFailedChecks: contractResult ? failedCheckMessages(contractResult) : [],
+    effectsAllowed: effects.allowed,
+    unexpectedChanges: effects.unexpected,
+    output: validatedOutput,
+  }
+  const decision = loop.policy(observation)
+  ledger.append({ type: "decision", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, decision, at: now() })
+  run.state = nextState(loop, state, decision, validatedOutput ?? {})
+  return { state: run.state, decision }
+}
+
+/** The journal-to-state projection. Exported for the resume fold (engine/resume.ts); not a public API. */
+export function nextState(loop: Loop, state: RunState, decision: Decision, output: Record<string, unknown>): RunState {
   const values = { ...state.values, ...output }
   switch (decision.kind) {
     case "continue":
@@ -222,21 +320,32 @@ export interface RunOutcome<O> {
   readonly output: O | null
 }
 
-/** The simple case stays one call: run = while (tick). */
-export async function runLoop<I, O>(loop: Loop<I, O>, inputs: I, deps: EngineDeps, opts?: { runId?: string }): Promise<RunOutcome<O>> {
-  const run = startRun(loop, inputs, deps, opts)
+/** Drive a running run to a terminal state: while (tick). Works on fresh AND resumed runs. */
+export async function driveRun(run: Run, deps: EngineDeps): Promise<TickOutcome> {
   let outcome: TickOutcome
   do {
     outcome = await tick(run, deps)
   } while (outcome.state.status === "running")
-  // `verdict` is the engine's one reserved output field — the final decision's
-  // classification, merged so a loop signature can promise a verdict no step
-  // produces (step values win on collision). Kept as a reserved name: an
-  // explicit projection slot on Loop would be more machinery than this one
-  // deterministic, engine-owned field justifies.
-  const output =
-    outcome.state.status === "done"
-      ? (loop.signature.output.parse({ verdict: outcome.decision.classification, ...run.state.values }) as O)
-      : null
-  return { state: outcome.state, decision: outcome.decision, output }
+  return outcome
+}
+
+/**
+ * The loop's promised output, parsed from the final values. `verdict` is the
+ * engine's one reserved output field — the final decision's classification,
+ * merged so a loop signature can promise a verdict no step produces (step
+ * values win on collision). Kept as a reserved name: an explicit projection
+ * slot on Loop would be more machinery than this one deterministic,
+ * engine-owned field justifies.
+ */
+export function finalOutput<O>(loop: Loop<any, O>, state: RunState, decision: Decision): O | null {
+  return state.status === "done"
+    ? (loop.signature.output.parse({ verdict: decision.classification, ...state.values }) as O)
+    : null
+}
+
+/** The simple case stays one call: run = while (tick). */
+export async function runLoop<I, O>(loop: Loop<I, O>, inputs: I, deps: EngineDeps, opts?: { runId?: string }): Promise<RunOutcome<O>> {
+  const run = startRun(loop, inputs, deps, opts)
+  const outcome = await driveRun(run, deps)
+  return { state: outcome.state, decision: outcome.decision, output: finalOutput(loop, run.state, outcome.decision) }
 }
