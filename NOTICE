@@ -1,0 +1,47 @@
+looper — third-party notices
+
+Portions of this software are derived from omegacode
+(https://github.com/SawyerHood/omegacode), MIT License,
+Copyright (c) 2026 Sawyer Hood.
+
+Derived material (adapted, not copied verbatim unless noted in file headers):
+
+  - src/ledger/ledger.ts
+      journal.jsonl append/load shape, torn-line tolerance, and the
+      canonical (sort-deep) JSON hashing helper are adapted from
+      omegacode src/runtime/journal.ts and src/runtime/keys.ts.
+      Deliberately left behind: the v3 chained call-tree key lineage
+      (branch keys, fan-out counters) and the determinism lint — under
+      loop-as-data the resume key collapses to hash(stepId + inputs).
+
+  - src/kernel/types.ts
+      The Executor protocol is a rename of omegacode's
+      Worker.runAgent(spec, ctx) -> AgentResult seam
+      (src/worker/index.ts), generalized beyond LLM providers.
+      Deliberately left behind: the node:vm sandbox trunk
+      (src/runtime/sandbox.ts, primitives.ts) — workflow-as-untrusted-code
+      is the trust model this kernel rejects.
+
+The full MIT license text of omegacode follows:
+
+MIT License
+
+Copyright (c) 2026 Sawyer Hood
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

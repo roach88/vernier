@@ -1,0 +1,25 @@
+{
+  "name": "looper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent-orchestration kernel: the loop is data; the step is typed; the executor is fungible; the policy is pure; the ledger is append-only.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "pilot0": "tsx src/pilot0/run.ts"
+  },
+  "dependencies": {
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
