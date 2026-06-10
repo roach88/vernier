@@ -23,6 +23,10 @@ export interface ContractContext {
   readonly loopId: string
   readonly loopVersion: string
   readonly workdir: string
+  /** The executor that produced the output (Python looper's `worker` context field). */
+  readonly executorId: string
+  /** Absolute path of the run's ledger dir (Python looper's `bundle_path` context field). */
+  readonly runDir: string
 }
 
 export interface Contract {

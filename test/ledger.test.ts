@@ -43,7 +43,7 @@ const decision = (key: string): DecisionEntry => ({
   key,
   stepId: "smoke",
   attempt: 1,
-  decision: { kind: "stop", classification: "success", summary: "done", notes: [] },
+  decision: { kind: "stop", classification: "success", summary: "done", notes: [], improvement: "none" },
   at: "2026-06-10T00:00:02.000Z",
 })
 

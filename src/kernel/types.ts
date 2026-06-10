@@ -45,18 +45,6 @@ export const fsScope = (...allow: string[]): EffectScope => ({ allow })
 
 // --------------------------------------------------------------------- Step
 
-/** The unit of orchestration: typed boundary, accountable actor, deterministic check, bounded blast radius. */
-export interface Step<I = any, O = any> {
-  readonly id: string
-  readonly signature: Signature<I, O>
-  /** Executor id, resolved against a registry at run time. The executor is fungible. */
-  readonly executor: string
-  /** Optional contract id: deterministic semantic validation of the output value. */
-  readonly contract?: string
-  readonly effects: EffectScope
-  readonly timeoutMs?: number
-}
-
 /** What the engine hands an Executor for one attempt. Inputs are already signature-validated. */
 export interface StepSpec {
   readonly runId: string
@@ -66,10 +54,43 @@ export interface StepSpec {
   readonly stepId: string
   readonly attempt: number
   readonly inputs: Record<string, unknown>
-  /** Rendered for LLM executors; undefined for scripts. */
-  readonly prompt?: string
+  /** Rendered from the step's prompt template for LLM executors; undefined for scripts. */
+  readonly prompt?: string | undefined
+  /**
+   * Plain JSON Schema for provider-native structured output (omegacode's
+   * AgentSpec.schema). The engine still re-validates against the step's zod
+   * output signature — the schema is a steering aid, not the check.
+   */
+  readonly outputSchema?: Record<string, unknown> | undefined
   readonly effects: EffectScope
+  /**
+   * Absolute path of this run's ledger directory. Executors write
+   * runner-managed evidence here (prompts, transcripts, route JSON) —
+   * looper's "task bundle". It is OUTSIDE the workdir, so effect
+   * observation never has to exclude runner-managed files by name
+   * (the Python looper's runner_managed_codex_files dance).
+   */
+  readonly runDir: string
   readonly timeoutMs: number
+}
+
+/** The step's prompt template: pure data-to-text, rendered by the engine each attempt. */
+export type PromptTemplate = (spec: Omit<StepSpec, "prompt">) => string
+
+/** The unit of orchestration: typed boundary, accountable actor, deterministic check, bounded blast radius. */
+export interface Step<I = any, O = any> {
+  readonly id: string
+  readonly signature: Signature<I, O>
+  /** Executor id, resolved against a registry at run time. The executor is fungible. */
+  readonly executor: string
+  /** Optional contract id: deterministic semantic validation of the output value. */
+  readonly contract?: string
+  readonly effects: EffectScope
+  /** Prompt template for LLM executors; omitted for scripts. */
+  readonly prompt?: PromptTemplate
+  /** JSON Schema forwarded to LLM executors for structured output. */
+  readonly outputSchema?: Record<string, unknown>
+  readonly timeoutMs?: number
 }
 
 export type StepStatus = "completed" | "failed" | "interrupted"
@@ -85,7 +106,7 @@ export const zeroUsage = (durationMs = 0): Usage => ({ inputTokens: 0, outputTok
 
 export interface ArtifactRef {
   readonly role: string
-  /** Workdir-relative path. */
+  /** Workdir-relative for worker artifacts; absolute for runner-managed evidence under the run dir. */
   readonly path: string
 }
 

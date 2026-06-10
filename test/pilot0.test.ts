@@ -53,7 +53,14 @@ describe("pilot 0: control-plane smoke loop", () => {
 
     const result = runTraceV1.validate(
       { trace },
-      { traceId: outcome.state.traceId, loopId: loop.id, loopVersion: loop.version, workdir },
+      {
+        traceId: outcome.state.traceId,
+        loopId: loop.id,
+        loopVersion: loop.version,
+        workdir,
+        executorId: "script:control-plane-smoke",
+        runDir: workdir,
+      },
     )
     expect(result.valid).toBe(true)
   })

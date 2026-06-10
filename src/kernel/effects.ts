@@ -59,3 +59,26 @@ export function assessChanges(before: Snapshot, after: Snapshot, scope: EffectSc
   const unexpected = changed.filter((path) => !isAllowed(path, scope))
   return { changed, allowed: unexpected.length === 0, unexpected }
 }
+
+// ----------------------------------------------------------------- Observer
+
+/**
+ * The pluggable observation seam: snapshot before a step, attribute changes
+ * after it. The hash observer below walks and hashes every file (fine for
+ * small clean workdirs like Pilot 0's); git-effects.ts is the git-aware
+ * observer for real-edit loops (respects .gitignore, uses git plumbing).
+ */
+export interface EffectsObserver {
+  snapshot(workdir: string): Promise<unknown>
+  assess(workdir: string, before: unknown, scope: EffectScope): Promise<EffectObservation>
+}
+
+/** The Step-1 observer: hash-all-files. Default for loops without a git workdir. */
+export const hashObserver: EffectsObserver = {
+  async snapshot(workdir) {
+    return snapshotDir(workdir)
+  },
+  async assess(workdir, before, scope) {
+    return assessChanges(before as Snapshot, snapshotDir(workdir), scope)
+  },
+}

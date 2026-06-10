@@ -41,6 +41,8 @@ export interface Decision {
   readonly classification: Classification
   readonly summary: string
   readonly notes: readonly string[]
+  /** The named improvement candidate (Python WorkflowDecision.improvement — feeds the trace). */
+  readonly improvement: string
   /** For retry decisions: what the next attempt should fix. */
   readonly retryHint?: string
 }
@@ -55,6 +57,7 @@ export function decideNextStep(obs: Observation): Decision {
       classification: "no_op",
       summary: `step \`${obs.stepId}\` stopped before executor \`${obs.executorId}\` ran, so the loop needs a human before proceeding.`,
       notes: ["Executor was not run."],
+      improvement: "Run the loop with execution enabled when the next pass should exercise this step.",
     }
   }
 
@@ -65,6 +68,7 @@ export function decideNextStep(obs: Observation): Decision {
       classification: "failure",
       summary: `${reason} Retry with a smaller, contract-focused attempt.`,
       notes: [reason],
+      improvement: "Shrink the step prompt to only the expected output and contract fields before retrying.",
       retryHint: retryHint(obs, reason),
     }
   }
@@ -78,6 +82,7 @@ export function decideNextStep(obs: Observation): Decision {
       classification: "failure",
       summary: `${reason} Retry targeting the contract exactly.`,
       notes: [reason, ...obs.contractFailedChecks.map((c) => `failed check: ${c}`)],
+      improvement: `Make the next attempt explicitly satisfy \`${obs.contractId ?? "the step signature"}\` and nothing else.`,
       retryHint: retryHint(obs, reason),
     }
   }
@@ -91,6 +96,7 @@ export function decideNextStep(obs: Observation): Decision {
       classification: "failure",
       summary: `step \`${obs.stepId}\` produced valid output, but the changed-file boundary needs human review.`,
       notes,
+      improvement: "Add a stricter mutation-boundary preflight before executor subdelegation.",
     }
   }
 
@@ -102,6 +108,9 @@ export function decideNextStep(obs: Observation): Decision {
       ? `step \`${obs.stepId}\` completed, its contract passed, and all changes stayed in scope; the loop is done.`
       : `step \`${obs.stepId}\` completed and passed; continue to the next step.`,
     notes: [],
+    improvement: obs.contractId
+      ? `Use \`${obs.contractId}\` as the first callable contract boundary for this loop.`
+      : "Name the smallest contract this step should enforce next.",
   }
 }
 

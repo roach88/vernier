@@ -41,18 +41,36 @@ the engine never knows which kind of executor it is driving. Pilot 0
 ([src/pilot0/loop.ts](src/pilot0/loop.ts)) proves the shape with a
 deterministic no-agent script: gateway / job / no-op / trace / delivery
 behavior, contract-checked (`run-trace.v1`) and journaled per tick.
+Pilot 1 ([src/pilot1/loop.ts](src/pilot1/loop.ts)) proves it with REAL
+agents: a `hermes` route step (an LLM gate is just a Step, checked by
+`route-decision.v1`) and a live `codex` implement step (the vendored
+omegacode app-server worker behind the same seam, checked by
+`dry-run-note.v1`, effects observed by the git-aware observer).
 
 ## Run it
 
 ```sh
 npm install
-npm test          # vitest: policy, ledger, tick, pilot-0 end-to-end
-npm run pilot0    # run the control-plane smoke loop; prints ledger + trace paths
+npm test          # vitest: all fake/deterministic — no auth, no network
+npm run pilot0    # the deterministic control-plane smoke loop
+npm run pilot1    # LIVE: hermes route + real codex implement in a /tmp scratch git repo
+LOOPER_LIVE=1 npm test -- pilot1.live   # the same live path as a gated test
 ```
 
+`npm test` never needs credentials: agent executors are tested against
+omegacode's deterministic `FakeWorker` and injected subprocess runners.
+The live Pilot 1 paths (`npm run pilot1`, `LOOPER_LIVE=1`) require authed
+`hermes` and `codex` CLIs on PATH; codex runs under sandbox
+`workspace-write` rooted at a throwaway scratch dir — the sandbox level is
+DERIVED from the step's `EffectScope` (no scope → read-only;
+danger-full-access is unconstructible from a loop declaration).
+
 Pilot 0 writes its workdir to `./.looper/work` (pass a path as the first
-argument to override) and its run journals to `./.looper/runs/<runId>/journal.jsonl`
-(override the root with `$LOOPER_HOME`).
+argument to override). Run journals land in `./.looper/runs/<runId>/journal.jsonl`
+(override the root with `$LOOPER_HOME`); Pilot 1 also drops its evidence
+bundle (route JSON, codex transcript, rendered `trace.md`) in that run dir —
+runner-managed evidence lives OUTSIDE the workdir by construction, so effect
+attribution never excludes files by name.
 
 ## Toolchain
 
@@ -66,32 +84,47 @@ mini-language parser needed (the design doc's §7 Python risk dissolves here).
 
 ## Provenance
 
-- **Vendored/adapted from [omegacode](https://github.com/SawyerHood/omegacode)** (MIT — see [NOTICE](NOTICE)):
-  the `journal.jsonl` append/load shape and canonical hashing
-  (`src/ledger/ledger.ts`); the Executor seam as a rename of
-  `Worker.runAgent(spec, ctx) → AgentResult`. Deliberately left behind:
-  the `node:vm` sandbox trunk and the v3 call-tree resume-key lineage —
-  under loop-as-data a step has stable identity, so the resume key is
+- **Vendored from [omegacode](https://github.com/SawyerHood/omegacode)** (MIT — see [NOTICE](NOTICE)):
+  the whole worker family under `src/executors/vendor/omegacode/` — the
+  codex app-server worker + JSON-RPC protocol/transport, the subprocess
+  JSONL mechanics, schema strictify/validation, the error taxonomy, the
+  deterministic `FakeWorker` test double, and the claude/opencode/pi
+  adapters (vendored as a family; only codex is wired live this step,
+  claude.ts is excluded from compilation pending its SDK). Also adapted:
+  the `journal.jsonl` shape and canonical hashing (`src/ledger/ledger.ts`);
+  the Executor seam as a rename of `Worker.runAgent(spec, ctx) →
+  AgentResult`. Deliberately left behind: the `node:vm` sandbox trunk, the
+  workflow DSL, and the v3 call-tree resume-key lineage — under
+  loop-as-data a step has stable identity, so the resume key is
   `hash(stepId + inputs)`.
 - **Ported as design from Python looper** (the frozen spec at
   `Dev Workflow Workshop/agent_workflows/`): `decide_pilot1_next_step` →
   `decideNextStep` (`src/kernel/policy.ts`, with its characterization
   tests), `LoopRetryPolicy` → the `retryPolicy` combinator, the contracts
-  registry + `run-trace.v1` (`src/kernel/contract.ts`), `GitSnapshotter` +
-  change attribution → `src/kernel/effects.ts`, and Pilot 0's loop
-  definition/card.
+  registry + `run-trace.v1` (`src/kernel/contract.ts`), the hash snapshot +
+  change attribution → `src/kernel/effects.ts`, `GitSnapshotter` semantics →
+  the git-aware observer (`src/kernel/git-effects.ts`), `HermesCli` + route
+  parsing → `src/executors/hermes.ts`, `dry-run-note.v1` + the inline route
+  approval check → `src/pilot1/contracts.ts`, the Pilot-1 prompts
+  (`rendering/prompts.py`, `build_retry_prompt`) → the prompt templates in
+  `src/pilot1/loop.ts`, and both pilots' loop definitions.
 - **New here**: the five-slot kernel types, the tick interpreter, the
   script executor, the ledger entry types for contracts/effects/decisions
-  (the gap omegacode's journal has).
+  (the gap omegacode's journal has), the `CodexExecutor` AgentResult →
+  StepResult mapping with EffectScope-derived sandboxing, and the
+  pluggable `EffectsObserver` seam.
 
 ## Deliberately deferred (next steps, per the design doc)
 
-- Real agent/provider executors (vendor omegacode `src/worker/`): codex,
-  claude, judges. The `Executor` interface is their stubbed seam.
-- Pilot 1 (`plan-work-review`) re-expression + porting its characterization
-  tests; git-aware effect attribution (current snapshot hashes all files).
+- Wiring claude/opencode/pi behind the seam (vendored, not wired; claude
+  needs `@anthropic-ai/claude-agent-sdk`); judge executors.
 - Resume-from-ledger (`replay()` exists; tick does not consume it yet),
   operation leases, a `looper tick <runId>` CLI.
 - Trust/promotion lifecycle enforcement from ledger evidence (today only
   "draft may not execute" is enforced).
-- Policy combinators beyond `retryPolicy` (`until`, feedback threading).
+- Policy combinators beyond `retryPolicy` (`until`, feedback threading);
+  feeding failed contract checks back into the retry prompt (today the
+  retry template is static; the failed checks live in the journal's
+  `retryHint`).
+- Loop cards generated from the Loop object; deleting the Python repo
+  (Tyler's call, after reviewing the trace comparison).

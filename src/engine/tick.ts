@@ -7,11 +7,12 @@
 // run() stays `while (tick)` so the simple case is one call.
 
 import { randomBytes } from "node:crypto"
+import { dirname } from "node:path"
 import type { ContractRegistry, ContractResult } from "../kernel/contract.js"
 import { failedCheckLabels } from "../kernel/contract.js"
-import { assessChanges, snapshotDir, type EffectObservation } from "../kernel/effects.js"
+import { hashObserver, type EffectObservation, type EffectsObserver } from "../kernel/effects.js"
 import type { Decision, Observation } from "../kernel/policy.js"
-import type { Executor, Loop, Step, StepResult } from "../kernel/types.js"
+import type { Executor, Loop, StepResult } from "../kernel/types.js"
 import { zeroUsage } from "../kernel/types.js"
 import { journalPath, Ledger, resolveLedgerRoot, resumeKey, KEY_VERSION } from "../ledger/ledger.js"
 
@@ -32,6 +33,12 @@ export interface EngineDeps {
   readonly contracts: ContractRegistry
   /** Absolute path effects are observed under; scripts and agents work here. */
   readonly workdir: string
+  /**
+   * How effects are observed. Default: the hash-all-files observer (clean
+   * scratch workdirs, Pilot 0). Loops whose workdir is a git repo should
+   * pass the git-aware `gitObserver` from kernel/git-effects.ts.
+   */
+  readonly observer?: EffectsObserver
 }
 
 export interface Run {
@@ -87,8 +94,9 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
   ledger.append({ type: "step_started", key, stepId: step.id, attempt: state.attempt, executorId: executor.id, at: now() })
 
   // 2. Snapshot effects, 3. execute, 4. attribute changes against the scope.
-  const before = snapshotDir(deps.workdir)
-  const spec = {
+  const observer = deps.observer ?? hashObserver
+  const before = await observer.snapshot(deps.workdir)
+  const base = {
     runId: state.runId,
     traceId: state.traceId,
     loopId: loop.id,
@@ -97,8 +105,12 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
     attempt: state.attempt,
     inputs,
     effects: step.effects,
+    runDir: dirname(ledger.path),
     timeoutMs: step.timeoutMs ?? 600_000,
+    ...(step.outputSchema ? { outputSchema: step.outputSchema } : {}),
   }
+  const prompt = step.prompt?.(base)
+  const spec = { ...base, ...(prompt !== undefined ? { prompt } : {}) }
   let result: StepResult
   try {
     result = await executor.run(spec, { workdir: deps.workdir })
@@ -110,7 +122,7 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
       usage: zeroUsage(),
     }
   }
-  const effects: EffectObservation = assessChanges(before, snapshotDir(deps.workdir), step.effects)
+  const effects: EffectObservation = await observer.assess(deps.workdir, before, step.effects)
 
   // 5. Validate the output value: signature, then contract.
   const outputParse = step.signature.output.safeParse(result.output)
@@ -122,6 +134,8 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
       loopId: loop.id,
       loopVersion: loop.version,
       workdir: deps.workdir,
+      executorId: executor.id,
+      runDir: dirname(ledger.path),
     })
   }
 
@@ -177,12 +191,18 @@ export interface RunOutcome<O> {
 }
 
 /** The simple case stays one call: run = while (tick). */
-export async function runLoop<I, O>(loop: Loop<I, O>, inputs: I, deps: EngineDeps): Promise<RunOutcome<O>> {
-  const run = startRun(loop, inputs, deps)
+export async function runLoop<I, O>(loop: Loop<I, O>, inputs: I, deps: EngineDeps, opts?: { runId?: string }): Promise<RunOutcome<O>> {
+  const run = startRun(loop, inputs, deps, opts)
   let outcome: TickOutcome
   do {
     outcome = await tick(run, deps)
   } while (outcome.state.status === "running")
-  const output = outcome.state.status === "done" ? (loop.signature.output.parse(run.state.values) as O) : null
+  // The engine contributes one reserved output field: `verdict`, the final
+  // policy decision's classification. A loop signature may demand it without
+  // a step having to fake it; step-produced values win on collision.
+  const output =
+    outcome.state.status === "done"
+      ? (loop.signature.output.parse({ verdict: outcome.decision.classification, ...run.state.values }) as O)
+      : null
   return { state: outcome.state, decision: outcome.decision, output }
 }
