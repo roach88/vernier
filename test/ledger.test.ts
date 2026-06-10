@@ -30,6 +30,7 @@ const result = (key: string, status: StepResultEntry["status"] = "completed"): S
   key,
   stepId: "smoke",
   attempt: 1,
+  iteration: 1,
   status,
   output: { ok: true },
   outputValid: true,
@@ -43,6 +44,7 @@ const decision = (key: string): DecisionEntry => ({
   key,
   stepId: "smoke",
   attempt: 1,
+  iteration: 1,
   decision: { kind: "stop", classification: "success", summary: "done", notes: [], improvement: "none" },
   at: "2026-06-10T00:00:02.000Z",
 })

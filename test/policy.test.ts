@@ -13,6 +13,7 @@ function observation(overrides: Partial<Observation> = {}): Observation {
     stepIndex: 1,
     stepCount: 2,
     attempt: 1,
+    iteration: 1,
     executorId: "codex",
     executorRan: true,
     stepStatus: "completed",
@@ -22,6 +23,7 @@ function observation(overrides: Partial<Observation> = {}): Observation {
     contractFailedChecks: [],
     effectsAllowed: true,
     unexpectedChanges: [],
+    output: {},
     ...overrides,
   }
 }

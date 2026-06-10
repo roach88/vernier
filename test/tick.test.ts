@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import { z } from "zod"
 import { runLoop, startRun, tick, type EngineDeps } from "../src/engine/tick.js"
 import { ContractRegistry, type Contract } from "../src/kernel/contract.js"
-import { decideNextStep, retryPolicy } from "../src/kernel/policy.js"
+import { decideNextStep, retryPolicy, until } from "../src/kernel/policy.js"
 import { fsScope, noEffects, sig, type Loop } from "../src/kernel/types.js"
 import { executorRegistry, scriptExecutor } from "../src/executors/script.js"
 import { Ledger } from "../src/ledger/ledger.js"
@@ -176,5 +176,97 @@ describe("tick", () => {
     const outcome = await runLoop(twoStepLoop(ledgerRoot), { n: 3 }, d)
     expect(outcome.state.status).toBe("done")
     expect(outcome.output).toEqual({ n: 12, doubledTwice: true })
+  })
+})
+
+// ------------------------------------------------- policy-directed loop-back
+
+/** A produce -> verify loop whose policy iterates the sub-sequence until the verdict passes. */
+const untilLoop = (ledgerRoot: string, maxIterations = 3): Loop<{ goal: string }, { answer: string; verdict: string }> => ({
+  id: "until-loop",
+  version: "0.1.0",
+  signature: sig(z.object({ goal: z.string() }), z.object({ answer: z.string(), verdict: z.string() })),
+  steps: [
+    {
+      id: "answer",
+      signature: sig(z.object({ goal: z.string() }), z.object({ answer: z.string() })),
+      executor: "script:answer",
+      effects: noEffects(),
+    },
+    {
+      id: "grade",
+      signature: sig(z.object({ answer: z.string() }), z.object({ passed: z.boolean(), feedback: z.string() })),
+      executor: "script:judge",
+      effects: noEffects(),
+    },
+  ],
+  policy: until((v) => v.passed === true, { maxIterations, restartAt: "answer", feedbackFrom: (v) => String(v.feedback) }),
+  trust: "dry-run",
+  ledger: { root: ledgerRoot },
+})
+
+describe("tick loop-back (iterate decisions)", () => {
+  it("re-runs the answer step with the judge's feedback until the verdict passes, journaling every pass", async () => {
+    const { workdir, ledgerRoot } = temp()
+    const hintsSeen: Array<string | undefined> = []
+    const answer = scriptExecutor("script:answer", (spec) => {
+      hintsSeen.push(spec.retryHint)
+      return { output: { answer: spec.retryHint ? "revised answer" : "first draft" } }
+    })
+    let grades = 0
+    const judge = scriptExecutor("script:judge", () => {
+      grades += 1
+      return { output: grades === 1 ? { passed: false, feedback: "mention the year 1969" } : { passed: true, feedback: "" } }
+    })
+    const d = deps([answer, judge], workdir)
+    const loop = untilLoop(ledgerRoot)
+
+    const outcome = await runLoop(loop, { goal: "explain apollo 11" }, d)
+
+    expect(outcome.state.status).toBe("done")
+    expect(outcome.state.iteration).toBe(2)
+    expect(outcome.output).toEqual({ answer: "revised answer", verdict: "success" })
+    // The verifier's feedback was threaded into the second pass — verbatim.
+    expect(hintsSeen).toEqual([undefined, "mention the year 1969"])
+
+    const entries = Ledger.load(join(ledgerRoot, "runs", outcome.state.runId, "journal.jsonl"))
+    const starts = entries.filter((e) => e.type === "step_started")
+    expect(starts.map((s) => (s.type === "step_started" ? `${s.stepId}@${s.iteration}` : ""))).toEqual([
+      "answer@1",
+      "grade@1",
+      "answer@2",
+      "grade@2",
+    ])
+    const decisions = entries.filter((e) => e.type === "decision").map((e) => (e.type === "decision" ? e.decision.kind : ""))
+    expect(decisions).toEqual(["continue", "iterate", "continue", "stop"])
+    const iterate = entries.find((e) => e.type === "decision" && e.decision.kind === "iterate")
+    expect(iterate?.type === "decision" && iterate.decision.retryHint).toBe("mention the year 1969")
+  })
+
+  it("always terminates: a never-passing verdict escalates at the iteration ceiling", async () => {
+    const { workdir, ledgerRoot } = temp()
+    const answer = scriptExecutor("script:answer", () => ({ output: { answer: "draft" } }))
+    const judge = scriptExecutor("script:judge", () => ({ output: { passed: false, feedback: "never good enough" } }))
+    const d = deps([answer, judge], workdir)
+
+    const outcome = await runLoop(untilLoop(ledgerRoot, 3), { goal: "impossible" }, d)
+
+    expect(outcome.state.status).toBe("needs_human")
+    expect(outcome.state.iteration).toBe(3)
+    expect(outcome.output).toBeNull()
+    const entries = Ledger.load(join(ledgerRoot, "runs", outcome.state.runId, "journal.jsonl"))
+    expect(entries.filter((e) => e.type === "step_started" && e.stepId === "answer")).toHaveLength(3)
+  })
+
+  it("throws on an iterate decision naming an unknown step (loop-data bug, not a step failure)", async () => {
+    const { workdir, ledgerRoot } = temp()
+    const answer = scriptExecutor("script:answer", () => ({ output: { answer: "draft" } }))
+    const judge = scriptExecutor("script:judge", () => ({ output: { passed: false, feedback: "no" } }))
+    const d = deps([answer, judge], workdir)
+    const loop = {
+      ...untilLoop(ledgerRoot),
+      policy: until((v) => v.passed === true, { maxIterations: 3, restartAt: "no-such-step" }),
+    }
+    await expect(runLoop(loop, { goal: "boom" }, d)).rejects.toThrow(/names no step/)
   })
 })

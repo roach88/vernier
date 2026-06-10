@@ -1,0 +1,149 @@
+// JudgeExecutor: LLM-as-judge behind the same Executor seam.
+//
+// An INDEPENDENT verifier — Ax's `grade` function, not self-critique. Each
+// run() is a fresh provider conversation whose prompt contains only what the
+// loop hands it (the rubric and the evidence to grade); it never shares the
+// producing step's context. Decorrelating judge from producer further
+// (a different model/provider) is policy-level mitigation the caller can opt
+// into via the injectable worker; independence of invocation is enforced here.
+//
+// The verdict is model-emitted STRUCTURED output — the first real use of the
+// StepSpec.outputSchema escape hatch. The engine derives that schema from
+// the step's zod output signature (kernel/types.ts derivedOutputSchema);
+// this executor refuses to run without it, because an unstructured verdict
+// would be prose, not data.
+//
+// Sandbox: ALWAYS "read-only", by construction, regardless of the step's
+// effect scope — a judge that can write is not a judge. (CodexExecutor
+// derives its sandbox from the scope; here the ceiling is pinned lower.)
+//
+// Evidence under StepSpec.runDir: judge-prompt.md, judge-events.jsonl,
+// judge-verdict.json — outside the workdir, like every runner-managed file.
+
+import { mkdirSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
+import type { ArtifactRef, Executor, RunContext, StepResult, StepSpec } from "../kernel/types.js"
+import { evidencePrefix } from "./evidence.js"
+import { AgentError, AgentInterrupted, type Worker, type WorkerProgress } from "./vendor/omegacode/index.js"
+import { CodexWorker } from "./vendor/omegacode/codex.js"
+import type { AgentResult, AgentSpec } from "./vendor/omegacode/types.js"
+
+export interface JudgeExecutorOpts {
+  /** Injectable worker (tests pass scripted workers). Default: a fresh CodexWorker. */
+  readonly worker?: Worker
+  /** Codex binary when constructing the default worker. */
+  readonly bin?: string
+  readonly model?: string
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+export class JudgeExecutor implements Executor {
+  readonly id = "judge"
+  private readonly worker: Worker
+  private readonly model: string | undefined
+
+  constructor(opts: JudgeExecutorOpts = {}) {
+    this.worker = opts.worker ?? new CodexWorker({ bin: opts.bin })
+    this.model = opts.model
+  }
+
+  async run(spec: StepSpec, ctx: RunContext): Promise<StepResult> {
+    if (!spec.prompt) {
+      throw new Error(`Step \`${spec.stepId}\` reached executor \`${this.id}\` without a rendered prompt.`)
+    }
+    if (!spec.outputSchema) {
+      throw new Error(
+        `Step \`${spec.stepId}\` reached executor \`${this.id}\` without an outputSchema. ` +
+          `A judge's verdict must be structured: set \`structuredOutput: true\` on the step so the engine derives the schema from its zod output signature.`,
+      )
+    }
+    const agentSpec: AgentSpec = {
+      prompt: spec.prompt,
+      provider: "codex",
+      cwd: ctx.workdir,
+      sandbox: "read-only", // pinned: judges read, never write
+      approval: "never",
+      schema: spec.outputSchema,
+      ...(this.model ? { model: this.model } : {}),
+    }
+
+    const prefix = evidencePrefix(spec)
+    mkdirSync(spec.runDir, { recursive: true })
+    const promptPath = join(spec.runDir, `${prefix}judge-prompt.md`)
+    writeFileSync(promptPath, spec.prompt, "utf8")
+
+    const events: string[] = []
+    const onProgress = (e: WorkerProgress): void => {
+      events.push(JSON.stringify({ at: new Date().toISOString(), ...e }))
+    }
+    const timeout = AbortSignal.timeout(spec.timeoutMs)
+    const signal = ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout
+
+    const startedAt = Date.now()
+    let result: AgentResult
+    try {
+      result = await this.worker.runAgent(agentSpec, { signal, onProgress })
+    } catch (error) {
+      const evidence = this.writeEvidence(spec, prefix, promptPath, events, null)
+      const durationMs = Date.now() - startedAt
+      if (error instanceof AgentInterrupted) {
+        return { status: "interrupted", output: { error: error.message }, evidence, usage: zero(durationMs) }
+      }
+      if (error instanceof AgentError) {
+        return {
+          status: "failed",
+          output: { error: error.message, code: error.code, retryable: error.retryable },
+          evidence,
+          usage: error.usage ? { ...error.usage, durationMs } : zero(durationMs),
+        }
+      }
+      throw error
+    }
+
+    const durationMs = Date.now() - startedAt
+    const usage = { ...result.usage, durationMs }
+    if (!isRecord(result.structured)) {
+      const evidence = this.writeEvidence(spec, prefix, promptPath, events, null)
+      return {
+        status: "failed",
+        output: { error: `Judge returned no structured verdict despite the output schema (text: ${truncate(result.text)})` },
+        evidence,
+        usage,
+      }
+    }
+    const evidence = this.writeEvidence(spec, prefix, promptPath, events, result.structured)
+    return { status: result.status, output: result.structured, evidence, usage }
+  }
+
+  /** Tear down the underlying provider process. */
+  shutdown(): Promise<void> {
+    return this.worker.shutdown()
+  }
+
+  private writeEvidence(
+    spec: StepSpec,
+    prefix: string,
+    promptPath: string,
+    events: readonly string[],
+    verdict: Record<string, unknown> | null,
+  ): ArtifactRef[] {
+    const eventsPath = join(spec.runDir, `${prefix}judge-events.jsonl`)
+    const verdictPath = join(spec.runDir, `${prefix}judge-verdict.json`)
+    writeFileSync(eventsPath, events.join("\n") + (events.length ? "\n" : ""), "utf8")
+    writeFileSync(verdictPath, JSON.stringify(verdict, null, 2) + "\n", "utf8")
+    return [
+      { role: "judge-prompt", path: promptPath },
+      { role: "judge-events", path: eventsPath },
+      { role: "judge-verdict", path: verdictPath },
+    ]
+  }
+}
+
+const zero = (durationMs: number) => ({ inputTokens: 0, outputTokens: 0, costUsd: 0, durationMs })
+
+function truncate(text: string): string {
+  return text.length > 200 ? text.slice(0, 199) + "…" : text
+}

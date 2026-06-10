@@ -10,10 +10,20 @@
 // looper's LoopRetryPolicy attempt cap (policies/retry.py) becomes the
 // retryPolicy combinator below.
 
-export type DecisionKind = "continue" | "retry" | "escalate" | "stop"
+// retry   = run the SAME step again (transient/contract failure).
+// iterate = re-run the sub-sequence from an earlier step (the sequence
+//           completed, but the result wasn't good enough yet — Pilot 2's
+//           produce -> verify -> iterate-with-feedback shape).
+export type DecisionKind = "continue" | "retry" | "escalate" | "stop" | "iterate"
 export type Classification = "success" | "failure" | "no_op"
 
-/** Only deterministic facts. No prose from the executor, no model output. */
+/**
+ * Deterministic facts, plus the step's signature-VALIDATED output value.
+ * The decision procedure stays a pure function over this record; what is
+ * banned is free prose, not typed values. For judged loops the honest claim
+ * is the design doc's: the deterministic part is the evidence and the
+ * decision procedure, not the judgment itself.
+ */
 export interface Observation {
   readonly loopId: string
   readonly loopVersion: string
@@ -21,7 +31,8 @@ export interface Observation {
   readonly stepId: string
   readonly stepIndex: number
   readonly stepCount: number
-  readonly attempt: number // 1-based
+  readonly attempt: number // 1-based attempts of the CURRENT step (retry semantics)
+  readonly iteration: number // 1-based passes over the step sequence (iterate semantics)
   readonly executorId: string
   /** False when the engine stopped before execution (dry-run stop-points, trust gate). */
   readonly executorRan: boolean
@@ -34,6 +45,8 @@ export interface Observation {
   readonly contractFailedChecks: readonly string[]
   readonly effectsAllowed: boolean
   readonly unexpectedChanges: readonly string[]
+  /** The signature-validated output value of this step; null when outputValid is false. */
+  readonly output: Readonly<Record<string, unknown>> | null
 }
 
 export interface Decision {
@@ -43,8 +56,14 @@ export interface Decision {
   readonly notes: readonly string[]
   /** The named improvement candidate (Python WorkflowDecision.improvement — feeds the trace). */
   readonly improvement: string
-  /** For retry decisions: what the next attempt should fix. */
+  /**
+   * What the next execution should fix. Set by retry decisions (failed
+   * contract checks) and by `until` loop-backs (the verifier's feedback);
+   * the engine threads it into the next StepSpec for prompts to render.
+   */
   readonly retryHint?: string
+  /** For iterate decisions: step id to re-run from. Undefined = the loop's first step. */
+  readonly restartAt?: string
 }
 
 export type Policy = (obs: Observation) => Decision
@@ -141,5 +160,70 @@ export function retryPolicy(opts: { maxAttempts: number; base?: Policy }): Polic
       }
     }
     return decision
+  }
+}
+
+export interface UntilOpts {
+  /** Hard iteration ceiling — the termination guarantee. Escalates when reached unmet. */
+  readonly maxIterations: number
+  /** Step id to loop back to when the predicate is unmet. Default: the loop's first step. */
+  readonly restartAt?: string
+  /** Extract feedback from the final step's validated output, threaded into the next iteration. */
+  readonly feedbackFrom?: (output: Readonly<Record<string, unknown>>) => string | undefined
+  /** Per-step decision procedure for everything BEFORE the sequence completes. Default: decideNextStep. */
+  readonly base?: Policy
+}
+
+/**
+ * Combinator: iterate the step sequence until a predicate over the final
+ * step's validated output is met (the Ax-image loop: produce -> verify ->
+ * if-fail-iterate-with-feedback -> until-passed).
+ *
+ * Composition with retry semantics: `base` governs every mid-sequence
+ * outcome unchanged — transient executor/contract failures stay retries of
+ * the SAME step. `until` intercepts only the would-be successful stop at the
+ * end of the sequence: predicate met -> stop; iterations left -> iterate
+ * back to `restartAt`, threading `feedbackFrom(output)` as the retryHint;
+ * ceiling reached -> escalate. An `iterate` decision is therefore only ever
+ * emitted while iteration < maxIterations, so a run cannot loop forever.
+ */
+export function until(
+  predicate: (output: Readonly<Record<string, unknown>>, obs: Observation) => boolean,
+  opts: UntilOpts,
+): Policy {
+  if (!Number.isInteger(opts.maxIterations) || opts.maxIterations < 1) {
+    throw new Error(`until: maxIterations must be a positive integer, got ${opts.maxIterations}.`)
+  }
+  const base = opts.base ?? decideNextStep
+  return (obs) => {
+    const decision = base(obs)
+    if (decision.kind !== "stop" || decision.classification !== "success") return decision
+
+    const output = obs.output ?? {}
+    if (predicate(output, obs)) {
+      return {
+        ...decision,
+        summary: `${decision.summary} The until-predicate was met on iteration ${obs.iteration}.`,
+      }
+    }
+    if (obs.iteration >= opts.maxIterations) {
+      return {
+        ...decision,
+        kind: "escalate",
+        classification: "failure",
+        summary: `step \`${obs.stepId}\` completed but the until-predicate is unmet after ${obs.iteration} of ${opts.maxIterations} iterations; escalating.`,
+        notes: [...decision.notes, `iteration ${obs.iteration} reached policy max ${opts.maxIterations}; escalating.`],
+      }
+    }
+    const feedback = opts.feedbackFrom?.(output)
+    return {
+      kind: "iterate",
+      classification: "failure",
+      summary: `the until-predicate is unmet on iteration ${obs.iteration} of ${opts.maxIterations}; iterating from step \`${opts.restartAt ?? "<first>"}\` with feedback.`,
+      notes: feedback !== undefined ? [`feedback: ${feedback}`] : [],
+      improvement: "Tighten the producing step's prompt so the verifier's feedback is needed less often.",
+      ...(opts.restartAt !== undefined ? { restartAt: opts.restartAt } : {}),
+      ...(feedback !== undefined ? { retryHint: feedback } : {}),
+    }
   }
 }

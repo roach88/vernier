@@ -23,6 +23,7 @@ function spec(overrides: Partial<StepSpec> = {}): StepSpec {
     loopVersion: "0.2.0",
     stepId: "implement",
     attempt: 1,
+    iteration: 1,
     inputs: { task: "write the note" },
     prompt: "Write the dry-run note.",
     effects: fsScope("docs/agent-workflows/**"),

@@ -12,11 +12,13 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "pilot0": "tsx src/pilot0/run.ts",
-    "pilot1": "tsx src/pilot1/run.ts"
+    "pilot1": "tsx src/pilot1/run.ts",
+    "pilot2": "tsx src/pilot2/run.ts"
   },
   "dependencies": {
     "ajv": "^8.20.0",
-    "zod": "^3.24.0"
+    "zod": "^3.24.0",
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

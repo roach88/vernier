@@ -14,6 +14,7 @@
 // as untrusted code — loop-as-data makes it unnecessary.
 
 import type { z } from "zod"
+import { zodToJsonSchema } from "zod-to-json-schema"
 import type { EffectObservation } from "./effects.js"
 import type { Policy } from "./policy.js"
 
@@ -27,6 +28,17 @@ export interface Signature<I = unknown, O = unknown> {
 
 export function sig<I, O>(input: z.ZodType<I>, output: z.ZodType<O>): Signature<I, O> {
   return { input, output }
+}
+
+/**
+ * Derive the provider-facing JSON Schema from a signature's zod output —
+ * the ONE source of truth for structured-output steps. The engine calls
+ * this when a step sets `structuredOutput: true`; nothing in this repo may
+ * hand-write a second copy of a step's output schema.
+ */
+export function derivedOutputSchema(signature: Signature<any, any>): Record<string, unknown> {
+  const { $schema: _, ...schema } = zodToJsonSchema(signature.output, { $refStrategy: "none" }) as Record<string, unknown>
+  return schema
 }
 
 // ------------------------------------------------------------------ Effects
@@ -54,22 +66,26 @@ export interface StepSpec {
   readonly loopVersion: string
   readonly stepId: string
   readonly attempt: number
+  /** 1-based pass over the step sequence; > 1 after an `iterate` loop-back. */
+  readonly iteration: number
   readonly inputs: Record<string, unknown>
   /** Rendered from the step's prompt template for LLM executors; undefined for scripts. */
   readonly prompt?: string | undefined
   /**
-   * On attempt > 1: the previous attempt's retry hint, carrying the exact
-   * failed contract check labels/messages. Prompt templates render it so
-   * the executor is told precisely what to fix.
+   * What the next execution should fix: on attempt > 1 the previous
+   * attempt's failed contract checks; after an `iterate` loop-back the
+   * verifier's feedback. Prompt templates render it so the executor is
+   * told precisely what to fix.
    */
   readonly retryHint?: string | undefined
   /**
    * Executor-seam escape hatch (omegacode's AgentSpec.schema): plain JSON
-   * Schema for provider-native structured output. No v1 step sets it — the
-   * engine derives deterministic output fields from effect attribution
-   * instead (Step.outputFrom). If a future step (e.g. an LLM judge) truly
-   * needs a model-emitted value, derive this from the step's zod output
-   * signature at runtime; never hand-write a second schema.
+   * Schema for provider-native structured output. Engine-set, never
+   * hand-written: when a step opts in via `Step.structuredOutput`, this is
+   * derived from the step's zod output signature (derivedOutputSchema) —
+   * one source of truth. First real use: the LLM judge's verdict, the one
+   * output that genuinely must be model-emitted (deterministic fields come
+   * from effect attribution via Step.outputFrom instead).
    */
   readonly outputSchema?: Record<string, unknown> | undefined
   readonly effects: EffectScope
@@ -108,6 +124,13 @@ export interface Step<I = any, O = any> {
   readonly prompt?: PromptTemplate
   /** Derive output fields from engine observations (see OutputProjection). */
   readonly outputFrom?: OutputProjection
+  /**
+   * Opt in to model-emitted structured output: the engine derives
+   * StepSpec.outputSchema from this step's zod output signature. Reserve it
+   * for outputs that only the model can produce (a judge's verdict);
+   * engine-observable facts belong in outputFrom.
+   */
+  readonly structuredOutput?: boolean
   readonly timeoutMs?: number
 }
 

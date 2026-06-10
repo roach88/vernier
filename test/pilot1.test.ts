@@ -226,6 +226,7 @@ describe("pilot 1: plan-work-review through tick()", () => {
       loopId: planWorkReviewLoop.id,
       loopVersion: planWorkReviewLoop.version,
       attempt: 1,
+      iteration: 1,
       effects: { allow: [] },
       runDir: "/tmp/run",
       timeoutMs: 1000,

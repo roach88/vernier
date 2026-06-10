@@ -18,6 +18,7 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { Executor, RunContext, StepResult, StepSpec } from "../kernel/types.js"
 import { zeroUsage } from "../kernel/types.js"
+import { evidencePrefix } from "./evidence.js"
 
 export interface HermesRunResult {
   readonly code: number
@@ -93,7 +94,7 @@ export class HermesExecutor implements Executor {
       throw new Error(`Step \`${spec.stepId}\` reached executor \`${this.id}\` without a rendered prompt.`)
     }
     mkdirSync(spec.runDir, { recursive: true })
-    const prefix = spec.attempt > 1 ? `retry-${spec.attempt}-` : ""
+    const prefix = evidencePrefix(spec)
     const promptPath = join(spec.runDir, `${prefix}route-prompt.md`)
     const rawPath = join(spec.runDir, `${prefix}route-raw.txt`)
     const decisionPath = join(spec.runDir, `${prefix}route-decision.json`)

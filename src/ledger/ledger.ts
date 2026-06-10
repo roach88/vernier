@@ -72,6 +72,7 @@ export interface StepStartedEntry {
   readonly key: string
   readonly stepId: string
   readonly attempt: number
+  readonly iteration: number
   readonly executorId: string
   readonly at: string
 }
@@ -81,6 +82,7 @@ export interface StepResultEntry {
   readonly key: string
   readonly stepId: string
   readonly attempt: number
+  readonly iteration: number
   readonly status: StepStatus
   readonly output: Record<string, unknown>
   readonly outputValid: boolean
@@ -94,6 +96,7 @@ export interface ContractEntry {
   readonly key: string
   readonly stepId: string
   readonly attempt: number
+  readonly iteration: number
   readonly result: ContractResult
   readonly at: string
 }
@@ -103,6 +106,7 @@ export interface EffectsEntry {
   readonly key: string
   readonly stepId: string
   readonly attempt: number
+  readonly iteration: number
   readonly observation: EffectObservation
   readonly at: string
 }
@@ -112,6 +116,7 @@ export interface DecisionEntry {
   readonly key: string
   readonly stepId: string
   readonly attempt: number
+  readonly iteration: number
   readonly decision: Decision
   readonly at: string
 }

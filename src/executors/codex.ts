@@ -26,6 +26,7 @@
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { ArtifactRef, Executor, RunContext, StepResult, StepSpec } from "../kernel/types.js"
+import { evidencePrefix } from "./evidence.js"
 import { AgentError, AgentInterrupted, type Worker, type WorkerProgress } from "./vendor/omegacode/index.js"
 import { CodexWorker } from "./vendor/omegacode/codex.js"
 import type { AgentResult, AgentSpec, Sandbox } from "./vendor/omegacode/types.js"
@@ -40,11 +41,6 @@ export interface CodexExecutorOpts {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
-}
-
-/** Python looper labeled the second worker pass "retry-"; keep the naming. */
-function evidencePrefix(spec: StepSpec): string {
-  return spec.attempt > 1 ? `retry-${spec.attempt}-` : ""
 }
 
 export class CodexExecutor implements Executor {

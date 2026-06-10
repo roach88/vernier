@@ -27,6 +27,7 @@ function spec(): StepSpec {
     loopVersion: "0.2.0",
     stepId: "route",
     attempt: 1,
+    iteration: 1,
     inputs: { task: "write the note" },
     prompt: "Route this task.",
     effects: noEffects(),

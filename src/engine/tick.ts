@@ -13,7 +13,7 @@ import { failedCheckMessages } from "../kernel/contract.js"
 import { hashObserver, type EffectObservation, type EffectsObserver } from "../kernel/effects.js"
 import type { Decision, Observation } from "../kernel/policy.js"
 import type { Executor, Loop, StepResult } from "../kernel/types.js"
-import { zeroUsage } from "../kernel/types.js"
+import { derivedOutputSchema, zeroUsage } from "../kernel/types.js"
 import { journalPath, Ledger, resolveLedgerRoot, resumeKey, KEY_VERSION } from "../ledger/ledger.js"
 
 export type RunStatus = "running" | "done" | "needs_human" | "stopped"
@@ -23,6 +23,7 @@ export interface RunState {
   readonly traceId: string
   readonly stepIndex: number
   readonly attempt: number // 1-based attempt for the CURRENT step
+  readonly iteration: number // 1-based pass over the step sequence; incremented by iterate decisions
   readonly status: RunStatus
   /** The data plane: loop inputs plus every completed step's outputs, by field name. */
   readonly values: Record<string, unknown>
@@ -72,7 +73,7 @@ export function startRun<I>(loop: Loop<I, any>, inputs: I, deps: EngineDeps, opt
   return {
     loop,
     ledger,
-    state: { runId, traceId: runId, stepIndex: 0, attempt: 1, status: "running", values: parsed },
+    state: { runId, traceId: runId, stepIndex: 0, attempt: 1, iteration: 1, status: "running", values: parsed },
   }
 }
 
@@ -93,7 +94,7 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
   const executor = deps.executors.get(step.executor)
   if (!executor) throw new Error(`Unknown executor id \`${step.executor}\` for step \`${step.id}\`.`)
 
-  ledger.append({ type: "step_started", key, stepId: step.id, attempt: state.attempt, executorId: executor.id, at: now() })
+  ledger.append({ type: "step_started", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, executorId: executor.id, at: now() })
 
   // 2. Snapshot effects, 3. execute, 4. attribute changes against the scope.
   const observer = deps.observer ?? hashObserver
@@ -105,11 +106,15 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
     loopVersion: loop.version,
     stepId: step.id,
     attempt: state.attempt,
+    iteration: state.iteration,
     inputs,
     effects: step.effects,
     runDir: dirname(ledger.path),
     timeoutMs: step.timeoutMs ?? 600_000,
     ...(state.retryHint !== undefined ? { retryHint: state.retryHint } : {}),
+    // Structured-output opt-in: the schema is DERIVED from the step's zod
+    // output signature here, never hand-written (see kernel/types.ts).
+    ...(step.structuredOutput ? { outputSchema: derivedOutputSchema(step.signature) } : {}),
   }
   const prompt = step.prompt?.(base)
   const spec = { ...base, ...(prompt !== undefined ? { prompt } : {}) }
@@ -145,11 +150,13 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
     })
   }
 
-  ledger.append({ type: "step_result", key, stepId: step.id, attempt: state.attempt, status: result.status, output, outputValid, evidence: result.evidence, usage: result.usage, at: now() })
-  if (contractResult) ledger.append({ type: "contract", key, stepId: step.id, attempt: state.attempt, result: contractResult, at: now() })
-  ledger.append({ type: "effects", key, stepId: step.id, attempt: state.attempt, observation: effects, at: now() })
+  ledger.append({ type: "step_result", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, status: result.status, output, outputValid, evidence: result.evidence, usage: result.usage, at: now() })
+  if (contractResult) ledger.append({ type: "contract", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, result: contractResult, at: now() })
+  ledger.append({ type: "effects", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, observation: effects, at: now() })
 
-  // 6. Build the Observation from deterministic facts only; consult the pure Policy.
+  // 6. Build the Observation (deterministic facts + the validated output value);
+  //    consult the pure Policy.
+  const validatedOutput = outputValid && outputParse.success ? (outputParse.data as Record<string, unknown>) : null
   const observation: Observation = {
     loopId: loop.id,
     loopVersion: loop.version,
@@ -158,6 +165,7 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
     stepIndex: state.stepIndex,
     stepCount: loop.steps.length,
     attempt: state.attempt,
+    iteration: state.iteration,
     executorId: executor.id,
     executorRan: true,
     stepStatus: result.status,
@@ -167,22 +175,33 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
     contractFailedChecks: contractResult ? failedCheckMessages(contractResult) : [],
     effectsAllowed: effects.allowed,
     unexpectedChanges: effects.unexpected,
+    output: validatedOutput,
   }
   const decision = loop.policy(observation)
-  ledger.append({ type: "decision", key, stepId: step.id, attempt: state.attempt, decision, at: now() })
+  ledger.append({ type: "decision", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, decision, at: now() })
 
   // 7. Advance state. The journal is the only durable state; this is its projection.
-  run.state = nextState(state, decision, outputValid && outputParse.success ? (outputParse.data as Record<string, unknown>) : {})
+  run.state = nextState(loop, state, decision, validatedOutput ?? {})
   return { state: run.state, decision }
 }
 
-function nextState(state: RunState, decision: Decision, output: Record<string, unknown>): RunState {
+function nextState(loop: Loop, state: RunState, decision: Decision, output: Record<string, unknown>): RunState {
   const values = { ...state.values, ...output }
   switch (decision.kind) {
     case "continue":
       return { ...state, stepIndex: state.stepIndex + 1, attempt: 1, values, retryHint: undefined }
     case "retry":
       return { ...state, attempt: state.attempt + 1, values: state.values, retryHint: decision.retryHint }
+    case "iterate": {
+      // Loop back over the sub-sequence: a fresh pass (attempt resets, the
+      // iteration counter is the termination guard `until` enforces), with
+      // the verifier's feedback threaded into the next spec via retryHint.
+      const stepIndex = decision.restartAt === undefined ? 0 : loop.steps.findIndex((s) => s.id === decision.restartAt)
+      if (stepIndex < 0) {
+        throw new Error(`Decision restartAt \`${decision.restartAt}\` names no step in loop \`${loop.id}\`.`)
+      }
+      return { ...state, stepIndex, attempt: 1, iteration: state.iteration + 1, values, retryHint: decision.retryHint }
+    }
     case "escalate":
       return { ...state, status: "needs_human", values }
     case "stop":
