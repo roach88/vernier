@@ -61,6 +61,6 @@ describe.runIf(LIVE)("pilot 1 LIVE: hermes + codex through tick()", () => {
         await codex.shutdown()
       }
     },
-    900_000, // a live route + worker turn + extraction turn; codex does the real work here
+    900_000, // a live route + a single codex working turn (the artifact path is derived from effects, not a second extraction turn)
   )
 })

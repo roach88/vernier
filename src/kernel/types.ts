@@ -14,6 +14,7 @@
 // as untrusted code — loop-as-data makes it unnecessary.
 
 import type { z } from "zod"
+import type { EffectObservation } from "./effects.js"
 import type { Policy } from "./policy.js"
 
 // ---------------------------------------------------------------- Signature
@@ -57,9 +58,18 @@ export interface StepSpec {
   /** Rendered from the step's prompt template for LLM executors; undefined for scripts. */
   readonly prompt?: string | undefined
   /**
-   * Plain JSON Schema for provider-native structured output (omegacode's
-   * AgentSpec.schema). The engine still re-validates against the step's zod
-   * output signature — the schema is a steering aid, not the check.
+   * On attempt > 1: the previous attempt's retry hint, carrying the exact
+   * failed contract check labels/messages. Prompt templates render it so
+   * the executor is told precisely what to fix.
+   */
+  readonly retryHint?: string | undefined
+  /**
+   * Executor-seam escape hatch (omegacode's AgentSpec.schema): plain JSON
+   * Schema for provider-native structured output. No v1 step sets it — the
+   * engine derives deterministic output fields from effect attribution
+   * instead (Step.outputFrom). If a future step (e.g. an LLM judge) truly
+   * needs a model-emitted value, derive this from the step's zod output
+   * signature at runtime; never hand-write a second schema.
    */
   readonly outputSchema?: Record<string, unknown> | undefined
   readonly effects: EffectScope
@@ -77,6 +87,14 @@ export interface StepSpec {
 /** The step's prompt template: pure data-to-text, rendered by the engine each attempt. */
 export type PromptTemplate = (spec: Omit<StepSpec, "prompt">) => string
 
+/**
+ * Deterministic output projection, merged over the executor's reported
+ * output before validation. Fields the engine can OBSERVE (e.g. an artifact
+ * path from effect attribution) are derived here instead of asked of the
+ * model — no second model turn, no trusting self-report.
+ */
+export type OutputProjection = (result: StepResult, effects: EffectObservation) => Record<string, unknown>
+
 /** The unit of orchestration: typed boundary, accountable actor, deterministic check, bounded blast radius. */
 export interface Step<I = any, O = any> {
   readonly id: string
@@ -88,8 +106,8 @@ export interface Step<I = any, O = any> {
   readonly effects: EffectScope
   /** Prompt template for LLM executors; omitted for scripts. */
   readonly prompt?: PromptTemplate
-  /** JSON Schema forwarded to LLM executors for structured output. */
-  readonly outputSchema?: Record<string, unknown>
+  /** Derive output fields from engine observations (see OutputProjection). */
+  readonly outputFrom?: OutputProjection
   readonly timeoutMs?: number
 }
 

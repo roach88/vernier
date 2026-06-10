@@ -143,6 +143,38 @@ describe("CodexExecutor", () => {
     expect(result.usage.inputTokens).toBe(100) // failed turns still bill
   })
 
+  it("composes the executor timeout with an incoming ctx.signal — either may abort", async () => {
+    /** A worker that hangs until its signal aborts (then surfaces the interrupt). */
+    const hanging: Worker = {
+      id: "codex",
+      runAgent(_s: AgentSpec, ctx: WorkerContext) {
+        return new Promise<AgentResult>((_resolve, reject) => {
+          if (ctx.signal.aborted) return reject(new AgentInterrupted())
+          ctx.signal.addEventListener("abort", () => reject(new AgentInterrupted()), { once: true })
+        })
+      },
+      async shutdown() {},
+    }
+
+    // A caller-supplied signal must NOT bypass the executor timeout.
+    const idleCaller = new AbortController()
+    const timedOut = await new CodexExecutor({ worker: hanging }).run(spec({ timeoutMs: 50 }), {
+      workdir: workdir(),
+      signal: idleCaller.signal,
+    })
+    expect(timedOut.status).toBe("interrupted")
+
+    // And the caller signal still aborts well inside a generous timeout.
+    const caller = new AbortController()
+    const pending = new CodexExecutor({ worker: hanging }).run(spec({ timeoutMs: 600_000 }), {
+      workdir: workdir(),
+      signal: caller.signal,
+    })
+    setTimeout(() => caller.abort(), 20)
+    const aborted = await pending
+    expect(aborted.status).toBe("interrupted")
+  })
+
   it("maps AgentInterrupted onto an interrupted StepResult", async () => {
     const interrupted: Worker = {
       id: "codex",

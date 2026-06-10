@@ -4,7 +4,9 @@
 // stdio) and maps its AgentResult onto the kernel's StepResult honestly:
 //
 //   AgentResult.text        -> output.text (or evidence-only when structured)
-//   AgentResult.structured  -> output (when the step declared an outputSchema)
+//   AgentResult.structured  -> output (only if a spec sets the outputSchema
+//                              escape hatch; no v1 step does — deterministic
+//                              fields come from effect attribution instead)
 //   AgentResult.status      -> StepResult.status        (same closed set)
 //   AgentResult.usage       -> StepResult.usage (+ wall-clock durationMs)
 //   AgentError / AgentInterrupted -> status "failed" / "interrupted",
@@ -80,17 +82,16 @@ export class CodexExecutor implements Executor {
     const onProgress = (e: WorkerProgress): void => {
       events.push(JSON.stringify({ at: new Date().toISOString(), ...e }))
     }
-    // Per-step timeout: abort the turn when spec.timeoutMs elapses.
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), spec.timeoutMs)
-    timer.unref?.()
+    // Per-step timeout COMPOSED with any caller signal: either may abort the
+    // turn — a caller-supplied ctx.signal must not bypass the executor timeout.
+    const timeout = AbortSignal.timeout(spec.timeoutMs)
+    const signal = ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout
 
     const startedAt = Date.now()
     let result: AgentResult
     try {
-      result = await this.worker.runAgent(agentSpec, { signal: ctx.signal ?? controller.signal, onProgress })
+      result = await this.worker.runAgent(agentSpec, { signal, onProgress })
     } catch (error) {
-      clearTimeout(timer)
       const evidence = this.writeEvidence(spec, prefix, promptPath, events, errorText(error))
       const durationMs = Date.now() - startedAt
       if (error instanceof AgentInterrupted) {
@@ -107,7 +108,6 @@ export class CodexExecutor implements Executor {
       }
       throw error
     }
-    clearTimeout(timer)
 
     const durationMs = Date.now() - startedAt
     const evidence = this.writeEvidence(spec, prefix, promptPath, events, result.text)

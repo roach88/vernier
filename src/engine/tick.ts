@@ -9,7 +9,7 @@
 import { randomBytes } from "node:crypto"
 import { dirname } from "node:path"
 import type { ContractRegistry, ContractResult } from "../kernel/contract.js"
-import { failedCheckLabels } from "../kernel/contract.js"
+import { failedCheckMessages } from "../kernel/contract.js"
 import { hashObserver, type EffectObservation, type EffectsObserver } from "../kernel/effects.js"
 import type { Decision, Observation } from "../kernel/policy.js"
 import type { Executor, Loop, StepResult } from "../kernel/types.js"
@@ -26,6 +26,8 @@ export interface RunState {
   readonly status: RunStatus
   /** The data plane: loop inputs plus every completed step's outputs, by field name. */
   readonly values: Record<string, unknown>
+  /** Set by a retry decision; rendered into the next attempt's spec so the prompt names what to fix. */
+  readonly retryHint?: string | undefined
 }
 
 export interface EngineDeps {
@@ -107,7 +109,7 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
     effects: step.effects,
     runDir: dirname(ledger.path),
     timeoutMs: step.timeoutMs ?? 600_000,
-    ...(step.outputSchema ? { outputSchema: step.outputSchema } : {}),
+    ...(state.retryHint !== undefined ? { retryHint: state.retryHint } : {}),
   }
   const prompt = step.prompt?.(base)
   const spec = { ...base, ...(prompt !== undefined ? { prompt } : {}) }
@@ -124,12 +126,16 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
   }
   const effects: EffectObservation = await observer.assess(deps.workdir, before, step.effects)
 
-  // 5. Validate the output value: signature, then contract.
-  const outputParse = step.signature.output.safeParse(result.output)
+  // 5. Project engine-observed fields over the executor's output (e.g. an
+  //    artifact path from effect attribution — the projection wins on
+  //    collision, so a self-report can never contradict the diff), then
+  //    validate the output value: signature, then contract.
+  const output = step.outputFrom ? { ...result.output, ...step.outputFrom(result, effects) } : result.output
+  const outputParse = step.signature.output.safeParse(output)
   const outputValid = result.status === "completed" && outputParse.success
   let contractResult: ContractResult | null = null
   if (step.contract) {
-    contractResult = deps.contracts.lookup(step.contract).validate(result.output, {
+    contractResult = deps.contracts.lookup(step.contract).validate(output, {
       traceId: state.traceId,
       loopId: loop.id,
       loopVersion: loop.version,
@@ -139,7 +145,7 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
     })
   }
 
-  ledger.append({ type: "step_result", key, stepId: step.id, attempt: state.attempt, status: result.status, output: result.output, outputValid, evidence: result.evidence, usage: result.usage, at: now() })
+  ledger.append({ type: "step_result", key, stepId: step.id, attempt: state.attempt, status: result.status, output, outputValid, evidence: result.evidence, usage: result.usage, at: now() })
   if (contractResult) ledger.append({ type: "contract", key, stepId: step.id, attempt: state.attempt, result: contractResult, at: now() })
   ledger.append({ type: "effects", key, stepId: step.id, attempt: state.attempt, observation: effects, at: now() })
 
@@ -158,7 +164,7 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
     outputValid,
     contractId: step.contract ?? null,
     contractValid: contractResult ? contractResult.valid : true,
-    contractFailedChecks: contractResult ? failedCheckLabels(contractResult) : [],
+    contractFailedChecks: contractResult ? failedCheckMessages(contractResult) : [],
     effectsAllowed: effects.allowed,
     unexpectedChanges: effects.unexpected,
   }
@@ -166,7 +172,7 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
   ledger.append({ type: "decision", key, stepId: step.id, attempt: state.attempt, decision, at: now() })
 
   // 7. Advance state. The journal is the only durable state; this is its projection.
-  run.state = nextState(state, decision, outputValid ? (outputParse.success ? (outputParse.data as Record<string, unknown>) : {}) : {})
+  run.state = nextState(state, decision, outputValid && outputParse.success ? (outputParse.data as Record<string, unknown>) : {})
   return { state: run.state, decision }
 }
 
@@ -174,9 +180,9 @@ function nextState(state: RunState, decision: Decision, output: Record<string, u
   const values = { ...state.values, ...output }
   switch (decision.kind) {
     case "continue":
-      return { ...state, stepIndex: state.stepIndex + 1, attempt: 1, values }
+      return { ...state, stepIndex: state.stepIndex + 1, attempt: 1, values, retryHint: undefined }
     case "retry":
-      return { ...state, attempt: state.attempt + 1, values: state.values }
+      return { ...state, attempt: state.attempt + 1, values: state.values, retryHint: decision.retryHint }
     case "escalate":
       return { ...state, status: "needs_human", values }
     case "stop":
@@ -197,9 +203,11 @@ export async function runLoop<I, O>(loop: Loop<I, O>, inputs: I, deps: EngineDep
   do {
     outcome = await tick(run, deps)
   } while (outcome.state.status === "running")
-  // The engine contributes one reserved output field: `verdict`, the final
-  // policy decision's classification. A loop signature may demand it without
-  // a step having to fake it; step-produced values win on collision.
+  // `verdict` is the engine's one reserved output field — the final decision's
+  // classification, merged so a loop signature can promise a verdict no step
+  // produces (step values win on collision). Kept as a reserved name: an
+  // explicit projection slot on Loop would be more machinery than this one
+  // deterministic, engine-owned field justifies.
   const output =
     outcome.state.status === "done"
       ? (loop.signature.output.parse({ verdict: outcome.decision.classification, ...run.state.values }) as O)

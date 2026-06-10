@@ -34,8 +34,9 @@ export interface Contract {
   validate(output: Record<string, unknown>, ctx: ContractContext): ContractResult
 }
 
-export function failedCheckLabels(result: ContractResult): string[] {
-  return result.checks.filter((c) => !c.passed).map((c) => c.label)
+/** Failed checks as `label — detail` strings: exact enough to drive a retry prompt. */
+export function failedCheckMessages(result: ContractResult): string[] {
+  return result.checks.filter((c) => !c.passed).map((c) => `${c.label} — ${c.detail}`)
 }
 
 export class ContractRegistry {

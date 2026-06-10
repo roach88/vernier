@@ -8,8 +8,9 @@
 //
 // dry-run-note.v1: ported check-for-check from the frozen Python spec
 // (agent_workflows/contracts/dry_run_note.py + docs/agent-workflows/
-// contracts/dry-run-note.v1.md). One addition: the artifact path is
-// model-reported here (structured output), so the contract first pins it
+// contracts/dry-run-note.v1.md). One addition: the artifact path arrives
+// derived from effect attribution (the one changed-and-allowed file —
+// kernel/effects.ts artifactFromEffects), so the contract first pins it
 // to the runner-expected path — what Python guaranteed by construction.
 
 import { existsSync, readFileSync } from "node:fs"
@@ -85,7 +86,7 @@ export const dryRunNoteV1: Contract = {
       {
         label: "artifact path matches the runner-expected path",
         passed: artifact === expected,
-        detail: `expected \`${expected}\`, worker reported \`${artifact || "<missing>"}\``,
+        detail: `expected \`${expected}\`, effect attribution yielded \`${artifact || "<missing>"}\``,
       },
       {
         label: "expected artifact is readable",

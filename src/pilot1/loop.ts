@@ -14,6 +14,7 @@
 // (build_retry_prompt renders when attempt > 1).
 
 import { z } from "zod"
+import { artifactFromEffects } from "../kernel/effects.js"
 import type { Policy } from "../kernel/policy.js"
 import { retryPolicy } from "../kernel/policy.js"
 import { fsScope, noEffects, sig, type Loop, type PromptTemplate } from "../kernel/types.js"
@@ -56,12 +57,13 @@ const implementPrompt: PromptTemplate = (spec) => {
   const task = String(spec.inputs.task)
   const expected = expectedArtifactPath(spec.traceId)
   // Retry attempts get the smaller, contract-focused prompt
-  // (dynamic_workflow_harness.build_retry_prompt, as a template branch).
+  // (dynamic_workflow_harness.build_retry_prompt, as a template branch),
+  // carrying the previous attempt's exact failed contract checks.
   if (spec.attempt > 1) {
     return `You are the ${WORKER} worker retry for loop \`${spec.loopId}\`.
 
 Retry reason:
-A previous attempt did not satisfy the artifact contract.
+${spec.retryHint ?? "A previous attempt did not satisfy the artifact contract."}
 
 Expected artifact:
 \`${expected}\`
@@ -166,9 +168,13 @@ const routeOutput = z.object({
   route: z.record(z.unknown()),
 })
 
+/**
+ * `artifact` is not model-reported: the engine derives it from effect
+ * attribution (the one changed-and-allowed file), so codex needs no second
+ * structured-output extraction turn — the diff is the report.
+ */
 const implementOutput = z.object({
   artifact: z.string(),
-  summary: z.string(),
 })
 
 /** Pilot 1 as data: signature `task:str -> artifact:path, verdict:str`. */
@@ -193,15 +199,7 @@ export const planWorkReviewLoop: Loop<{ task: string }, { artifact: string; verd
       contract: DRY_RUN_NOTE_V1,
       effects: fsScope(`${ALLOWED_WORKER_ROOT}/**`), // the TOML's allowed_worker_artifact_root
       prompt: implementPrompt,
-      outputSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          artifact: { type: "string", description: "Workdir-relative path of the dry-run note you wrote." },
-          summary: { type: "string", description: "One-sentence summary of the worker pass." },
-        },
-        required: ["artifact", "summary"],
-      },
+      outputFrom: artifactFromEffects("artifact"),
       timeoutMs: 600_000, // Python codex_timeout = 600
     },
   ],

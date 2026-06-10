@@ -65,14 +65,18 @@ Drive this loop from the scheduler instead of a manual run.
 `
 }
 
-/** A fake codex: writes a note (conforming or not) and reports the artifact path. */
+/**
+ * A fake codex: writes a note (conforming or not) and — like the real one
+ * since the structured-output turn was removed — reports only prose. The
+ * `artifact` output field must come from the engine's effect attribution.
+ */
 function fakeCodex(opts: { conforming: boolean }) {
   return scriptExecutor("codex", (spec, ctx) => {
     const expected = expectedArtifactPath(spec.traceId)
     const absolute = join(ctx.workdir, expected)
     mkdirSync(dirname(absolute), { recursive: true })
     writeFileSync(absolute, opts.conforming ? conformingNote(spec) : `# A note that ignores the contract\n\nNothing required is here.\n`, "utf8")
-    return { output: { artifact: expected, summary: "Wrote the dry-run note." } }
+    return { output: { text: "Wrote the dry-run note." } }
   })
 }
 
@@ -113,11 +117,10 @@ describe("pilot 1: plan-work-review through tick()", () => {
     let seenRoute: unknown
     const spy = scriptExecutor("codex", (spec, ctx) => {
       seenRoute = spec.inputs.route
-      const expected = expectedArtifactPath(spec.traceId)
-      const absolute = join(ctx.workdir, expected)
+      const absolute = join(ctx.workdir, expectedArtifactPath(spec.traceId))
       mkdirSync(dirname(absolute), { recursive: true })
       writeFileSync(absolute, conformingNote(spec), "utf8")
-      return { output: { artifact: expected, summary: "ok" } }
+      return { output: { text: "ok" } }
     })
     await runLoop(loop(ledgerRoot), { task: TASK }, deps(workdir, [fakeHermes("approve"), spy]))
     expect(seenRoute).toMatchObject({ gate_decision: "approve", route_to_worker: true })
@@ -159,6 +162,62 @@ describe("pilot 1: plan-work-review through tick()", () => {
     expect(failedContract?.type === "contract" && failedContract.result.valid).toBe(false)
   })
 
+  it("derives `artifact` from effect attribution: a worker that writes nothing (or two files) yields no artifact, deterministically", async () => {
+    const { workdir, ledgerRoot, loop } = setup()
+    // Writes NOTHING: zero changed-and-allowed files -> no artifact field -> signature retry.
+    const idle = scriptExecutor("codex", () => ({ output: { text: "did nothing" } }))
+    const d = deps(workdir, [fakeHermes("approve"), idle])
+    const run = startRun(loop(ledgerRoot), { task: TASK }, d)
+    await tick(run, d) // route
+    const outcome = await tick(run, d)
+    expect(outcome.decision.kind).toBe("retry")
+    expect(outcome.decision.summary).toContain("signature")
+
+    // Writes TWO allowed files: no single candidate -> same deterministic failure.
+    const { workdir: wd2, ledgerRoot: lr2, loop: loop2 } = setup()
+    const sprawling = scriptExecutor("codex", (spec, ctx) => {
+      for (const name of [expectedArtifactPath(spec.traceId), "docs/agent-workflows/extra.md"]) {
+        const absolute = join(ctx.workdir, name)
+        mkdirSync(dirname(absolute), { recursive: true })
+        writeFileSync(absolute, conformingNote(spec), "utf8")
+      }
+      return { output: { text: "wrote two files" } }
+    })
+    const d2 = deps(wd2, [fakeHermes("approve"), sprawling])
+    const run2 = startRun(loop2(lr2), { task: TASK }, d2)
+    await tick(run2, d2) // route
+    const outcome2 = await tick(run2, d2)
+    expect(outcome2.decision.kind).toBe("retry")
+  })
+
+  it("injects attempt 1's exact failed contract checks into attempt 2's prompt; the fixed attempt succeeds", async () => {
+    const { workdir, ledgerRoot, loop } = setup()
+    const prompts: string[] = []
+    // Attempt 1 violates dry-run-note.v1; attempt 2 conforms.
+    const learning = scriptExecutor("codex", (spec, ctx) => {
+      prompts.push(spec.prompt ?? "")
+      const absolute = join(ctx.workdir, expectedArtifactPath(spec.traceId))
+      mkdirSync(dirname(absolute), { recursive: true })
+      writeFileSync(absolute, spec.attempt === 1 ? "# A note that ignores the contract\n" : conformingNote(spec), "utf8")
+      return { output: { text: "wrote the note" } }
+    })
+    const d = deps(workdir, [fakeHermes("approve"), learning])
+
+    const outcome = await runLoop(loop(ledgerRoot), { task: TASK }, d)
+    expect(outcome.state.status).toBe("done")
+    expect(outcome.output?.verdict).toBe("success")
+
+    expect(prompts).toHaveLength(2)
+    // Attempt 1's prompt carries no failure context; attempt 2's carries the
+    // exact failed check labels AND details from attempt 1's contract result.
+    expect(prompts[0]).not.toContain("Failed contract checks")
+    expect(prompts[1]).toContain("Failed contract checks")
+    expect(prompts[1]).toContain(`contract \`dry-run-note.v1\` failed`)
+    expect(prompts[1]).toContain("trace id recorded")
+    expect(prompts[1]).toContain(`expected \`${outcome.state.traceId}\` in artifact title or metadata`)
+    expect(prompts[1]).toContain("one improvement candidate recorded")
+  })
+
   it("renders the route and implement prompts from the loop's own templates", () => {
     const [route, implement] = planWorkReviewLoop.steps
     const base = {
@@ -179,8 +238,15 @@ describe("pilot 1: plan-work-review through tick()", () => {
     const implPrompt = implement!.prompt!({ ...base, stepId: "implement", inputs: { task: TASK, route: { gate_decision: "approve" } } })
     expect(implPrompt).toContain("## Improvement Candidate")
     expect(implPrompt).toContain("/tmp/run") // the bundle path reaches the worker
-    const retryPrompt = implement!.prompt!({ ...base, attempt: 2, stepId: "implement", inputs: { task: TASK, route: {} } })
+    const retryPrompt = implement!.prompt!({
+      ...base,
+      attempt: 2,
+      stepId: "implement",
+      retryHint: "Failed contract checks:\n- trace id recorded — expected `plan-work-review-test`",
+      inputs: { task: TASK, route: {} },
+    })
     expect(retryPrompt).toContain("worker retry")
     expect(retryPrompt).toContain("dry-run-note.v1")
+    expect(retryPrompt).toContain("trace id recorded — expected `plan-work-review-test`")
   })
 })

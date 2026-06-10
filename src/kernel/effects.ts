@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto"
 import { readdirSync, readFileSync } from "node:fs"
 import { join, relative } from "node:path"
-import type { EffectScope } from "./types.js"
+import type { EffectScope, OutputProjection } from "./types.js"
 
 const SKIP_DIRS = new Set([".git", "node_modules", ".looper"])
 
@@ -58,6 +58,22 @@ export function assessChanges(before: Snapshot, after: Snapshot, scope: EffectSc
   const changed = changedFiles(before, after)
   const unexpected = changed.filter((path) => !isAllowed(path, scope))
   return { changed, allowed: unexpected.length === 0, unexpected }
+}
+
+/**
+ * OutputProjection: derive a path-valued output field from effect
+ * attribution. The observer already knows, deterministically, which file
+ * the step changed — so the artifact path is taken from the diff, not from
+ * a model self-report (which would cost a second structured-output turn).
+ * Rule: exactly one changed-and-allowed file -> that path; zero or several
+ * candidates -> no field, so signature/contract validation fails
+ * deterministically and the policy decides (retry/escalate).
+ */
+export function artifactFromEffects(field: string): OutputProjection {
+  return (_result, effects) => {
+    const candidates = effects.changed.filter((path) => !effects.unexpected.includes(path))
+    return candidates.length === 1 ? { [field]: candidates[0] } : {}
+  }
 }
 
 // ----------------------------------------------------------------- Observer
