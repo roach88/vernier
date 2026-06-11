@@ -14,8 +14,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src", "test", "vitest.config.ts"],
-  // claude.ts is vendored for adapter-family completeness but compiles only
-  // against @anthropic-ai/claude-agent-sdk, which looper does not carry yet.
-  "exclude": ["src/executors/vendor/omegacode/claude.ts"]
+  "include": ["src", "test", "vitest.config.ts"]
 }

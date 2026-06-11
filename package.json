@@ -1,5 +1,5 @@
 {
-  "name": "looper",
+  "name": "@roach88/looper",
   "version": "0.1.0",
   "private": true,
   "description": "Agent-orchestration kernel: the loop is data; the step is typed; the executor is fungible; the policy is pure; the ledger is append-only.",
@@ -11,7 +11,24 @@
   "bin": {
     "looper": "bin/looper.js"
   },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "NOTICE",
+    "src/executors/vendor/omegacode/LICENSE"
+  ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "looper": "tsx src/cli/main.ts",
@@ -25,7 +42,21 @@
     "zod": "^3.24.0",
     "zod-to-json-schema": "^3.25.2"
   },
+  "peerDependencies": {
+    "@anthropic-ai/claude-agent-sdk": ">=0.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/claude-agent-sdk": {
+      "optional": true
+    }
+  },
+  "overrides": {
+    "@anthropic-ai/claude-agent-sdk": {
+      "zod": "$zod"
+    }
+  },
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.173",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

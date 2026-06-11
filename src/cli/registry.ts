@@ -19,14 +19,16 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { EngineDeps } from "../engine/tick.js"
+import { ClaudeExecutor } from "../executors/claude.js"
 import { CodexExecutor } from "../executors/codex.js"
+import { CursorExecutor } from "../executors/cursor.js"
 import { HermesExecutor } from "../executors/hermes.js"
 import { JudgeExecutor } from "../executors/judge.js"
 import { recallExecutor, rememberExecutor } from "../executors/memory.js"
 import { executorRegistry } from "../executors/script.js"
 import { ContractRegistry, defaultContractRegistry } from "../kernel/contract.js"
 import { gitObserver } from "../kernel/git-effects.js"
-import type { Loop } from "../kernel/types.js"
+import type { Executor, Loop } from "../kernel/types.js"
 import { resolveLedgerRoot } from "../ledger/ledger.js"
 import { Memory, resolveMemoryRoot, rulesPath } from "../memory/memory.js"
 import { controlPlaneSmokeExecutor, controlPlaneSmokeLoop } from "../pilot0/loop.js"
@@ -65,6 +67,27 @@ const noShutdown = async (): Promise<void> => {}
 
 function scratchDir(label: string): string {
   return mkdtempSync(join(tmpdir(), `looper-${label}-`))
+}
+
+/**
+ * The wired provider executors (codex / cursor-agent / claude), constructed
+ * lazily as a set: every agent-driven entry registers ALL of them so any
+ * role can be rebound onto any agent (`--executor <step>=claude`) without a
+ * custom runtime. Nothing spawns or imports an SDK until a step actually
+ * runs on one of them, so registering the full set costs nothing.
+ */
+function wiredProviders(): { readonly executors: readonly Executor[]; shutdown(): Promise<void> } {
+  const codex = new CodexExecutor()
+  const cursor = new CursorExecutor()
+  const claude = new ClaudeExecutor()
+  return {
+    executors: [codex, cursor, claude],
+    async shutdown() {
+      await codex.shutdown()
+      await cursor.shutdown()
+      await claude.shutdown()
+    },
+  }
 }
 
 function smokeEntry(): RegisteredLoop {
@@ -109,15 +132,15 @@ function planWorkReviewEntry(): RegisteredLoop {
       if (!existsSync(join(workdir, "README.md"))) {
         writeFileSync(join(workdir, "README.md"), "# looper plan-work-review scratch\n", "utf8")
       }
-      const codex = new CodexExecutor()
+      const providers = wiredProviders()
       return {
         deps: {
-          executors: executorRegistry(new HermesExecutor(), codex),
+          executors: executorRegistry(new HermesExecutor(), ...providers.executors),
           contracts: defaultContractRegistry().register(routeDecisionV1).register(dryRunNoteV1),
           workdir,
           observer: gitObserver,
         },
-        shutdown: () => codex.shutdown(),
+        shutdown: () => providers.shutdown(),
       }
     },
   }
@@ -132,16 +155,16 @@ function verifiedAnswerEntry(): RegisteredLoop {
     live: true,
     defaultWorkdir: () => scratchDir("verified-answer"),
     runtime(workdir) {
-      const answerer = new CodexExecutor()
+      const providers = wiredProviders()
       const judge = new JudgeExecutor()
       return {
         deps: {
-          executors: executorRegistry(answerer, judge),
+          executors: executorRegistry(...providers.executors, judge),
           contracts: defaultContractRegistry(),
           workdir,
         },
         shutdown: async () => {
-          await answerer.shutdown()
+          await providers.shutdown()
           await judge.shutdown()
         },
       }
@@ -158,7 +181,7 @@ function compoundingAnswerEntry(): RegisteredLoop {
     live: true,
     defaultWorkdir: () => scratchDir("compounding-answer"),
     runtime(workdir) {
-      const answerer = new CodexExecutor()
+      const providers = wiredProviders()
       const judge = new JudgeExecutor()
       const distiller = new JudgeExecutor({ id: "distill" })
       // ONE durable store under the looper root — sharing it across CLI
@@ -167,13 +190,13 @@ function compoundingAnswerEntry(): RegisteredLoop {
       const memory = new Memory(rulesPath(resolveMemoryRoot({})))
       return {
         deps: {
-          executors: executorRegistry(answerer, judge, distiller, recallExecutor, rememberExecutor),
+          executors: executorRegistry(...providers.executors, judge, distiller, recallExecutor, rememberExecutor),
           contracts: new ContractRegistry(),
           workdir,
           memory,
         },
         shutdown: async () => {
-          await answerer.shutdown()
+          await providers.shutdown()
           await judge.shutdown()
           await distiller.shutdown()
         },
@@ -200,20 +223,26 @@ function userEntry(reg: LoopRegistration, source: string): RegisteredLoop {
     defaultWorkdir: reg.defaultWorkdir ?? (() => scratchDir(reg.loop.id)),
     runtime(workdir) {
       if (reg.runtime) return reg.runtime(workdir)
-      const codex = new CodexExecutor()
+      const providers = wiredProviders()
       const judge = new JudgeExecutor()
       const contracts = defaultContractRegistry()
       for (const contract of reg.contracts ?? []) contracts.register(contract)
+      // Registration executors merge OVER the builtins (the user's module
+      // is closest to the user's intent — same rule as config executors).
+      const executors = new Map<string, Executor>(
+        executorRegistry(...providers.executors, judge, new HermesExecutor(), recallExecutor, rememberExecutor),
+      )
+      for (const executor of reg.executors ?? []) executors.set(executor.id, executor)
       return {
         deps: {
-          executors: executorRegistry(codex, judge, new HermesExecutor(), recallExecutor, rememberExecutor, ...(reg.executors ?? [])),
+          executors,
           contracts,
           workdir,
           ...(reg.observer === "git" ? { observer: gitObserver } : {}),
           memory: new Memory(rulesPath(resolveMemoryRoot({}))),
         },
         shutdown: async () => {
-          await codex.shutdown()
+          await providers.shutdown()
           await judge.shutdown()
         },
       }

@@ -26,6 +26,7 @@ import { driveRun, finalOutput, newRunId, startRun, tick, type EngineDeps, type 
 import type { Executor, Loop } from "../kernel/types.js"
 import { journalPath, Ledger, resolveLedgerRoot, type LedgerEntry } from "../ledger/ledger.js"
 import { bindExecutors, ConfigError, loadConfig, type BindingLayer, type LoadedConfig } from "./config.js"
+import { diagnose, renderDoctor } from "./doctor.js"
 import { loopRegistry, type LoopRuntime, type RegisteredLoop } from "./registry.js"
 
 const EXIT = { ok: 0, failed: 1, usage: 2, leaseHeld: 3 } as const
@@ -49,6 +50,8 @@ USAGE
                                                      continue a run to terminal
   looper runs                                        list runs under the ledger root
   looper show <runId>                                print a run's journal
+  looper doctor                                      probe executors + per-loop runnability
+                                                     (exit 0 iff every registered loop is runnable)
 
 Every command accepts --json (machine output on stdout; diagnostics on stderr).
 Ledger root: $LOOPER_HOME, else ./.looper
@@ -436,6 +439,18 @@ function cmdShow(flags: Flags): number {
   return EXIT.ok
 }
 
+async function cmdDoctor(flags: Flags): Promise<number> {
+  const config = await loadConfig()
+  const registry = loopRegistry(config)
+  const report = await diagnose(registry, config)
+  if (flags.json) {
+    json(report)
+  } else {
+    for (const line of renderDoctor(report)) out(line)
+  }
+  return report.ok ? EXIT.ok : EXIT.failed
+}
+
 // --------------------------------------------------------------------- main
 
 export async function main(argv: readonly string[]): Promise<number> {
@@ -462,8 +477,10 @@ export async function main(argv: readonly string[]): Promise<number> {
       return cmdRuns(flags)
     case "show":
       return cmdShow(flags)
+    case "doctor":
+      return cmdDoctor(flags)
     default:
-      throw new UsageError(`Unknown command \`${command}\`. Commands: loops, run, tick, resume, runs, show.`)
+      throw new UsageError(`Unknown command \`${command}\`. Commands: loops, run, tick, resume, runs, show, doctor.`)
   }
 }
 

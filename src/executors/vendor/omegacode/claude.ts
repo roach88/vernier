@@ -1,7 +1,9 @@
 // Vendored from omegacode src/worker/claude.ts
 // https://github.com/SawyerHood/omegacode — MIT License, Copyright (c) 2026 Sawyer Hood.
 // See LICENSE in this directory and the repository NOTICE file.
-// Local adaptation: imports of "../dsl/types.js" point at "./types.js" (vendored subset).
+// Local adaptations: imports of "../dsl/types.js" point at "./types.js" (vendored
+// subset); optional Options fields (model, maxTurns) use conditional spread because
+// looper compiles with exactOptionalPropertyTypes (omegacode does not).
 
 // ClaudeWorker — drives Claude Code via @anthropic-ai/claude-agent-sdk `query()`.
 // Structured output uses the SDK's native `outputFormat: { type: "json_schema" }`; sandbox maps to a
@@ -82,10 +84,11 @@ export class ClaudeWorker implements Worker {
     const onAbort = () => abort.abort()
     ctx.signal.addEventListener("abort", onAbort, { once: true })
 
+    const model = spec.model ?? this.opts.model
     const options: Options = {
       cwd: spec.cwd,
-      model: spec.model ?? this.opts.model,
-      maxTurns: spec.maxTurns,
+      ...(model !== undefined ? { model } : {}),
+      ...(spec.maxTurns !== undefined ? { maxTurns: spec.maxTurns } : {}),
       settingSources: [],
       permissionMode: "default",
       abortController: abort,

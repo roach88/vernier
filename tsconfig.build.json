@@ -1,0 +1,14 @@
+// The emit config: same strictness as tsconfig.json, but src-only and
+// writing dist/ (ESM + .d.ts). Plain tsc, no bundler: the source is already
+// NodeNext ESM with .js specifiers, so emit is a 1:1 mirror — and the
+// vendored omegacode files keep their MIT attribution headers file-for-file.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"]
+}

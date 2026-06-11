@@ -47,30 +47,69 @@ agents: a `hermes` route step (an LLM gate is just a Step, checked by
 omegacode app-server worker behind the same seam, checked by
 `dry-run-note.v1`, effects observed by the git-aware observer).
 
-## Run it
+## Install
+
+Not yet on npm — `@roach88/looper` is a placeholder while the final name
+settles; publish is deliberately deferred. Install from a checkout:
 
 ```sh
+git clone https://github.com/roach88/looper && cd looper
 npm install
-npm test          # vitest: all fake/deterministic — no auth, no network
-npm run pilot0    # the deterministic control-plane smoke loop
-npm run pilot1    # LIVE: hermes route + real codex implement in a /tmp scratch git repo
+npm run build     # tsc -> dist/ (ESM + .d.ts); bin/looper.js then runs under PLAIN node
+npm link          # optional: a global `looper` on PATH
+```
+
+The claude executor needs `@anthropic-ai/claude-agent-sdk`, an **optional**
+peer dependency — the base install stays light. Add it next to looper when
+you want claude (`looper doctor` tells you whether it is missing).
+
+## Quickstart
+
+```sh
+looper doctor                                # which executors are usable; which loops are runnable
+looper run control-plane-smoke-test --json   # deterministic, no LLM — the smoke loop end-to-end
+looper loops                                 # everything registered (builtin + your config)
+```
+
+## Dev flows (no build needed)
+
+```sh
+npm test                   # vitest: all fake/deterministic — no auth, no network
+npm run looper -- loops    # the CLI from source through tsx
+npm run pilot0             # the deterministic control-plane smoke loop
+npm run pilot1             # LIVE: route + real codex implement in a /tmp scratch git repo
 LOOPER_LIVE=1 npm test -- pilot1.live   # the same live path as a gated test
 ```
 
+`bin/looper.js` prefers `dist/` when it exists and falls back to running
+the TypeScript through tsx — after editing source, rebuild (or remove
+`dist/`) before trusting the compiled bin.
+
 ## The CLI
 
-Loops are registered by id in `src/cli/registry.ts`; the `looper` bin
-(`npm run looper -- <cmd>`, or `npx looper` / `npm link` for the bin) drives
-them by name and resumes runs from their ledgers:
+Loops are registered by id — the four in-tree pilots in
+`src/cli/registry.ts`, yours via `looper.config` (see "Write your own
+loop"); the `looper` bin drives them by name and resumes runs from their
+ledgers:
 
 ```sh
 looper loops                                       # list registered loops (id@version, signature, trust)
 looper run <loopId> [--input '<json>'] [--input-file <path>] [--workdir <dir>]
+           [--executor <stepIdOrExecutorId>=<executorId>]...
 looper tick <runId>                                # advance ONE step of an existing run from its ledger
 looper resume <runId>                              # continue an existing run to a terminal state
 looper runs                                        # list runs under the ledger root
 looper show <runId>                                # print a run's journal
+looper doctor                                      # probe executors + per-loop runnability
 ```
+
+`doctor` answers "can this installation actually run its loops": every
+registered executor is probed for the one thing it needs (CLI executors a
+binary on PATH, claude its SDK, in-process executors nothing — probes look
+things up, they never execute them), then every loop's steps are resolved
+through the same binding chain a run would use and judged runnable. Exit 0
+iff every registered loop is runnable; an unusable executor that no step
+resolves to is reported but does not fail the doctor.
 
 Agent-ergonomic by contract: every command takes `--json` (machine output on
 stdout, diagnostics on stderr) and exit codes are classed — `0` success,
@@ -110,14 +149,162 @@ bundle (route JSON, codex transcript, rendered `trace.md`) in that run dir —
 runner-managed evidence lives OUTSIDE the workdir by construction, so effect
 attribution never excludes files by name.
 
+## Write your own loop
+
+The point of v1: your loops live in **your** repo, not this one. A config
+file registers loop modules, executor modules, and bindings; the CLI
+discovers it and merges it over the builtins. The executable version of
+everything below lives in
+[test/fixtures/user-config](test/fixtures/user-config) — the test suite
+runs it, so it cannot rot.
+
+Three files in your own directory. First, `looper.config.json`:
+
+```json
+{
+  "loops": ["./echo-loop.mjs"],
+  "executors": ["./reverse-executor.mjs"]
+}
+```
+
+Relative paths resolve against the config file's directory. Discovery walks
+up from cwd to the repo root, or set `$LOOPER_CONFIG`. (TS/JS configs work
+too — `looper.config.{ts,js,mjs}` default-exporting `defineConfig({...})` —
+and may register loops/executors as in-place objects instead of paths.)
+
+Second, a loop module. A Loop is plain data — zod signatures, ordered
+steps, a pure policy — plus a registration wrapper for the runtime facts
+data cannot carry:
+
+```js
+// echo-loop.mjs
+import { z } from "zod"
+
+/** Your own executor: ANY agent arrives like this — an id plus run(). */
+const upper = {
+  id: "upper",
+  async run(spec) {
+    return {
+      status: "completed",
+      output: { echoed: String(spec.inputs.message).toUpperCase() },
+      evidence: [],
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, durationMs: 0 },
+    }
+  },
+}
+
+/** A pure Observation -> Decision policy. */
+const policy = (obs) => {
+  if (obs.stepStatus === "completed" && obs.outputValid && obs.contractValid && obs.effectsAllowed) {
+    const last = obs.stepIndex + 1 >= obs.stepCount
+    return { kind: last ? "stop" : "continue", classification: "success", summary: last ? "echoed; done." : "continue.", notes: [], improvement: "none" }
+  }
+  return { kind: "escalate", classification: "failure", summary: `step \`${obs.stepId}\` did not pass.`, notes: [], improvement: "none" }
+}
+
+export default {
+  loop: {
+    id: "echo-shout",
+    version: "0.1.0",
+    signature: { input: z.object({ message: z.string() }), output: z.object({ echoed: z.string(), verdict: z.string() }) },
+    steps: [
+      {
+        id: "echo",
+        signature: { input: z.object({ message: z.string() }), output: z.object({ echoed: z.string() }) },
+        executor: "upper",
+        effects: { allow: [] },
+      },
+    ],
+    policy,
+    trust: "dry-run",
+    ledger: {},
+  },
+  summary: "User-defined echo loop.",
+  signature: "message:string -> echoed:string, verdict:string",
+  defaultInputs: { message: "hello looper" },
+  executors: [upper],
+}
+```
+
+Third, a config-level executor — registered for EVERY loop under this
+config, so any step can be bound onto it:
+
+```js
+// reverse-executor.mjs
+export default {
+  id: "reverse",
+  async run(spec) {
+    return {
+      status: "completed",
+      output: { echoed: [...String(spec.inputs.message)].reverse().join("") },
+      evidence: [],
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, durationMs: 0 },
+    }
+  },
+}
+```
+
+Run it, then rebind the step onto a different executor — the any-agent-
+any-role seam, smallest possible form:
+
+```sh
+looper run echo-shout --json                          # output.echoed: "HELLO LOOPER"
+looper run echo-shout --executor echo=reverse --json  # output.echoed: "repool olleh"
+```
+
+The resolution chain: `--executor` overrides > config `bindings` > the
+step's declared default. Keys are a step id (binds that step) or an
+executor id (binds the role everywhere it appears). The same chain rebinds
+roles onto the wired agents — every user loop's runtime registers `codex`,
+`cursor-agent`, and `claude` alongside your own executors, so
+`--executor echo=claude` resolves; an LLM-bound step must also declare a
+`prompt` template (the echo step doesn't — scripts read inputs, agents
+read prompts), and the agent must be usable on this machine
+(`looper doctor`).
+
+Rough edge, named honestly: a loop module's bare specifiers (`zod` above)
+resolve from the **config dir's own node_modules** — an out-of-tree config
+importing packages needs its own `npm install zod` (or run from a
+directory that can already resolve it). Once looper is published, prefer
+importing the helpers — `sig`, `until`, `retryPolicy`, `decideNextStep`,
+`fsScope`/`noEffects`, `artifactsFromEffects`, `scriptExecutor`,
+`defineConfig`/`defineLoop`, and the types — from `"@roach88/looper"`;
+that root export is the library surface, and it is deliberately small.
+
+## Trust
+
+Honest v1 status: the `Trust` slot is declared but minimally enforced —
+`draft` loops refuse to execute, and that is all. There is no promotion
+lifecycle yet (no ledger-evidence gates, no `looper promote`), so
+`dry-run`/`active` are labels, not guarantees.
+
+And the boundary that actually matters: **a registered config module runs
+with this process's full privileges** — loading a config or any module it
+names executes that code, exactly the trust you extend to any npm script.
+Effect scopes bound what a STEP may touch (observed, and for codex
+OS-sandboxed; for claude gate-enforced); they do not sandbox the config
+itself. Do not point looper at a config you would not `node` yourself.
+
+## Providers
+
+| executor | status | needs |
+|---|---|---|
+| `codex` | wired | `codex` on PATH; sandbox derived from EffectScope, never full-access |
+| `cursor-agent` | wired | `cursor-agent` on PATH; read-only steps only (no hard sandbox for writes) |
+| `claude` | wired | `@anthropic-ai/claude-agent-sdk` (optional peer); sandbox enforced via the SDK's canUseTool gate |
+| `hermes` | optional binding | `hermes` on PATH; a router CLI behind the same seam (`--executor route=hermes`) |
+| `judge` / `distill` | wired | drives the codex binary; independent structured-output grading |
+| `opencode`, `pi` | vendored, unwired | adapters sit in `src/executors/vendor/omegacode/`; their factory returns not-implemented |
+
 ## Toolchain
 
-Node 22 + TypeScript (strict) + tsx + vitest + zod, plain npm. Node rather
-than bun because the code we vendor and will vendor next (omegacode's
-journal shape today; its provider adapters — Claude agent SDK, Codex
-JSON-RPC over stdio — in the next step) is written against Node APIs and
-Node process semantics; staying on the same runtime keeps that vendoring
-honest. zod because in TS the signature *is* the home idiom — no
+Node 22 + TypeScript (strict) + tsx + vitest + zod, plain npm; `tsc` emits
+`dist/` (no bundler — the source is already NodeNext ESM, and a 1:1 emit
+keeps the vendored files' MIT headers intact). Node rather than bun because
+the vendored code (omegacode's journal shape and its provider adapters —
+Claude agent SDK, Codex JSON-RPC over stdio) is written against Node APIs
+and Node process semantics; staying on the same runtime keeps that
+vendoring honest. zod because in TS the signature *is* the home idiom — no
 mini-language parser needed (the design doc's §7 Python risk dissolves here).
 
 ## Provenance
@@ -127,8 +314,9 @@ mini-language parser needed (the design doc's §7 Python risk dissolves here).
   codex app-server worker + JSON-RPC protocol/transport, the subprocess
   JSONL mechanics, schema strictify/validation, the error taxonomy, the
   deterministic `FakeWorker` test double, and the claude/opencode/pi
-  adapters (vendored as a family; only codex is wired live this step,
-  claude.ts is excluded from compilation pending its SDK). Also adapted:
+  adapters (vendored as a family; codex, cursor-agent, and claude are wired
+  behind the seam — claude lazily, its SDK being an optional peer;
+  opencode/pi remain unwired). Also adapted:
   the `journal.jsonl` shape and canonical hashing (`src/ledger/ledger.ts`);
   the Executor seam as a rename of `Worker.runAgent(spec, ctx) →
   AgentResult`. Deliberately left behind: the `node:vm` sandbox trunk, the
@@ -157,14 +345,17 @@ mini-language parser needed (the design doc's §7 Python risk dissolves here).
 
 ## Deliberately deferred (next steps, per the design doc)
 
-- Wiring claude/opencode/pi behind the seam (vendored, not wired; claude
-  needs `@anthropic-ai/claude-agent-sdk`).
+- Wiring opencode/pi behind the seam (vendored, factory returns
+  not-implemented).
 - Trust/promotion lifecycle enforcement from ledger evidence (today only
   "draft may not execute" is enforced); a `looper promote` command.
+- npm publish — blocked on the final package name (`@roach88/looper` is a
+  placeholder; `"private": true` stays until that call is made).
 - Resuming with effect re-observation across the torn-tick window: when a
   crash lands between a step_result and its effects entry, replay assumes a
   clean scope (the before-snapshot is gone). Honest, narrow, documented in
   `replayTick`.
-- Registering loops from outside this repo (the registry is the four pilot
-  loops, in-tree); loop cards generated from the Loop object; deleting the
-  Python repo (Tyler's call, after reviewing the trace comparison).
+- Observability beyond `show`/`doctor` (run timelines, usage roll-ups);
+  semantic/embedding memory recall (today: keyword/topic overlap).
+- Loop cards generated from the Loop object; deleting the Python repo
+  (Tyler's call, after reviewing the trace comparison).
