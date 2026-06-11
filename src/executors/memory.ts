@@ -9,7 +9,8 @@
 // The store arrives via RunContext.memory, injected through
 // EngineDeps.memory exactly as contracts and executors are injected.
 // `remember` stores VERIFIED rules only — enforced not here but by loop
-// shape: it is only reachable after a passing grade (pilot3/loop.ts).
+// shape: it is only reachable after a passing grade (see the
+// self-improving template's loop).
 // Both ops are awaited: a store with an embedding retriever embeds at the
 // seam, which is async but still deterministic given store + model version
 // — retrieval quality is a Memory concern, never a loop concern.

@@ -1,17 +1,22 @@
-// Pilot 3 end-to-end with deterministic fakes (no network, no auth): the
-// COMPOUNDING proof. Two runs of the compounding-answer loop share ONE
-// memory store. Run 1 (goal A) misses the rubric's non-obvious requirement
-// blind, self-corrects on the verifier's feedback, passes, distills a rule,
-// remembers it. Run 2 (a RELATED goal B) recalls that rule, pre-empts the
-// mistake, and passes in fewer iterations. The fake answerer is behavioral,
-// not queue-scripted: it produces a compliant answer IFF its prompt names
-// the requirement (via a recalled rule or verifier feedback) — so run 2
-// passing first-try is CAUSED by the recalled rule, not by scripting order.
+// The self-improving template (templates/self-improving) end-to-end with
+// deterministic fakes (no network, no auth): the COMPOUNDING proof. Two
+// runs of the compounding-answer loop share ONE memory store. Run 1 (goal
+// A) misses the rubric's non-obvious requirement blind, self-corrects on
+// the verifier's feedback, passes, distills a rule, remembers it. Run 2 (a
+// RELATED goal B) recalls that rule, pre-empts the mistake, and passes in
+// fewer iterations. The fake answerer is behavioral, not queue-scripted: it
+// produces a compliant answer IFF its prompt names the requirement (via a
+// recalled rule or verifier feedback) — so run 2 passing first-try is
+// CAUSED by the recalled rule, not by scripting order. The answer role is
+// resolved through the template's SHIPPED config bindings; distill is
+// rebound onto a separate fake through the same layer mechanism --executor
+// uses (the template's distill step rides the `judge` id by default).
 
 import { existsSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
+import { bindExecutors } from "../src/cli/config.js"
 import { runLoop } from "../src/engine/tick.js"
 import { CodexExecutor } from "../src/executors/codex.js"
 import { JudgeExecutor } from "../src/executors/judge.js"
@@ -21,9 +26,15 @@ import type { Worker, WorkerContext } from "../src/executors/vendor/omegacode/in
 import type { AgentResult, AgentSpec } from "../src/executors/vendor/omegacode/types.js"
 import { ContractRegistry } from "../src/kernel/contract.js"
 import { derivedOutputSchema } from "../src/kernel/types.js"
+import type { Loop } from "../src/kernel/types.js"
 import { Ledger } from "../src/ledger/ledger.js"
 import { Memory, rulesPath } from "../src/memory/memory.js"
-import { compoundingAnswerLoop, topicFrom } from "../src/pilot3/loop.js"
+import { templateBindings, templateModule, templateRegistration } from "./templates.js"
+
+const registration = await templateRegistration("self-improving", "self-improving-loop.mjs")
+const mod = await templateModule("self-improving", "self-improving-loop.mjs")
+const compoundingAnswerLoop = registration.loop as Loop
+const topicFrom = mod.topicFrom as (goal: string) => string
 
 const GOAL_A = "Write a short note on why the Apollo 11 mission mattered."
 const GOAL_B = "Write a short note on why the Hubble Space Telescope mattered." // related: shares write/short/note/mattered
@@ -84,20 +95,25 @@ function harness() {
     usage,
   }))
 
-  const memoryRoot = mkdtempSync(join(tmpdir(), "vernier-pilot3-memory-"))
+  const memoryRoot = mkdtempSync(join(tmpdir(), "vernier-self-improving-memory-"))
   const memory = new Memory(rulesPath(memoryRoot))
-  const ledgerRoot = mkdtempSync(join(tmpdir(), "vernier-pilot3-ledger-"))
-  const loop = { ...compoundingAnswerLoop, ledger: { root: ledgerRoot } }
+  const ledgerRoot = mkdtempSync(join(tmpdir(), "vernier-self-improving-ledger-"))
+  // Layer 1 (as --executor would): rebind the distill step onto its own fake.
+  // Layer 2: the template's SHIPPED config bindings (answer -> codex).
+  const loop = bindExecutors({ ...compoundingAnswerLoop, ledger: { root: ledgerRoot } }, [
+    new Map([["distill", "distiller"]]),
+    templateBindings("self-improving"),
+  ])
   const deps = {
     executors: executorRegistry(
       new CodexExecutor({ worker: answerer.worker }),
       new JudgeExecutor({ worker: judge.worker }),
-      new JudgeExecutor({ id: "distill", worker: distiller.worker }),
+      new JudgeExecutor({ id: "distiller", worker: distiller.worker }),
       recallExecutor,
       rememberExecutor,
     ),
     contracts: new ContractRegistry(),
-    workdir: mkdtempSync(join(tmpdir(), "vernier-pilot3-work-")),
+    workdir: mkdtempSync(join(tmpdir(), "vernier-self-improving-work-")),
     memory, // ONE store, shared by every run that uses these deps
   }
   return { loop, deps, memory, ledgerRoot, answerer, judge, distiller }
@@ -108,7 +124,7 @@ const stepsStarted = (ledgerRoot: string, runId: string): string[] =>
     .filter((e) => e.type === "step_started")
     .map((e) => (e.type === "step_started" ? `${e.stepId}@${e.iteration}` : ""))
 
-describe("pilot 3: compounding across two runs sharing one memory store", () => {
+describe("self-improving template: compounding across two runs sharing one memory store", () => {
   it("run 1 learns a rule; run 2 recalls it and passes in fewer iterations", async () => {
     const { loop, deps, memory, ledgerRoot, answerer } = harness()
 
@@ -170,7 +186,7 @@ describe("pilot 3: compounding across two runs sharing one memory store", () => 
       executors: executorRegistry(
         new CodexExecutor({ worker: behavioralWorker(() => ({ text: BLIND_ANSWER, status: "completed", usage })).worker }),
         new JudgeExecutor({ worker: neverPassJudge.worker }),
-        new JudgeExecutor({ id: "distill", worker: behavioralWorker(() => ({ text: "unreachable", status: "completed", usage })).worker }),
+        new JudgeExecutor({ id: "distiller", worker: behavioralWorker(() => ({ text: "unreachable", status: "completed", usage })).worker }),
         recallExecutor,
         rememberExecutor,
       ),
@@ -190,10 +206,14 @@ describe("pilot 3: compounding across two runs sharing one memory store", () => 
     expect(distiller.seen[0]!.sandbox).toBe("read-only") // a distiller that can write is not a distiller
   })
 
-  it("declares the loop as data: consult memory first, grade independently, distill, remember", () => {
+  it("declares the loop as data: consult memory first, grade independently, distill, remember — NO provider named", () => {
     expect(compoundingAnswerLoop.id).toBe("compounding-answer")
     expect(compoundingAnswerLoop.steps.map((s) => s.id)).toEqual(["recall", "answer", "grade", "distill", "remember"])
-    expect(compoundingAnswerLoop.steps.map((s) => s.executor)).toEqual(["recall", "codex", "judge", "distill", "remember"])
+    // The answer role is a binding target (the shipped config points it at a
+    // provider); distill rides the built-in `judge` id — independent,
+    // structured-output, read-only, a fresh conversation per invocation.
+    expect(compoundingAnswerLoop.steps.map((s) => s.executor)).toEqual(["recall", "agent", "judge", "judge", "remember"])
+    expect(templateBindings("self-improving")).toEqual(new Map([["answer", "codex"]]))
     expect(compoundingAnswerLoop.trust).toBe("active")
     // The loop produces values + memory records, never files.
     for (const step of compoundingAnswerLoop.steps) expect(step.effects.allow).toEqual([])

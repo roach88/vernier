@@ -121,7 +121,7 @@ const policy = (obs) => {
 }
 
 // ------------------------------------------------------------------ loop
-// The five slots. Compare with src/pilot0/loop.ts — same shape, your data.
+// The five slots. Compare with templates/smoke/smoke-loop.mjs — same shape, your data.
 
 const loop = {
   id: "haiku-review",

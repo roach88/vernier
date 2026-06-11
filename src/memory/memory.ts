@@ -7,7 +7,7 @@
 // What it stores: DISTILLED rules that passed verification (RuleRecord in
 // kernel/types.ts) — never raw failure notes. That invariant is enforced by
 // loop shape, not by trusting callers: the only path to `remember` runs
-// through a passing grade (pilot3/loop.ts).
+// through a passing grade (the self-improving template's loop shape).
 //
 // HOW the store is ranked at recall time is pluggable (the Retriever seam,
 // memory/retriever.ts): the default is the deterministic, dependency-free

@@ -24,7 +24,8 @@ import type { Policy } from "./policy.js"
  * The Ax-style typed `in -> out` boundary. Both sides are validated at
  * runtime. I and O are the PARSED types; the raw shape a schema accepts is
  * the schema's business — so a zod transform can derive a step's inputs
- * from the data plane (e.g. topic from goal, pilot3/loop.ts) and the
+ * from the data plane (e.g. topic from goal, in the self-improving
+ * template's recall step) and the
  * signature IS the derivation.
  */
 export interface Signature<I = unknown, O = unknown> {
@@ -173,7 +174,7 @@ export interface StepResult {
  * what makes a self-improving loop genuinely compound (a later run recalls
  * what an earlier run learned). The store holds reusable rules that passed
  * verification, never raw failure notes; loops enforce that by shape
- * (`remember` sits after a passing grade — see pilot3/loop.ts).
+ * (`remember` sits after a passing grade — see the self-improving template).
  */
 export interface RuleRecord {
   /** Content-derived: hash(topic + rule), so re-remembering the same rule re-yields the same id. */

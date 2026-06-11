@@ -1,0 +1,6 @@
+{
+  "loops": ["./verified-answer-loop.mjs"],
+  "bindings": {
+    "answer": "codex"
+  }
+}

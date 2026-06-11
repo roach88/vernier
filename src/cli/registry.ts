@@ -2,20 +2,17 @@
 //
 // A registry entry is the loop (data) plus the one thing data cannot carry —
 // how to build its runtime dependencies (executors, contracts, observer,
-// memory, workdir prep). The per-pilot run.ts scripts each wired this by
-// hand; the registry is that wiring, named, so `vernier run <loopId>` and
-// `vernier resume <runId>` can reconstruct the same deps the original driver
-// used. Executor construction is lazy where it matters: CodexWorker spawns
-// its app-server on first runAgent(), so listing loops costs nothing.
+// memory, workdir prep). The registry SHIPS EMPTY: vernier has no built-in
+// loops. Every loop arrives through vernier.config (cli/config.ts) with
+// `source` naming where it came from; `vernier init` scaffolds starter
+// templates that register this way. Executor BINDING is resolved before a
+// run starts (config.ts bindExecutors) — the registry maps ids to
+// implementations, the binding decides which id a step resolves to.
 //
-// User loops arrive through vernier.config (cli/config.ts) and merge in here
-// with `source` naming where they came from; the in-tree pilots stay
-// registered as examples. Executor BINDING is resolved before a run starts
-// (config.ts bindExecutors) — the registry maps ids to implementations, the
-// binding decides which id a step resolves to.
+// Executor construction is lazy where it matters: provider workers spawn on
+// first runAgent(), so registering the full wired set costs nothing.
 
-import { execFileSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { EngineDeps } from "../engine/tick.js"
@@ -28,16 +25,10 @@ import { recallExecutor, rememberExecutor } from "../executors/memory.js"
 import { OpencodeExecutor } from "../executors/opencode.js"
 import { PiExecutor } from "../executors/pi.js"
 import { executorRegistry } from "../executors/script.js"
-import { ContractRegistry, defaultContractRegistry } from "../kernel/contract.js"
+import { defaultContractRegistry } from "../kernel/contract.js"
 import { gitObserver } from "../kernel/git-effects.js"
 import type { Executor, Loop } from "../kernel/types.js"
-import { resolveLedgerRoot } from "../ledger/ledger.js"
 import { Memory, resolveMemoryRoot, retrieverFromEnv, rulesPath } from "../memory/memory.js"
-import { controlPlaneSmokeExecutor, controlPlaneSmokeLoop } from "../pilot0/loop.js"
-import { dryRunNoteV1, routeDecisionV1 } from "../pilot1/contracts.js"
-import { planWorkReviewLoop } from "../pilot1/loop.js"
-import { verifiedAnswerLoop } from "../pilot2/loop.js"
-import { compoundingAnswerLoop } from "../pilot3/loop.js"
 import { ConfigError, type LoadedConfig, type LoopRegistration } from "./config.js"
 
 export interface LoopRuntime {
@@ -51,7 +42,7 @@ export interface RegisteredLoop {
   /** Human-readable `in -> out` (zod schemas don't render themselves). */
   readonly signature: string
   readonly summary: string
-  /** Where the loop came from: "builtin", or the config/module path that registered it. */
+  /** Where the loop came from: the config/module path that registered it. */
   readonly source: string
   /** True when the loop drives live LLM CLIs — `vernier run` warns; the test suite never runs these. */
   readonly live: boolean
@@ -63,22 +54,18 @@ export interface RegisteredLoop {
   runtime(workdir: string): LoopRuntime
 }
 
-const BUILTIN = "builtin"
-
-const noShutdown = async (): Promise<void> => {}
-
 function scratchDir(label: string): string {
   return mkdtempSync(join(tmpdir(), `vernier-${label}-`))
 }
 
 /**
  * The wired provider executors (codex / cursor-agent / claude / opencode /
- * pi), constructed lazily as a set: every agent-driven entry registers ALL
- * of them so any role can be rebound onto any agent (`--executor
+ * pi), constructed lazily as a set: every config-registered entry registers
+ * ALL of them so any role can be rebound onto any agent (`--executor
  * <step>=claude`) without a custom runtime. Nothing spawns until a step
  * actually runs on one of them, so registering the full set costs nothing.
  */
-function wiredProviders(): { readonly executors: readonly Executor[]; shutdown(): Promise<void> } {
+export function wiredProviders(): { readonly executors: readonly Executor[]; shutdown(): Promise<void> } {
   const executors = [
     new CodexExecutor(),
     new CursorExecutor(),
@@ -94,129 +81,12 @@ function wiredProviders(): { readonly executors: readonly Executor[]; shutdown()
   }
 }
 
-function smokeEntry(): RegisteredLoop {
-  return {
-    loop: controlPlaneSmokeLoop,
-    signature: "jobName:string, upstreamChanged?:boolean -> ok:boolean, trace:path",
-    summary: "Pilot 0: deterministic no-agent control-plane smoke (gateway/job/no-op/trace/delivery).",
-    source: BUILTIN,
-    live: false,
-    defaultInputs: { jobName: "watch-every-compound-engineering-upstream" },
-    defaultWorkdir() {
-      const workdir = join(resolveLedgerRoot(controlPlaneSmokeLoop.ledger), "work")
-      mkdirSync(workdir, { recursive: true })
-      return workdir
-    },
-    runtime(workdir) {
-      return {
-        deps: {
-          executors: executorRegistry(controlPlaneSmokeExecutor),
-          contracts: defaultContractRegistry(),
-          workdir,
-        },
-        shutdown: noShutdown,
-      }
-    },
-  }
-}
-
-function planWorkReviewEntry(): RegisteredLoop {
-  return {
-    loop: planWorkReviewLoop,
-    signature: "task:string -> artifact:path, verdict:string",
-    summary:
-      "Pilot 1: an LLM router gates, codex implements a contract-checked dry-run note (LIVE; route + implement default to codex — bind route=hermes to route on hermes).",
-    source: BUILTIN,
-    live: true,
-    defaultWorkdir: () => scratchDir("plan-work-review"),
-    runtime(workdir) {
-      // The pilot-1 scratch shape: a git repo with the allowed artifact root.
-      mkdirSync(join(workdir, "docs", "agent-workflows"), { recursive: true })
-      if (!existsSync(join(workdir, ".git"))) execFileSync("git", ["init", "--quiet"], { cwd: workdir })
-      if (!existsSync(join(workdir, "README.md"))) {
-        writeFileSync(join(workdir, "README.md"), "# vernier plan-work-review scratch\n", "utf8")
-      }
-      const providers = wiredProviders()
-      return {
-        deps: {
-          executors: executorRegistry(new HermesExecutor(), ...providers.executors),
-          contracts: defaultContractRegistry().register(routeDecisionV1).register(dryRunNoteV1),
-          workdir,
-          observer: gitObserver,
-        },
-        shutdown: () => providers.shutdown(),
-      }
-    },
-  }
-}
-
-function verifiedAnswerEntry(): RegisteredLoop {
-  return {
-    loop: verifiedAnswerLoop,
-    signature: "goal:string, rubric:string -> answer:string, verdict:string",
-    summary: "Pilot 2: codex answers, an independent judge grades, until passed (LIVE codex).",
-    source: BUILTIN,
-    live: true,
-    defaultWorkdir: () => scratchDir("verified-answer"),
-    runtime(workdir) {
-      const providers = wiredProviders()
-      const judge = new JudgeExecutor()
-      return {
-        deps: {
-          executors: executorRegistry(...providers.executors, judge),
-          contracts: defaultContractRegistry(),
-          workdir,
-        },
-        shutdown: async () => {
-          await providers.shutdown()
-          await judge.shutdown()
-        },
-      }
-    },
-  }
-}
-
-function compoundingAnswerEntry(): RegisteredLoop {
-  return {
-    loop: compoundingAnswerLoop,
-    signature: "goal:string, rubric:string -> answer:string, verdict:string, learnedRule:string",
-    summary: "Pilot 3: recall -> answer -> grade -> distill -> remember; memory compounds across runs (LIVE codex).",
-    source: BUILTIN,
-    live: true,
-    defaultWorkdir: () => scratchDir("compounding-answer"),
-    runtime(workdir) {
-      const providers = wiredProviders()
-      const judge = new JudgeExecutor()
-      const distiller = new JudgeExecutor({ id: "distill" })
-      // ONE durable store under the vernier root — sharing it across CLI
-      // invocations is the compounding seam (pilot3/run.ts shares it across
-      // two in-process runs; the CLI shares it across processes). The
-      // retriever tier (lexical default / VERNIER_RETRIEVER=embedding) is
-      // selected here, where Memory is constructed — never in the loop.
-      const memory = new Memory(rulesPath(resolveMemoryRoot({})), retrieverFromEnv())
-      return {
-        deps: {
-          executors: executorRegistry(...providers.executors, judge, distiller, recallExecutor, rememberExecutor),
-          contracts: new ContractRegistry(),
-          workdir,
-          memory,
-        },
-        shutdown: async () => {
-          await providers.shutdown()
-          await judge.shutdown()
-          await distiller.shutdown()
-        },
-      }
-    },
-  }
-}
-
 /**
- * A user loop from vernier.config, behind the same RegisteredLoop seam as
- * the pilots. The default runtime hands it the full built-in executor set
- * (construction is lazy — nothing spawns until a step actually runs on it)
- * plus whatever the registration brings; `runtime` on the registration
- * overrides all of that for full control.
+ * A user loop from vernier.config, behind the RegisteredLoop seam. The
+ * default runtime hands it the full built-in executor set (construction is
+ * lazy — nothing spawns until a step actually runs on it) plus whatever the
+ * registration brings; `runtime` on the registration overrides all of that
+ * for full control.
  */
 function userEntry(reg: LoopRegistration, source: string): RegisteredLoop {
   return {
@@ -257,7 +127,7 @@ function userEntry(reg: LoopRegistration, source: string): RegisteredLoop {
 }
 
 export function loopRegistry(config?: LoadedConfig): ReadonlyMap<string, RegisteredLoop> {
-  const entries = [smokeEntry(), planWorkReviewEntry(), verifiedAnswerEntry(), compoundingAnswerEntry()]
+  const entries: RegisteredLoop[] = []
   for (const { registration, source } of config?.loops ?? []) entries.push(userEntry(registration, source))
   const map = new Map<string, RegisteredLoop>()
   for (const entry of entries) {

@@ -1,0 +1,6 @@
+{
+  "order": 3,
+  "loop": "compounding-answer",
+  "description": "recall -> answer -> grade -> distill -> remember; verified rules compound across runs through a durable memory store.",
+  "requires": "any wired agent CLI for the answer role (binding ships on codex); judge/distill run on codex by default"
+}

@@ -1,0 +1,7 @@
+{
+  "loops": ["./coding-review-loop.mjs"],
+  "bindings": {
+    "route": "codex",
+    "implement": "codex"
+  }
+}

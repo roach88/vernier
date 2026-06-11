@@ -2,14 +2,19 @@
 //   - in-process diagnose() with INJECTED probes (never the machine's PATH,
 //     never a real package probe) — semantics: probe classification, binding
 //     resolution, "unused unusable executor does not fail the doctor",
-//     runtime-factory failure containment;
+//     runtime-factory failure containment, the zero-loop baseline. The
+//     agent templates are diagnosed here, registered exactly as their
+//     scaffolded configs would register them (templatesAsConfig);
 //   - the spawned CLI with a MANIPULATED PATH (a shim dir + /usr/bin:/bin
-//     for git) — surface: --json shape, human sections, exit codes.
+//     for git) — surface: --json shape, human sections, exit codes, the
+//     empty state. The spawned runs use the smoke template and scratch
+//     configs (the agent templates import "vernier", which resolves in a
+//     consumer install; in-tree they are covered by the in-process layer).
 // No real agent CLI is ever found, let alone executed: probes only look
 // binaries up; the shim is an inert script that nothing runs.
 
 import { execFile } from "node:child_process"
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
@@ -21,14 +26,20 @@ import { EMBEDDING_PACKAGE } from "../src/memory/embedding.js"
 import { diagnose, type DoctorProbes, type DoctorReport } from "../src/cli/doctor.js"
 import type { LoadedConfig } from "../src/cli/config.js"
 import { loopRegistry, type RegisteredLoop } from "../src/cli/registry.js"
+import { TEMPLATES, templatesAsConfig } from "./templates.js"
 
 const execFileAsync = promisify(execFile)
 const BIN = join(import.meta.dirname, "..", "bin", "vernier.js")
 const FIXTURE = join(import.meta.dirname, "fixtures", "user-config")
 
-// pilot3's default runtime opens the durable memory store under the vernier
+// Config-registered runtimes open the durable memory store under the vernier
 // root; point it at scratch so in-process diagnose() never touches the repo.
 process.env.VERNIER_HOME = mkdtempSync(join(tmpdir(), "vernier-doctor-home-"))
+
+// All four templates, registered as their scaffolded configs would register
+// them (loop modules + shipped bindings) — the at-rest state doctor reports.
+const ALL_TEMPLATES = await templatesAsConfig("smoke", "coding-review", "verified-answer", "self-improving")
+const allTemplatesRegistry = () => loopRegistry(ALL_TEMPLATES)
 
 const probes = (over: Partial<DoctorProbes> = {}): DoctorProbes => ({
   which: () => undefined,
@@ -51,8 +62,8 @@ const executorById = (report: DoctorReport, id: string) => report.executors.find
 const loopById = (report: DoctorReport, id: string) => report.loops.find((l) => l.loopId === id)
 
 describe("diagnose()", () => {
-  it("probes every executor the builtin runtimes register, and a bare machine blocks exactly the agent-driven loops", async () => {
-    const report = await diagnose(loopRegistry(), undefined, probes())
+  it("probes every executor the template runtimes register, and a bare machine blocks exactly the agent-driven loops", async () => {
+    const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, probes())
 
     expect(executorById(report, "codex")).toMatchObject({ ok: false, requires: "codex" })
     expect(executorById(report, "cursor-agent")).toMatchObject({ ok: false, requires: "cursor-agent" })
@@ -71,25 +82,47 @@ describe("diagnose()", () => {
       expect(loop.runnable).toBe(false)
       expect(loop.steps.some((s) => !s.ok && s.why.includes("not found on PATH"))).toBe(true)
     }
+    // The shipped bindings are what doctor resolved: agent -> codex.
+    const route = loopById(report, "plan-work-review")!.steps.find((s) => s.stepId === "route")!
+    expect(route).toMatchObject({ declared: "agent", resolved: "codex" })
     expect(report.ok).toBe(false)
   })
 
   it("an unusable executor that no step resolves to is reported but does not fail the doctor", async () => {
-    const report = await diagnose(loopRegistry(), undefined, allFound({ which: (bin) => (bin === "claude" ? undefined : `/fake/bin/${bin}`) }))
+    const report = await diagnose(
+      allTemplatesRegistry(),
+      ALL_TEMPLATES,
+      allFound({ which: (bin) => (bin === "claude" ? undefined : `/fake/bin/${bin}`) }),
+    )
     expect(executorById(report, "claude")?.ok).toBe(false)
     expect(report.loops.every((l) => l.runnable)).toBe(true)
-    expect(report.ok).toBe(true) // nothing binds onto claude by default
+    expect(report.ok).toBe(true) // the shipped bindings point at codex, not claude
+  })
+
+  it("ZERO loops registered: the baseline executor set is still probed, loops say none, exit-0 semantics", async () => {
+    const report = await diagnose(loopRegistry(), undefined, probes())
+    expect(report.loops).toEqual([])
+    expect(report.ok).toBe(true) // nothing registered = nothing broken
+    // The environment question is still answered: what could this machine run?
+    for (const id of ["codex", "cursor-agent", "claude", "opencode", "pi"]) {
+      expect(executorById(report, id)).toMatchObject({ ok: false, requires: id === "claude" ? "claude" : id })
+    }
+    expect(executorById(report, "judge")).toMatchObject({ ok: false, requires: "codex" })
+    expect(executorById(report, "recall")).toMatchObject({ ok: true, requires: null })
+    expect(executorById(report, "memory:lexical")).toMatchObject({ ok: true, requires: null })
   })
 
   it("config bindings are resolved exactly as a run would resolve them, and the missing piece is named", async () => {
+    const bindings = new Map(ALL_TEMPLATES.bindings)
+    bindings.set("implement", "claude") // the user re-points one role at claude
     const report = await diagnose(
-      loopRegistry(),
-      config({ bindings: new Map([["implement", "claude"]]) }),
+      loopRegistry({ ...ALL_TEMPLATES, bindings }),
+      { ...ALL_TEMPLATES, bindings },
       allFound({ which: (bin) => (bin === "claude" ? undefined : `/fake/bin/${bin}`) }),
     )
     const loop = loopById(report, "plan-work-review")!
     const step = loop.steps.find((s) => s.stepId === "implement")!
-    expect(step).toMatchObject({ declared: "codex", resolved: "claude", ok: false })
+    expect(step).toMatchObject({ declared: "agent", resolved: "claude", ok: false })
     expect(step.why).toContain("`claude` not found on PATH")
     expect(loop.runnable).toBe(false)
     expect(report.ok).toBe(false)
@@ -129,7 +162,9 @@ describe("diagnose()", () => {
   })
 
   it("a binding onto an executor nobody registered names the registered set", async () => {
-    const report = await diagnose(loopRegistry(), config({ bindings: new Map([["smoke", "nope"]]) }), allFound())
+    const smokeOnly = await templatesAsConfig("smoke")
+    const bindings = new Map([["smoke", "nope"]])
+    const report = await diagnose(loopRegistry({ ...smokeOnly, bindings }), config({ bindings }), allFound())
     const step = loopById(report, "control-plane-smoke-test")!.steps[0]!
     expect(step).toMatchObject({ resolved: "nope", ok: false })
     expect(step.why).toContain("not registered")
@@ -142,14 +177,14 @@ describe("diagnose()", () => {
     })
 
     it("the lexical default needs nothing: probed in-process, memory loops unaffected", async () => {
-      const report = await diagnose(loopRegistry(), undefined, allFound())
+      const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, allFound())
       expect(executorById(report, "memory:lexical")).toMatchObject({ ok: true, requires: null })
       expect(loopById(report, "compounding-answer")?.runnable).toBe(true)
     })
 
     it("VERNIER_RETRIEVER=embedding without the package blocks exactly the store-op steps, actionably", async () => {
       process.env.VERNIER_RETRIEVER = "embedding"
-      const report = await diagnose(loopRegistry(), undefined, allFound({ resolvable: (s) => s !== EMBEDDING_PACKAGE }))
+      const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, allFound({ resolvable: (s) => s !== EMBEDDING_PACKAGE }))
       expect(executorById(report, "memory:embedding")).toMatchObject({ ok: false, requires: EMBEDDING_PACKAGE })
       expect(executorById(report, "memory:embedding")?.detail).toContain(`npm install ${EMBEDDING_PACKAGE}`)
       const loop = loopById(report, "compounding-answer")!
@@ -162,7 +197,7 @@ describe("diagnose()", () => {
 
     it("VERNIER_RETRIEVER=embedding with the package resolvable keeps memory loops runnable", async () => {
       process.env.VERNIER_RETRIEVER = "embedding"
-      const report = await diagnose(loopRegistry(), undefined, allFound())
+      const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, allFound())
       expect(executorById(report, "memory:embedding")).toMatchObject({ ok: true, requires: EMBEDDING_PACKAGE })
       expect(loopById(report, "compounding-answer")?.runnable).toBe(true)
     })
@@ -207,9 +242,10 @@ interface CliResult {
 /** A PATH with git (loop runtimes shell out to it) but NO real agent CLIs; optionally a shim dir first. */
 const basePath = (shimDir?: string): string => [shimDir, "/usr/bin", "/bin"].filter(Boolean).join(":")
 
-async function cli(env: { home: string; path: string; cwd?: string }, ...args: string[]): Promise<CliResult> {
+async function cli(env: { home: string; path: string; cwd?: string; config?: string }, ...args: string[]): Promise<CliResult> {
   const spawnEnv: NodeJS.ProcessEnv = { ...process.env, VERNIER_HOME: env.home, PATH: env.path }
-  delete spawnEnv.VERNIER_CONFIG
+  if (env.config !== undefined) spawnEnv.VERNIER_CONFIG = env.config
+  else delete spawnEnv.VERNIER_CONFIG
   try {
     const { stdout, stderr } = await execFileAsync(process.execPath, [BIN, ...args], {
       cwd: env.cwd ?? mkdtempSync(join(tmpdir(), "vernier-doctor-cwd-")),
@@ -225,6 +261,7 @@ async function cli(env: { home: string; path: string; cwd?: string }, ...args: s
 }
 
 const home = (): string => mkdtempSync(join(tmpdir(), "vernier-doctor-cli-"))
+const SMOKE_CONFIG = join(TEMPLATES, "smoke", "vernier.config.json")
 
 /** Inert executables (codex, opencode, …) that doctor may FIND but never runs. */
 function shimDir(...names: string[]): string {
@@ -237,25 +274,85 @@ function shimDir(...names: string[]): string {
   return dir
 }
 
+/**
+ * A scratch out-of-tree config whose one loop binds a step to `codex` —
+ * the smallest spawned-CLI case of "an agent-driven loop on this machine".
+ * zod is symlinked from this repo's node_modules (a consumer project would
+ * have its own).
+ */
+function codexBoundConfigDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "vernier-doctor-agent-config-"))
+  mkdirSync(join(dir, "node_modules"))
+  symlinkSync(join(import.meta.dirname, "..", "node_modules", "zod"), join(dir, "node_modules", "zod"))
+  writeFileSync(
+    join(dir, "agent-loop.mjs"),
+    `import { z } from "zod"
+export default {
+  loop: {
+    id: "needs-codex",
+    version: "0.0.1",
+    signature: { input: z.object({ q: z.string() }), output: z.object({ a: z.string(), verdict: z.string() }) },
+    steps: [
+      {
+        id: "ask",
+        signature: { input: z.object({ q: z.string() }), output: z.object({ a: z.string() }) },
+        executor: "codex",
+        effects: { allow: [] },
+        prompt: (spec) => String(spec.inputs.q),
+      },
+    ],
+    policy: () => ({ kind: "stop", classification: "success", summary: "done", notes: [], improvement: "none" }),
+    trust: "dry-run",
+    ledger: {},
+  },
+  summary: "Fixture loop bound to codex.",
+  signature: "q:string -> a:string, verdict:string",
+}
+`,
+    "utf8",
+  )
+  writeFileSync(join(dir, "vernier.config.json"), JSON.stringify({ loops: ["./agent-loop.mjs"] }) + "\n", "utf8")
+  return dir
+}
+
 describe("vernier doctor (CLI)", () => {
-  it("exit 0 + full --json report when every registered loop is runnable (codex shim on PATH)", async () => {
+  it("exit 0 + full --json report when every registered loop is runnable (the smoke template needs nothing)", async () => {
+    const result = await cli({ home: home(), path: basePath(), config: SMOKE_CONFIG }, "doctor", "--json")
+    expect(result.code).toBe(0)
+    const report = JSON.parse(result.stdout) as DoctorReport
+    expect(report.ok).toBe(true)
+    expect(report.loops).toHaveLength(1)
+    expect(report.loops[0]).toMatchObject({ loopId: "control-plane-smoke-test", runnable: true })
+    expect(executorById(report, "script:control-plane-smoke")?.ok).toBe(true)
+    // The wired providers are reported (the runtime registers them for
+    // rebinding) but none is needed: unusable-but-unused does not fail doctor.
+    expect(executorById(report, "codex")?.ok).toBe(false)
+    expect(executorById(report, "claude")?.ok).toBe(false)
+    expect(executorById(report, "cursor-agent")?.ok).toBe(false)
+  })
+
+  it("ZERO loops, no config: exit 0, executors section still probed, loops say none registered", async () => {
     const shims = shimDir("codex")
     const result = await cli({ home: home(), path: basePath(shims) }, "doctor", "--json")
     expect(result.code).toBe(0)
     const report = JSON.parse(result.stdout) as DoctorReport
     expect(report.ok).toBe(true)
-    expect(report.loops).toHaveLength(4)
-    expect(report.loops.every((l) => l.runnable)).toBe(true)
+    expect(report.loops).toEqual([])
     expect(executorById(report, "codex")).toMatchObject({ ok: true, detail: expect.stringContaining(shims) })
-    expect(executorById(report, "claude")?.ok).toBe(false) // a CLI like the rest: not on this manipulated PATH
-    expect(executorById(report, "cursor-agent")?.ok).toBe(false) // reported, but no step resolves to it
-    expect(executorById(report, "opencode")?.ok).toBe(false) // reported, but no step resolves to it
-    expect(executorById(report, "pi")?.ok).toBe(false) // reported, but no step resolves to it
+    expect(executorById(report, "claude")?.ok).toBe(false)
+    expect(executorById(report, "memory:lexical")?.ok).toBe(true)
+
+    const human = await cli({ home: home(), path: basePath(shims) }, "doctor")
+    expect(human.code).toBe(0)
+    expect(human.stdout).toContain("EXECUTORS")
+    expect(human.stdout).toContain("LOOPS")
+    expect(human.stdout).toContain("none registered")
+    expect(human.stdout).toContain("vernier init")
   })
 
   it("probes the claude, opencode, and pi binaries by PATH lookup only (shims found, never executed)", async () => {
     const shims = shimDir("codex", "claude", "opencode", "pi")
-    const result = await cli({ home: home(), path: basePath(shims) }, "doctor", "--json")
+    const result = await cli({ home: home(), path: basePath(shims), config: SMOKE_CONFIG }, "doctor", "--json")
     expect(result.code).toBe(0)
     const report = JSON.parse(result.stdout) as DoctorReport
     expect(executorById(report, "claude")).toMatchObject({ ok: true, requires: "claude", detail: expect.stringContaining(shims) })
@@ -263,32 +360,30 @@ describe("vernier doctor (CLI)", () => {
     expect(executorById(report, "pi")).toMatchObject({ ok: true, requires: "pi", detail: expect.stringContaining(shims) })
   })
 
-  it("exit 1 when agent-driven loops are blocked (bare PATH), with the missing binary named per step", async () => {
-    const result = await cli({ home: home(), path: basePath() }, "doctor", "--json")
+  it("exit 1 when an agent-bound loop is blocked (bare PATH), with the missing binary named per step", async () => {
+    const dir = codexBoundConfigDir()
+    const result = await cli({ home: home(), path: basePath(), cwd: dir }, "doctor", "--json")
     expect(result.code).toBe(1)
     const report = JSON.parse(result.stdout) as DoctorReport
     expect(report.ok).toBe(false)
-    expect(loopById(report, "control-plane-smoke-test")?.runnable).toBe(true)
-    const pilot1 = loopById(report, "plan-work-review")!
-    expect(pilot1.runnable).toBe(false)
-    expect(pilot1.steps.find((s) => s.stepId === "implement")?.why).toContain("`codex` not found on PATH")
+    const blocked = loopById(report, "needs-codex")!
+    expect(blocked.runnable).toBe(false)
+    expect(blocked.steps.find((s) => s.stepId === "ask")?.why).toContain("`codex` not found on PATH")
+
+    const human = await cli({ home: home(), path: basePath(), cwd: dir }, "doctor")
+    expect(human.code).toBe(1)
+    expect(human.stdout).toContain("EXECUTORS")
+    expect(human.stdout).toContain("LOOPS")
+    expect(human.stdout).toContain("!!")
+    expect(human.stdout).toContain("some loops are not runnable")
   })
 
-  it("covers config-registered loops and executors: the user loop stays runnable on a bare machine", async () => {
+  it("covers config-registered loops and executors: the user loop is runnable on a bare machine (exit 0)", async () => {
     const result = await cli({ home: home(), path: basePath(), cwd: FIXTURE }, "doctor", "--json")
-    expect(result.code).toBe(1) // the codex pilots are still blocked...
+    expect(result.code).toBe(0) // zero builtins: nothing else is registered to block
     const report = JSON.parse(result.stdout) as DoctorReport
     expect(executorById(report, "upper")).toMatchObject({ ok: true, detail: expect.stringContaining("in-process") })
     expect(executorById(report, "reverse")).toMatchObject({ ok: true, detail: expect.stringContaining("config-registered") })
-    expect(loopById(report, "echo-shout")?.runnable).toBe(true) // ...but the user loop needs nothing external
-  })
-
-  it("human output: EXECUTORS and LOOPS sections, blockers marked", async () => {
-    const result = await cli({ home: home(), path: basePath() }, "doctor")
-    expect(result.code).toBe(1)
-    expect(result.stdout).toContain("EXECUTORS")
-    expect(result.stdout).toContain("LOOPS")
-    expect(result.stdout).toContain("!!")
-    expect(result.stdout).toContain("some loops are not runnable")
+    expect(loopById(report, "echo-shout")?.runnable).toBe(true)
   })
 })

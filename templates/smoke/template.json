@@ -1,0 +1,6 @@
+{
+  "order": 0,
+  "loop": "control-plane-smoke-test",
+  "description": "Deterministic no-agent smoke: gateway/job/no-op/trace/delivery as a one-step loop.",
+  "requires": "nothing — no agent CLI, no auth, no network"
+}

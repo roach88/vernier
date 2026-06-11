@@ -16,8 +16,9 @@
 // `continue` inversion — anything (cron, a human, another agent) can advance
 // a run one step, and the engine, not the caller, knows what is next.
 
-import { readdirSync, readFileSync } from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { parseArgs } from "node:util"
 import { ZodError } from "zod"
 import { acquireLease, LeaseHeldError } from "../engine/lease.js"
@@ -41,7 +42,9 @@ const json = (value: unknown): void => out(JSON.stringify(value, null, 2))
 const HELP = `vernier — the loop is data; the ledger is append-only; resume is replay.
 
 USAGE
-  vernier loops                                       list registered loops (builtin + config)
+  vernier init [template]                             list starter templates, or scaffold one into
+                                                     the current directory (never overwrites)
+  vernier loops                                       list registered loops (from vernier.config)
   vernier run <loopId> [--input '<json>'] [--input-file <path>] [--workdir <dir>]
              [--executor <stepIdOrExecutorId>=<executorId>]...
                                                      start a run, drive to terminal
@@ -63,7 +66,8 @@ Ledger root: $VERNIER_HOME, else ./.vernier
 CONFIG
   vernier.config.{ts,js,mjs,json} — discovered from cwd upward (stops at the
   repo root), or set $VERNIER_CONFIG. Registers user loops, user executors,
-  and executor bindings alongside the built-in pilots.
+  and executor bindings. vernier ships NO built-in loops: the registry is
+  exactly what your config registers (\`vernier init\` scaffolds starters).
   Trust: loading a config EXECUTES its code with this process's privileges —
   the same trust you give any npm script.
 
@@ -186,6 +190,12 @@ function assertExecutorsResolvable(loop: Loop, executors: ReadonlyMap<string, Ex
 }
 
 function lookupLoop(registry: ReadonlyMap<string, RegisteredLoop>, loopId: string | undefined): RegisteredLoop {
+  if (registry.size === 0) {
+    throw new UsageError(
+      "No loops are registered. vernier ships no built-in loops — scaffold a starter with `vernier init` " +
+        "(`vernier init smoke` needs no agent or auth), or register loops via vernier.config.{ts,js,mjs,json}.",
+    )
+  }
   if (!loopId) throw new UsageError(`Missing <loopId>. Registered loops: ${[...registry.keys()].join(", ")}`)
   const entry = registry.get(loopId)
   if (!entry) throw new UsageError(`Unknown loop \`${loopId}\`. Registered loops: ${[...registry.keys()].join(", ")} (see \`vernier loops\`).`)
@@ -277,7 +287,32 @@ const terminalExit = (status: string): number => (status === "done" ? EXIT.ok : 
 // ----------------------------------------------------------------- commands
 
 async function cmdLoops(flags: Flags): Promise<number> {
-  const registry = loopRegistry(await loadConfig())
+  const config = await loadConfig()
+  const registry = loopRegistry(config)
+  if (registry.size === 0) {
+    // The friendly empty state: a fresh install has NO loops (vernier ships
+    // none) — say so, and say how to start. stdout stays machine-clean
+    // under --json ([]), so the pointers go to stderr there.
+    const hint = [
+      "no loops registered.",
+      "",
+      "vernier ships no built-in loops. Start with a template:",
+      "  vernier init              list the starter templates",
+      "  vernier init smoke        scaffold the deterministic starter (no agent, no auth)",
+      "",
+      config
+        ? `config found at ${config.path}, but it registers no loops.`
+        : "loops register via vernier.config.{ts,js,mjs,json}, discovered from the current",
+      ...(config ? [] : ["directory upward (stopping at the repo root), or via $VERNIER_CONFIG."]),
+    ]
+    if (flags.json) {
+      json([])
+      for (const line of hint) note(line)
+    } else {
+      for (const line of hint) out(line)
+    }
+    return EXIT.ok
+  }
   if (flags.json) {
     json(
       [...registry.values()].map((entry) => ({
@@ -298,6 +333,121 @@ async function cmdLoops(flags: Flags): Promise<number> {
     out(`  ${entry.signature}`)
     out(`  ${entry.summary}`)
   }
+  return EXIT.ok
+}
+
+// -------------------------------------------------------------------- init
+
+interface TemplateInfo {
+  readonly name: string
+  readonly dir: string
+  readonly order: number
+  /** The loop id the template registers (what `vernier run` will take). */
+  readonly loop: string
+  readonly description: string
+  readonly requires: string
+  /** Files the scaffold copies, template-dir-relative (template.json is metadata, never copied). */
+  readonly files: readonly string[]
+}
+
+/**
+ * templates/ ships at the package root (package.json `files`), two levels up
+ * from this module — the SAME relative position from dist/cli/main.js
+ * (compiled bin) and src/cli/main.ts (tsx dev), so one resolution covers both.
+ */
+function templatesRoot(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), "..", "..", "templates")
+}
+
+const TEMPLATE_META = "template.json"
+
+function readTemplate(root: string, name: string): TemplateInfo {
+  const dir = join(root, name)
+  const meta = JSON.parse(readFileSync(join(dir, TEMPLATE_META), "utf8")) as {
+    order?: number
+    loop?: string
+    description?: string
+    requires?: string
+  }
+  const files = (readdirSync(dir, { recursive: true }) as string[])
+    .filter((path) => path !== TEMPLATE_META && statSync(join(dir, path)).isFile())
+    .sort()
+  return {
+    name,
+    dir,
+    order: meta.order ?? Number.MAX_SAFE_INTEGER,
+    loop: meta.loop ?? name,
+    description: meta.description ?? "",
+    requires: meta.requires ?? "",
+    files,
+  }
+}
+
+function listTemplates(root: string): TemplateInfo[] {
+  const names = readdirSync(root, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && existsSync(join(root, d.name, TEMPLATE_META)))
+    .map((d) => d.name)
+  return names.map((name) => readTemplate(root, name)).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
+}
+
+function cmdInit(flags: Flags): number {
+  const root = templatesRoot()
+  const templates = existsSync(root) ? listTemplates(root) : []
+  if (templates.length === 0) {
+    throw new UsageError(`No templates found under ${root} — this installation looks incomplete (templates/ ships with the package).`)
+  }
+
+  const name = flags.positionals[0]
+  if (name === undefined) {
+    if (flags.json) {
+      json(templates.map(({ name, loop, description, requires, files }) => ({ name, loop, description, requires, files })))
+      return EXIT.ok
+    }
+    out("TEMPLATES")
+    for (const t of templates) {
+      out(`  ${t.name.padEnd(16)} ${t.description}`)
+      out(`  ${"".padEnd(16)} loop: ${t.loop} · requires: ${t.requires}`)
+    }
+    out("")
+    out("scaffold one into the current directory: vernier init <template>")
+    return EXIT.ok
+  }
+
+  const template = templates.find((t) => t.name === name)
+  if (!template) {
+    throw new UsageError(`Unknown template \`${name}\`. Templates: ${templates.map((t) => t.name).join(", ")} (see \`vernier init\`).`)
+  }
+
+  // Refuse-then-copy, atomically: check EVERY destination first so a
+  // conflict copies nothing (a half-scaffold would be worse than none).
+  const dest = process.cwd()
+  const conflicts = template.files.filter((file) => existsSync(join(dest, file)))
+  if (conflicts.length > 0) {
+    throw new UsageError(
+      `refusing to overwrite existing file(s): ${conflicts.join(", ")}. ` +
+        `Scaffold into an empty directory, or remove the conflicting files first.`,
+    )
+  }
+  for (const file of template.files) {
+    const target = join(dest, file)
+    mkdirSync(dirname(target), { recursive: true })
+    copyFileSync(join(template.dir, file), target)
+  }
+
+  const next = [
+    `vernier loops             the scaffolded config registers \`${template.loop}\``,
+    `vernier run ${template.loop}`,
+    "vernier doctor            probe what this machine can actually run",
+  ]
+  if (flags.json) {
+    json({ template: template.name, loop: template.loop, dir: dest, files: template.files, next: next.map((n) => n.split(/\s{2,}/)[0]) })
+    return EXIT.ok
+  }
+  out(`scaffolded template \`${template.name}\` into ${dest}:`)
+  for (const file of template.files) out(`  ${file}`)
+  out("")
+  out("next steps:")
+  for (const line of next) out(`  ${line}`)
   return EXIT.ok
 }
 
@@ -548,6 +698,8 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
   const flags = parseFlags(rest)
   switch (command) {
+    case "init":
+      return cmdInit(flags)
     case "loops":
       return cmdLoops(flags)
     case "run":
@@ -565,7 +717,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     case "doctor":
       return cmdDoctor(flags)
     default:
-      throw new UsageError(`Unknown command \`${command}\`. Commands: loops, run, tick, resume, runs, show, stats, doctor.`)
+      throw new UsageError(`Unknown command \`${command}\`. Commands: init, loops, run, tick, resume, runs, show, stats, doctor.`)
   }
 }
 

@@ -1,0 +1,6 @@
+{
+  "order": 1,
+  "loop": "plan-work-review",
+  "description": "An LLM route gate, then an agent writes ONE contract-checked artifact inside a bounded fs scope.",
+  "requires": "any wired agent CLI (bindings ship on codex; implement needs codex or claude for enforced writes)"
+}

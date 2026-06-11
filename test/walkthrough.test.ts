@@ -1,12 +1,15 @@
-// Rot guard for docs/walkthrough.md §8–9: drives examples/getting-started/
-// through the CLI surface exactly as the walkthrough does — config loaded,
-// loop listed, run green, rebinding honored (both the passing and the
-// contract-failing alternate), crash -> resume. If this file goes red, the
-// walkthrough's centerpiece is lying; fix the example or the doc, not the
-// test.
+// Rot guard for docs/walkthrough.md §3 and §8–9.
+//
+// §3 (first run): the REAL `vernier init smoke` copy path, end-to-end in a
+// bare scratch dir — init -> loops -> run -> done — exactly the walkthrough's
+// first-run sequence. §8–9: drives examples/getting-started/ through the CLI
+// surface exactly as the walkthrough does — config loaded, loop listed, run
+// green, rebinding honored (both the passing and the contract-failing
+// alternate), crash -> resume. If this file goes red, the walkthrough's
+// centerpiece is lying; fix the example/template or the doc, not the test.
 
 import { execFile } from "node:child_process"
-import { mkdtempSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
@@ -41,6 +44,55 @@ async function cli(home: string, args: readonly string[], extraEnv: Record<strin
 }
 
 const tmp = (label: string): string => mkdtempSync(join(tmpdir(), `vernier-walkthrough-${label}-`))
+
+describe("walkthrough §3: first run via the REAL `vernier init smoke` copy path", () => {
+  /** Run the bin in `dir` with NO config env: discovery finds the scaffolded config. */
+  async function cliIn(dir: string, ...args: string[]): Promise<CliResult> {
+    const env = { ...process.env }
+    delete env.VERNIER_CONFIG
+    delete env.VERNIER_HOME // ledger root defaults to ./.vernier under the scaffold dir
+    try {
+      const { stdout, stderr } = await execFileAsync(process.execPath, [BIN, ...args], { cwd: dir, env, encoding: "utf8", timeout: 60_000 })
+      return { code: 0, stdout, stderr }
+    } catch (error) {
+      const e = error as { code?: number | null; stdout?: string; stderr?: string }
+      return { code: e.code ?? 1, stdout: e.stdout ?? "", stderr: e.stderr ?? "" }
+    }
+  }
+
+  it("init -> loops -> run -> done, in a bare scratch dir", async () => {
+    const dir = tmp("init")
+    // A consumer project resolves the template's one bare specifier (zod)
+    // from its own node_modules (installing vernier brings zod in); the
+    // scratch dir simulates that with a symlink to this repo's copy.
+    mkdirSync(join(dir, "node_modules"))
+    symlinkSync(join(import.meta.dirname, "..", "node_modules", "zod"), join(dir, "node_modules", "zod"))
+
+    // init: the real copy path.
+    const init = await cliIn(dir, "init", "smoke")
+    expect(init.code).toBe(0)
+    expect(init.stdout).toContain("scaffolded template `smoke`")
+    for (const file of ["vernier.config.json", "smoke-loop.mjs", "README.md"]) {
+      expect(existsSync(join(dir, file))).toBe(true)
+    }
+
+    // loops: discovery walks up from the scaffold dir and finds the config.
+    const loops = await cliIn(dir, "loops", "--json")
+    expect(loops.code).toBe(0)
+    const listed = JSON.parse(loops.stdout) as Array<Record<string, unknown>>
+    expect(listed.map((l) => l.id)).toEqual(["control-plane-smoke-test"])
+    expect(String(listed[0]!.source)).toContain(join(dir, "smoke-loop.mjs"))
+
+    // run: green with the registered default inputs, no agent, no auth.
+    const run = await cliIn(dir, "run", "control-plane-smoke-test", "--json")
+    expect(run.code).toBe(0)
+    const outcome = JSON.parse(run.stdout) as Record<string, unknown>
+    expect(outcome.status).toBe("done")
+    expect((outcome.output as Record<string, unknown>).ok).toBe(true)
+    const trace = String((outcome.output as Record<string, unknown>).trace)
+    expect(existsSync(join(dir, ".vernier", "work", trace))).toBe(true) // the artifact is real, inside the declared scope
+  })
+})
 
 describe("walkthrough §8: examples/getting-started through the CLI", () => {
   it("the config registers haiku-review alongside the builtins", async () => {

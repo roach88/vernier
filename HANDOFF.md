@@ -50,12 +50,15 @@ special-casing**. That generality is the whole point; protect it.
 | B | `544e280` | Semantic recall: pluggable `Retriever` seam on Memory — BM25 lexical default (ranked, tiny-store-safe), optional embedding tier (`VERNIER_RETRIEVER=embedding`, `@huggingface/transformers` as a lazy optional peer, remember-time vectors versioned on the JSONL record, lexical fallback for un-embedded records), custom retrievers via the exported interface + Memory constructor; doctor probes the selected tier |
 | C | `d6241f8` | Observability: `vernier show` renders run timelines (relative offsets, contract/effects/decision events, retry↔iterate transitions explicit, per-STEP usage attribution, closing summary) and new `vernier stats` rolls up usage per run + per loop (`--loop`/`--last` filters, cost ONLY from explicit `--price-in/--price-out` USD-per-1M-token prices — tokens are the honest unit); pure derivations over the ledger in `src/ledger/stats.ts`, legacy/torn journals degrade gracefully |
 | — | `43744f0` | **Rebrand: looper → vernier** (Tyler's call; npm name `vernier` verified free). Clean break, no fallbacks: package `vernier` (`private` removed), bin `vernier`, env `VERNIER_*` (was `LOOPER_*`), config `vernier.config.{ts,js,mjs,json}`, default state dir `./.vernier`, public API `VernierConfig`/`vernierConfigSchema`. Loop ids, the `loop-v2` resume-key version, journal shapes, NOTICE, LICENSE, vendored sources, and historical docs unchanged. Old runs under `./.looper` are not listed unless `VERNIER_HOME` points there. |
-| — | this commit | **claude = the Claude Code CLI on PATH** (Tyler's call: every provider is a CLI; the SDK detour is gone). `ClaudeExecutor` now wraps vernier's own `ClaudeCliWorker` (`claude -p --output-format stream-json`, prompt on stdin, real `--json-schema` structured output, posture: read-only toolset for effect-free steps / `acceptEdits` for write scopes, never a bypass flag). `@anthropic-ai/claude-agent-sdk` removed from devDeps + optional peers, the `overrides` zod pin removed with it (that rough edge is GONE), the vendored SDK worker deleted (NOTICE updated). JudgeExecutor de-privileged: the backing provider is a constructor binding (`provider: "codex" \| "claude-code"`, or any injected worker), carried on the AgentSpec and reported honestly by doctor. Docs normalized: tests are auth-free, agents are fungible, codex is a transcript default — not a requirement. |
+| — | `8f7f519` | **claude = the Claude Code CLI on PATH** (Tyler's call: every provider is a CLI; the SDK detour is gone). `ClaudeExecutor` now wraps vernier's own `ClaudeCliWorker` (`claude -p --output-format stream-json`, prompt on stdin, real `--json-schema` structured output, posture: read-only toolset for effect-free steps / `acceptEdits` for write scopes, never a bypass flag). `@anthropic-ai/claude-agent-sdk` removed from devDeps + optional peers, the `overrides` zod pin removed with it (that rough edge is GONE), the vendored SDK worker deleted (NOTICE updated). JudgeExecutor de-privileged: the backing provider is a constructor binding (`provider: "codex" \| "claude-code"`, or any injected worker), carried on the AgentSpec and reported honestly by doctor. Docs normalized: tests are auth-free, agents are fungible, codex is a transcript default — not a requirement. |
 
-**Health:** `npx tsc --noEmit` clean · `npm test` → 259 passed / 8 gated-live
+| — | this commit | **Pilots cut; templates + `vernier init` shipped** (Tyler's call: the in-tree pilots "feel like leftover artifacts … maybe we create a set of templates"). `src/pilot0..3/` deleted; the registry ships EMPTY (zero builtins — `vernier loops` with no config prints a friendly empty state; `doctor` with zero loops probes the baseline executor set and exits 0). New `templates/{smoke,coding-review,verified-answer,self-improving}` carry the pilots' full substance (prompts, contracts, policies) as scaffoldable starters — loop ids unchanged (`control-plane-smoke-test`, `plan-work-review`, `verified-answer`, `compounding-answer`); the agent templates name NO provider in loop data (steps declare the binding target `agent`; each shipped `vernier.config.json` binds it to codex, visibly and editably; the route contract pins the worker ROLE `implement`, not a provider). New `vernier init [template]` lists/scaffolds (refuses overwrites, `--json`, templates ship in the npm package via `files`, resolved package-root-relative so dist and tsx bins both find them). Tests migrated, not deleted: pilot suites → `*-template.test.ts` (driven through the templates + their shipped bindings via the vitest `vernier`→`src/index.ts` alias), live suites → `coding-review/verified-answer/self-improving.live.test.ts` (still gated), CLI/doctor/config suites retarget the smoke template, and `walkthrough.test.ts` §3 exercises the REAL `init` copy path end-to-end (init → loops → run → done). |
+
+**Health:** `npx tsc --noEmit` clean · `npm test` → 271 passed / 8 gated-live
 skipped (auth-free) · `npm run build` green · `npm pack` installs and runs in
 a fresh consumer project without tsx; no agent CLI or SDK is needed to
-install or test.
+install or test. Compiled-bin smoke: `vernier init smoke` in a scratch dir →
+`vernier run control-plane-smoke-test` green.
 
 ### Code map
 - `src/kernel/` — `types.ts` (the five-slot model), `policy.ts` (`decideNextStep`, `retryPolicy`, `until`), `contract.ts`, `effects.ts` (hash observer + `artifactsFromEffects`), `git-effects.ts`
@@ -63,18 +66,19 @@ install or test.
 - `src/ledger/ledger.ts` — append-only `journal.jsonl`; resume key `loop-v2`; `stats.ts` — pure timeline + usage/cost roll-up derivations (`vernier show`/`stats` render these)
 - `src/memory/` — `memory.ts` (append-only rule store; retriever-ranked recall), `retriever.ts` (the pluggable Retriever seam + BM25 lexical default), `embedding.ts` (optional embedding tier behind the lazy-optional-peer pattern)
 - `src/executors/` — `script`, `codex`, `cursor` (read-only steps), `claude` (the Claude Code CLI: read-only toolset for effect-free steps, `acceptEdits` for write scopes), `opencode` / `pi` (effect-free steps only; writes fail closed), `hermes`, `judge` (provider-bindable; codex default), `memory`, `evidence`; `vendor/omegacode/` (MIT — see `NOTICE`)
-- `src/cli/` — `main.ts` (commands), `registry.ts` (builtin pilots + user entries; `wiredProviders()` registers codex/cursor/claude/opencode/pi in every agent-driven runtime), `config.ts` (out-of-tree registration + binding resolution), `doctor.ts` (probes + per-loop runnability)
+- `src/cli/` — `main.ts` (commands, incl. `init` template scaffolding), `registry.ts` (ships EMPTY; user entries only — `wiredProviders()` registers codex/cursor/claude/opencode/pi in every config loop's runtime), `config.ts` (out-of-tree registration + binding resolution), `doctor.ts` (probes + per-loop runnability; zero loops → baseline probe, exit 0)
 - `src/index.ts` — the library surface (`vernier` root export, deliberately small)
 - `bin/vernier.js` — prefers `dist/` (plain node); falls back to tsx for unbuilt checkouts
-- `src/pilot0..3/` — the four loops as data + standalone runners
+- `templates/` — the four starter templates (`smoke`, `coding-review`, `verified-answer`, `self-improving`): config + loop module + README each, scaffolded by `vernier init`, shipped in the npm package; they carry the former pilots' loops as data (same loop ids)
 - `test/` — deterministic suites; `*.live.test.ts` gated behind `VERNIER_LIVE=1` (claude/opencode/pi/embedding additionally behind `VERNIER_LIVE_CLAUDE=1` / `VERNIER_LIVE_OPENCODE=1` / `VERNIER_LIVE_PI=1` / `VERNIER_LIVE_EMBEDDING=1` — the embedding one downloads a model on first run)
 
 ### Run it
 ```bash
 npm run build && npm link                  # compiled bin on PATH
 vernier doctor                              # probe executors; per-loop runnability (exit 0 iff all runnable)
-vernier loops                               # list registered loops (builtin + vernier.config)
-vernier run control-plane-smoke-test --json # deterministic, no LLM — safe smoke
+vernier init && vernier init smoke          # list starter templates; scaffold the deterministic one
+vernier loops                               # list registered loops (vernier.config only — zero builtins)
+vernier run control-plane-smoke-test --json # deterministic, no LLM — safe smoke (after init smoke)
 vernier run <loop> --executor <step>=claude # any agent in any role (step needs a prompt template)
 vernier runs | vernier show <runId> | vernier resume <runId>
 vernier stats --loop <id> --last <n>        # usage roll-ups; add --price-in/--price-out for cost
@@ -184,6 +188,9 @@ The kernel is done, the tool is operable, and v1 made it *shippable*: users
 register their own loops out of tree, bind any agent to any role, run the
 compiled bin under plain node, and `vernier doctor` tells them what their
 machine can actually run; all five providers are wired as CLIs on PATH
-(claude through vernier's own Claude Code adapter). Next
+(claude through vernier's own Claude Code adapter). The product shape is
+settled too: vernier ships ZERO built-in loops — `vernier init` scaffolds
+the four starter templates (the former pilots, now user-owned data), and
+the registry is exactly what your config registers. Next
 moves are trust (promotion lifecycle) or publish (the name is settled: `vernier`). Whatever you build, the test
 stays: _did the kernel stay general, or did you special-case something?_

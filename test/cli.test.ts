@@ -1,7 +1,11 @@
 // The CLI surface, asserted as agents will consume it: spawned as a real
 // process, --json parsed, exit codes per class (0 done, 1 not-success
 // terminal, 2 usage, 3 lease held). Everything here is deterministic — the
-// only loop actually RUN is control-plane-smoke-test (Pilot 0, script-only).
+// only loop actually RUN is control-plane-smoke-test, registered from the
+// SMOKE TEMPLATE (templates/smoke) via $VERNIER_CONFIG, exactly as a
+// scaffolded project would register it. Also here: the zero-builtin empty
+// states (`loops`/`run` with no config) and the `vernier init` surface
+// (listing, conflict refusal, unknown template).
 
 import { execFile } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
@@ -13,11 +17,16 @@ import { startRun } from "../src/engine/tick.js"
 import { leasePath, type LeaseRecord } from "../src/engine/lease.js"
 import { executorRegistry } from "../src/executors/script.js"
 import { ContractRegistry } from "../src/kernel/contract.js"
+import type { Loop } from "../src/kernel/types.js"
 import { Ledger, journalPath, resumeKey } from "../src/ledger/ledger.js"
-import { controlPlaneSmokeLoop } from "../src/pilot0/loop.js"
+import { TEMPLATES, templateRegistration } from "./templates.js"
 
 const execFileAsync = promisify(execFile)
 const BIN = join(import.meta.dirname, "..", "bin", "vernier.js")
+const SMOKE_CONFIG = join(TEMPLATES, "smoke", "vernier.config.json")
+
+const smokeRegistration = await templateRegistration("smoke", "smoke-loop.mjs")
+const controlPlaneSmokeLoop = smokeRegistration.loop as Loop
 
 interface CliResult {
   readonly code: number
@@ -25,10 +34,23 @@ interface CliResult {
   readonly stderr: string
 }
 
-async function cli(home: string, ...args: string[]): Promise<CliResult> {
+interface CliEnv {
+  readonly home: string
+  /** Config the CLI loads ($VERNIER_CONFIG); omitted = no config (the empty registry). */
+  readonly config?: string
+  readonly cwd?: string
+}
+
+async function cli(env: string | CliEnv, ...args: string[]): Promise<CliResult> {
+  const opts: CliEnv = typeof env === "string" ? { home: env, config: SMOKE_CONFIG } : env
+  const spawnEnv: NodeJS.ProcessEnv = { ...process.env, VERNIER_HOME: opts.home }
+  if (opts.config !== undefined) spawnEnv.VERNIER_CONFIG = opts.config
+  else delete spawnEnv.VERNIER_CONFIG
   try {
     const { stdout, stderr } = await execFileAsync(process.execPath, [BIN, ...args], {
-      env: { ...process.env, VERNIER_HOME: home },
+      // No config: run from a scratch cwd so discovery cannot find one.
+      cwd: opts.cwd ?? (opts.config === undefined ? mkdtempSync(join(tmpdir(), "vernier-cli-cwd-")) : undefined),
+      env: spawnEnv,
       encoding: "utf8",
       timeout: 60_000,
     })
@@ -52,7 +74,7 @@ function crashedSmokeRun(root: string): { runId: string; runDir: string } {
   const loop = { ...controlPlaneSmokeLoop, ledger: { root } }
   const run = startRun(
     loop,
-    { jobName: "watch-every-compound-engineering-upstream" },
+    { jobName: "watch-upstream" },
     { executors: executorRegistry(), contracts: new ContractRegistry(), workdir },
   )
   return { runId: run.state.runId, runDir: dirname(run.ledger.path) }
@@ -68,16 +90,39 @@ const liveLease = (over: Partial<LeaseRecord> = {}): LeaseRecord => ({
 })
 
 describe("vernier CLI", () => {
-  it("`loops --json` lists the four registered loops with id/version/signature/trust", async () => {
+  it("`loops --json` lists the config-registered loop with id/version/signature/trust/source", async () => {
     const result = await cli(home(), "loops", "--json")
     expect(result.code).toBe(0)
     const loops = JSON.parse(result.stdout) as Array<Record<string, unknown>>
-    expect(loops.map((l) => l.id)).toEqual(["control-plane-smoke-test", "plan-work-review", "verified-answer", "compounding-answer"])
+    expect(loops.map((l) => l.id)).toEqual(["control-plane-smoke-test"])
     const smoke = loops[0]!
     expect(smoke.version).toBe("0.2.0")
     expect(smoke.trust).toBe("dry-run")
     expect(smoke.live).toBe(false)
     expect(String(smoke.signature)).toContain("->")
+    expect(String(smoke.source)).toContain("smoke-loop.mjs") // the template module registered it
+  })
+
+  it("zero builtins: `loops` with no config prints the friendly empty state (exit 0; stdout stays machine-clean under --json)", async () => {
+    const root = home()
+    const human = await cli({ home: root }, "loops")
+    expect(human.code).toBe(0)
+    expect(human.stdout).toContain("no loops registered")
+    expect(human.stdout).toContain("vernier init smoke")
+    expect(human.stdout).toContain("vernier.config")
+    expect(human.stdout).toContain("$VERNIER_CONFIG")
+
+    const machine = await cli({ home: root }, "loops", "--json")
+    expect(machine.code).toBe(0)
+    expect(JSON.parse(machine.stdout)).toEqual([]) // [] on stdout; the pointers go to stderr
+    expect(machine.stderr).toContain("vernier init")
+  })
+
+  it("zero builtins: `run` with no config is a usage error pointing at `vernier init`", async () => {
+    const result = await cli({ home: home() }, "run", "control-plane-smoke-test")
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain("No loops are registered")
+    expect(result.stderr).toContain("vernier init")
   })
 
   it("`run control-plane-smoke-test --json` drives to done: exit 0, machine-readable outcome, lease released", async () => {
@@ -370,5 +415,69 @@ describe("vernier CLI", () => {
     expect(result.code).toBe(0)
     expect(() => JSON.parse(result.stdout)).not.toThrow() // stale-lease note did NOT pollute stdout
     expect(result.stderr).toContain("stale lease")
+  })
+})
+
+describe("vernier init", () => {
+  const scaffoldDir = (): string => mkdtempSync(join(tmpdir(), "vernier-init-"))
+
+  it("with no argument lists the four templates in teaching order, with loop + requires", async () => {
+    const result = await cli({ home: home() }, "init")
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain("TEMPLATES")
+    const order = ["smoke", "coding-review", "verified-answer", "self-improving"]
+    const positions = order.map((name) => result.stdout.indexOf(`  ${name}`))
+    expect(positions.every((p) => p >= 0)).toBe(true)
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions) // listed in template order
+    expect(result.stdout).toContain("control-plane-smoke-test")
+    expect(result.stdout).toContain("no agent CLI, no auth")
+    expect(result.stdout).toContain("vernier init <template>")
+  })
+
+  it("`init --json` is machine-readable: name, loop, description, requires, files", async () => {
+    const result = await cli({ home: home() }, "init", "--json")
+    expect(result.code).toBe(0)
+    const templates = JSON.parse(result.stdout) as Array<Record<string, unknown>>
+    expect(templates.map((t) => t.name)).toEqual(["smoke", "coding-review", "verified-answer", "self-improving"])
+    const smoke = templates[0]!
+    expect(smoke.loop).toBe("control-plane-smoke-test")
+    expect(smoke.files).toEqual(["README.md", "smoke-loop.mjs", "vernier.config.json"])
+    for (const t of templates) {
+      expect((t.files as string[]).length).toBeGreaterThan(0)
+      expect(t.files).not.toContain("template.json") // metadata, never scaffolded
+      expect(String(t.requires).length).toBeGreaterThan(0)
+    }
+  })
+
+  it("scaffolds a template into cwd and prints next steps (run id, loops, doctor)", async () => {
+    const dir = scaffoldDir()
+    const result = await cli({ home: home(), cwd: dir }, "init", "smoke")
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain("scaffolded template `smoke`")
+    expect(result.stdout).toContain("vernier run control-plane-smoke-test")
+    expect(result.stdout).toContain("vernier loops")
+    expect(result.stdout).toContain("vernier doctor")
+    for (const file of ["vernier.config.json", "smoke-loop.mjs", "README.md"]) {
+      expect(existsSync(join(dir, file))).toBe(true)
+    }
+    expect(existsSync(join(dir, "template.json"))).toBe(false)
+  })
+
+  it("refuses to overwrite existing files — and copies NOTHING on a conflict", async () => {
+    const dir = scaffoldDir()
+    writeFileSync(join(dir, "vernier.config.json"), "{}\n", "utf8")
+    const result = await cli({ home: home(), cwd: dir }, "init", "smoke")
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain("refusing to overwrite")
+    expect(result.stderr).toContain("vernier.config.json")
+    expect(existsSync(join(dir, "smoke-loop.mjs"))).toBe(false) // atomic: the conflict aborted the whole copy
+  })
+
+  it("an unknown template is a usage error naming the available set", async () => {
+    const result = await cli({ home: home() }, "init", "nope")
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain("Unknown template `nope`")
+    expect(result.stderr).toContain("smoke")
+    expect(result.stderr).toContain("self-improving")
   })
 })

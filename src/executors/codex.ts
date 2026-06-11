@@ -5,7 +5,8 @@
 //
 //   AgentResult.text        -> output.text (or evidence-only when structured)
 //   AgentResult.structured  -> output (when a spec sets the outputSchema
-//                              escape hatch — e.g. pilot-1's route step;
+//                              escape hatch — e.g. the coding-review
+//                              template's route step;
 //                              deterministic fields still come from effect
 //                              attribution instead)
 //   AgentResult.status      -> StepResult.status        (same closed set)

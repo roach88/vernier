@@ -1,15 +1,19 @@
-// Pilot 2 end-to-end with scripted workers (no network, no auth): the
-// verified-answer loop fails its first grade, iterates with the judge's
-// feedback, and passes — through the REAL executors (CodexExecutor,
-// JudgeExecutor) and the real tick engine. Plus the structured-output
-// derivation proof: the schema the judge's provider receives is derived
-// from the step's zod signature, not hand-written anywhere.
+// The verified-answer template (templates/verified-answer) end-to-end with
+// scripted workers (no network, no auth): the loop fails its first grade,
+// iterates with the judge's feedback, and passes — through the REAL
+// executors (CodexExecutor, JudgeExecutor) and the real tick engine, with
+// the answer role resolved through the template's SHIPPED config bindings.
+// Plus the structured-output derivation proof: the schema the judge's
+// provider receives is derived from the step's zod signature, not
+// hand-written anywhere. (The until/iterate mechanics themselves are pinned
+// in until.test.ts/tick.test.ts; these suites pin the template's arcs.)
 
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { zodToJsonSchema } from "zod-to-json-schema"
+import { bindExecutors } from "../src/cli/config.js"
 import { runLoop } from "../src/engine/tick.js"
 import { CodexExecutor } from "../src/executors/codex.js"
 import { JudgeExecutor } from "../src/executors/judge.js"
@@ -18,8 +22,15 @@ import type { Worker, WorkerContext } from "../src/executors/vendor/omegacode/in
 import type { AgentResult, AgentSpec } from "../src/executors/vendor/omegacode/types.js"
 import { ContractRegistry } from "../src/kernel/contract.js"
 import { derivedOutputSchema } from "../src/kernel/types.js"
+import type { Loop } from "../src/kernel/types.js"
 import { Ledger } from "../src/ledger/ledger.js"
-import { feedbackFromVerdict, verdictOutput, verifiedAnswerLoop } from "../src/pilot2/loop.js"
+import { templateBindings, templateModule, templateRegistration } from "./templates.js"
+
+const registration = await templateRegistration("verified-answer", "verified-answer-loop.mjs")
+const mod = await templateModule("verified-answer", "verified-answer-loop.mjs")
+const verifiedAnswerLoop = registration.loop as Loop
+const verdictOutput = mod.verdictOutput as Parameters<typeof zodToJsonSchema>[0]
+const feedbackFromVerdict = mod.feedbackFromVerdict as (output: Record<string, unknown>) => string
 
 const GOAL = "Write a short note explaining why the Apollo 11 mission mattered."
 const RUBRIC = "PASS only if the note states the year 1969."
@@ -53,17 +64,19 @@ const verdict = (v: { passed: boolean; feedback: string; missing: string[] }): A
 function harness(answers: AgentResult[], verdicts: AgentResult[]) {
   const answerer = scriptedWorker(answers)
   const judge = scriptedWorker(verdicts)
-  const ledgerRoot = mkdtempSync(join(tmpdir(), "vernier-pilot2-ledger-"))
-  const loop = { ...verifiedAnswerLoop, ledger: { root: ledgerRoot } }
+  const ledgerRoot = mkdtempSync(join(tmpdir(), "vernier-verified-answer-ledger-"))
+  // The SHIPPED bindings resolve the answer role (answer -> codex), exactly
+  // as the CLI would apply the template's vernier.config.json.
+  const loop = bindExecutors({ ...verifiedAnswerLoop, ledger: { root: ledgerRoot } }, [templateBindings("verified-answer")])
   const deps = {
     executors: executorRegistry(new CodexExecutor({ worker: answerer.worker }), new JudgeExecutor({ worker: judge.worker })),
     contracts: new ContractRegistry(),
-    workdir: mkdtempSync(join(tmpdir(), "vernier-pilot2-work-")),
+    workdir: mkdtempSync(join(tmpdir(), "vernier-verified-answer-work-")),
   }
   return { loop, deps, answerer, judge, ledgerRoot }
 }
 
-describe("pilot 2: verified-answer with scripted workers", () => {
+describe("verified-answer template with scripted workers", () => {
   it("fails the first grade, iterates with the judge's feedback, passes the second", async () => {
     const { loop, deps, answerer, judge, ledgerRoot } = harness(
       [text("The moon landing was neat."), text("In 1969, Apollo 11 landed on the Moon.")],
@@ -144,10 +157,12 @@ describe("pilot 2: verified-answer with scripted workers", () => {
     )
   })
 
-  it("declares the loop as data: five slots, judge step structured, producer blind", () => {
+  it("declares the loop as data: judge step structured, producer blind, NO provider named — the config binds it", () => {
     expect(verifiedAnswerLoop.id).toBe("verified-answer")
     expect(verifiedAnswerLoop.steps.map((s) => s.id)).toEqual(["answer", "grade"])
-    expect(verifiedAnswerLoop.steps.map((s) => s.executor)).toEqual(["codex", "judge"])
+    // The answer role is a binding target; the shipped config points it at a provider.
+    expect(verifiedAnswerLoop.steps.map((s) => s.executor)).toEqual(["agent", "judge"])
+    expect(templateBindings("verified-answer")).toEqual(new Map([["answer", "codex"]]))
     expect(verifiedAnswerLoop.trust).toBe("active")
     // Both steps are effect-free: the loop produces a value, not files.
     for (const step of verifiedAnswerLoop.steps) expect(step.effects.allow).toEqual([])

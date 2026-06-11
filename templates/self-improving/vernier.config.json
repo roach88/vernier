@@ -1,0 +1,6 @@
+{
+  "loops": ["./self-improving-loop.mjs"],
+  "bindings": {
+    "answer": "codex"
+  }
+}

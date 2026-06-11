@@ -7,9 +7,10 @@ around: you will run a loop without spending a token, read its ledger line
 by line, watch real agent runs iterate and learn, build a loop of your own,
 crash it on purpose, and resume it.
 
-Every command here was actually executed. Output that needs live, authed
-agent CLIs is not faked — it is transcribed from real runs of 2026-06-10
-and labeled with its provenance each time.
+Every command here was actually executed. The deterministic sections were
+re-run for real on 2026-06-11; output that needs live, authed agent CLIs is
+not faked either — it is transcribed from real runs of 2026-06-10 and
+labeled with its provenance each time.
 
 ---
 
@@ -18,31 +19,32 @@ and labeled with its provenance each time.
 vernier is an agent-orchestration kernel. Everything it can do is one
 declarative object — the **Loop** — with five slots, driven by a
 deterministic tick interpreter. Here is a complete, runnable loop — the
-in-tree Pilot 0, lightly inlined from
-[src/pilot0/loop.ts](../src/pilot0/loop.ts) (the source keeps the id,
-version, and trace root in constants):
+loop the `smoke` starter template scaffolds, lightly inlined from
+[templates/smoke/smoke-loop.mjs](../templates/smoke/smoke-loop.mjs) (the
+source keeps the id, version, and trace root in constants; §3 scaffolds and
+runs it):
 
-```ts
-export const controlPlaneSmokeLoop: Loop<
-  { jobName: string; upstreamChanged?: boolean | undefined },
-  { ok: boolean; trace: string }
-> = {
+```js
+const loop = {
   id: "control-plane-smoke-test",
   version: "0.2.0",
-  signature: sig(
-    z.object({ jobName: z.string(), upstreamChanged: z.boolean().optional() }),
-    z.object({ ok: z.boolean(), trace: z.string() }),
-  ),
+  signature: {
+    input: z.object({ jobName: z.string(), upstreamChanged: z.boolean().optional() }),
+    output: z.object({ ok: z.boolean(), trace: z.string() }),
+  },
   steps: [
     {
       id: "smoke",
-      signature: sig(z.object({ jobName: z.string(), upstreamChanged: z.boolean().optional() }), smokeOutput),
+      signature: {
+        input: z.object({ jobName: z.string(), upstreamChanged: z.boolean().optional() }),
+        output: smokeOutput,
+      },
       executor: "script:control-plane-smoke",
-      contract: RUN_TRACE_V1,
-      effects: fsScope(`evidence/traces/control-plane-smoke-test/**`),
+      contract: "run-trace.v1",
+      effects: { allow: ["evidence/traces/control-plane-smoke-test/**"] },
     },
   ],
-  policy: retryPolicy({ maxAttempts: 1 }),
+  policy,
   trust: "dry-run",
   ledger: {},
 }
@@ -106,69 +108,121 @@ everywhere `vernier` appears below. Without `npm run build`, the bin falls
 back to running the TypeScript through tsx — fine for development, but note
 the gotcha in §11: once `dist/` exists, it wins.
 
+### Global or per-project?
+
+Both are right; they answer different needs:
+
+- **Global (`npm link`, or `npm install -g` once published)** puts the
+  `vernier` CLI on your PATH so you can run it from anywhere. This is all
+  you need to *drive* loops.
+- **Per-project (`npm install vernier` in your repo)** is what you need the
+  moment your loop modules `import { sig, until, retryPolicy, … } from
+  "vernier"` — the library surface resolves from the project's own
+  `node_modules` (and brings `zod` with it). Pinning the version per
+  project is the usual dependency hygiene.
+- **Either way, everything you DO with vernier is per-project.** Config
+  discovery always starts at your current directory and walks up to the
+  repo root (`vernier.config.{ts,js,mjs,json}`, or `$VERNIER_CONFIG`); the
+  ledger root is `$VERNIER_HOME`, else `./.vernier` *under your cwd*. A
+  global CLI does not create global state — it operates on the project you
+  are standing in.
+
+So the comfortable setup is: link the CLI globally, install the library in
+each project that defines loops.
+
 Then ask the installation what it can actually run:
 
 ```sh
 vernier doctor
 ```
 
-Real output from the machine this walkthrough was written on:
+Real output from the machine this walkthrough was written on — a fresh
+install, before anything is registered:
 
 ```
 EXECUTORS
-  ok  script:control-plane-smoke   in-process executor (module loaded)
-  ok  hermes                       `hermes` on PATH (/Users/tyler/.local/bin/hermes)
   ok  codex                        `codex` on PATH (/Users/tyler/.local/bin/codex)
   !!  cursor-agent                 `cursor-agent` not found on PATH
   ok  claude                       `claude` on PATH (/Users/tyler/.local/bin/claude)
   ok  opencode                     `opencode` on PATH (/Users/tyler/.opencode/bin/opencode)
   ok  pi                           `pi` on PATH (/Users/tyler/.bun/bin/pi)
   ok  judge                        `codex` on PATH (/Users/tyler/.local/bin/codex)
-  ok  distill                      `codex` on PATH (/Users/tyler/.local/bin/codex)
+  ok  hermes                       `hermes` on PATH (/Users/tyler/.local/bin/hermes)
   ok  recall                       in-process executor (module loaded)
   ok  remember                     in-process executor (module loaded)
   ok  memory:lexical               in-process retriever (no external dependency)
 
 LOOPS
-  ok  control-plane-smoke-test     runnable (1 step)
-        smoke -> script:control-plane-smoke
-  ok  plan-work-review             runnable (2 steps)
-        route -> codex
-        implement -> codex
-  ok  verified-answer              runnable (2 steps)
-        answer -> codex
-        grade -> judge
-  ok  compounding-answer           runnable (5 steps)
-        recall -> recall
-        answer -> codex
-        grade -> judge
-        distill -> distill
-        remember -> remember
+  none registered — nothing is broken, and nothing can run yet.
+  Scaffold a starter with `vernier init` (templates) or register loops via vernier.config.
 
-all registered loops are runnable.
+no loops registered; the executor probes above say what this machine could run.
 ```
 
 How to read it:
 
-- **EXECUTORS** probes each registered executor for the one thing it needs:
-  CLI executors a binary on PATH (claude included — the Claude Code CLI,
-  like every other provider; judge/distill the binary of whichever provider
-  backs them), in-process executors
-  nothing. Probes look things up; they never execute anything. `ok` means
-  usable, `!!` means not usable *as installed* — above, `cursor-agent` is
-  missing.
-- **LOOPS** resolves every loop's steps through the same binding chain a
-  run would use and judges each loop runnable or not. This is the line that
-  matters: an unusable executor that **no step resolves to** is reported
-  but harmless — that is why the run above still ends with "all registered
-  loops are runnable."
-- **Exit code** is 0 iff every registered loop is runnable. The output above
-  exited 0 despite the `!!`, because nothing binds to cursor-agent. Wire a
-  step to a missing executor and doctor exits 1 — that is your CI preflight.
+- **EXECUTORS** probes each executor for the one thing it needs: CLI
+  executors a binary on PATH (claude included — the Claude Code CLI, like
+  every other provider; judge/distill the binary of whichever provider
+  backs them), in-process executors nothing. Probes look things up; they
+  never execute anything. `ok` means usable, `!!` means not usable *as
+  installed* — above, `cursor-agent` is missing. With zero loops
+  registered, doctor probes the baseline set every config loop's runtime
+  would get, so a fresh install still learns what this machine could run.
+- **LOOPS** resolves every registered loop's steps through the same binding
+  chain a run would use and judges each loop runnable or not. vernier ships
+  **no built-in loops**, so a fresh install registers none — that is the
+  honest empty state above, and it exits 0: nothing is broken.
+- **Exit code** is 0 iff every registered loop is runnable (vacuously true
+  here). An unusable executor that **no step resolves to** never fails the
+  doctor; wire a step to a missing executor and doctor exits 1 — that is
+  your CI preflight.
 
 ---
 
 ## 3. First run — no LLM, no auth
+
+A fresh install has no loops (`vernier loops` will tell you exactly that,
+and what to do about it). Scaffold the deterministic starter — in your own
+project directory, not the vernier checkout:
+
+```sh
+vernier init smoke
+```
+
+```
+scaffolded template `smoke` into /private/tmp/quickstart-7s7WVg:
+  README.md
+  smoke-loop.mjs
+  vernier.config.json
+
+next steps:
+  vernier loops             the scaffolded config registers `control-plane-smoke-test`
+  vernier run control-plane-smoke-test
+  vernier doctor            probe what this machine can actually run
+```
+
+(`vernier init` with no argument lists all four starter templates — smoke,
+coding-review, verified-answer, self-improving — with what each requires.
+`init` never overwrites existing files. The scaffolded module's one bare
+specifier, `zod`, resolves from your project's `node_modules`; installing
+vernier brings it in.)
+
+The scaffold is three files: a `vernier.config.json` that registers the
+loop module, the loop module itself (the five slots from §1, plus the
+executor and registration — every line yours to edit), and a README. The
+config is discovered by walking up from your cwd, so the loop is already
+registered:
+
+```sh
+vernier loops
+```
+
+```
+control-plane-smoke-test@0.2.0  trust=dry-run  source=/private/tmp/quickstart-7s7WVg/smoke-loop.mjs
+  jobName:string, upstreamChanged?:boolean -> ok:boolean, trace:path
+  Deterministic no-agent control-plane smoke (gateway/job/no-op/trace/delivery).
+```
 
 `control-plane-smoke-test` is a deterministic, script-only loop. Run it:
 
@@ -178,17 +232,17 @@ vernier run control-plane-smoke-test
 
 ```
 loop      control-plane-smoke-test@0.2.0
-run       control-plane-smoke-test-20260611123301-6ffc19
+run       control-plane-smoke-test-20260611154444-6f26b0
 status    done
 decision  stop / success — step `smoke` completed, its contract passed, and all changes stayed in scope; the loop is done.
-output    {"ok":true,"trace":"evidence/traces/control-plane-smoke-test/control-plane-smoke-test-20260611123301-6ffc19.md"}
-ledger    /Users/tyler/Dev/vernier/.vernier/runs/control-plane-smoke-test-20260611123301-6ffc19/journal.jsonl
+output    {"ok":true,"trace":"evidence/traces/control-plane-smoke-test/control-plane-smoke-test-20260611154444-6f26b0.md"}
+ledger    /private/tmp/quickstart-7s7WVg/.vernier/runs/control-plane-smoke-test-20260611154444-6f26b0/journal.jsonl
 --- ledger entries ---
   meta          control-plane-smoke-test@0.2.0 keys=loop-v2
   step_started  smoke iter=1 attempt=1
   step_result   smoke iter=1 attempt=1 status=completed
   contract      smoke iter=1 attempt=1 run-trace.v1 valid=true
-  effects       smoke iter=1 attempt=1 changed=[evidence/traces/control-plane-smoke-test/control-plane-smoke-test-20260611123301-6ffc19.md] allowed=true
+  effects       smoke iter=1 attempt=1 changed=[evidence/traces/control-plane-smoke-test/control-plane-smoke-test-20260611154444-6f26b0.md] allowed=true
   decision      smoke iter=1 attempt=1 -> stop/success
 ```
 
@@ -196,17 +250,17 @@ Exit code 0. Add `--json` to any command for machine output on stdout,
 diagnostics on stderr. Now render the run as a timeline:
 
 ```sh
-vernier show control-plane-smoke-test-20260611123301-6ffc19
+vernier show control-plane-smoke-test-20260611154444-6f26b0
 ```
 
 ```
-run       control-plane-smoke-test-20260611123301-6ffc19
+run       control-plane-smoke-test-20260611154444-6f26b0
 loop      control-plane-smoke-test@0.2.0
 status    done
 last      smoke (iteration 1, attempt 1)
-started   2026-06-11T12:33:01.023Z
-workdir   /Users/tyler/Dev/vernier/.vernier/work
-journal   /Users/tyler/Dev/vernier/.vernier/runs/control-plane-smoke-test-20260611123301-6ffc19/journal.jsonl
+started   2026-06-11T15:44:44.181Z
+workdir   /private/tmp/quickstart-7s7WVg/.vernier/work
+journal   /private/tmp/quickstart-7s7WVg/.vernier/runs/control-plane-smoke-test-20260611154444-6f26b0/journal.jsonl
 --- timeline (6 events) ---
 +0.00s  ◷ run start — control-plane-smoke-test@0.2.0 (trust=dry-run, keys=loop-v2)
 +0.00s  ▶ smoke#1.1 started (script:control-plane-smoke)
@@ -251,22 +305,23 @@ vernier runs
 ```
 
 ```
-control-plane-smoke-test-20260611123301-6ffc19  control-plane-smoke-test@0.2.0  done  last=smoke (iteration 1, attempt 1)  started=2026-06-11T12:33:01.023Z
+control-plane-smoke-test-20260611154444-6f26b0  control-plane-smoke-test@0.2.0  done  last=smoke (iteration 1, attempt 1)  started=2026-06-11T15:44:44.181Z
 ```
 
-You have now seen a complete loop lifecycle — run, journal, timeline,
-listing — without an API key in sight. The artifact itself is real too:
+You have now seen a complete loop lifecycle — scaffold, run, journal,
+timeline, listing — without an API key in sight. The artifact itself is
+real too:
 
 ```sh
-head -12 .vernier/work/evidence/traces/control-plane-smoke-test/control-plane-smoke-test-20260611123301-6ffc19.md
+head -12 .vernier/work/evidence/traces/control-plane-smoke-test/control-plane-smoke-test-20260611154444-6f26b0.md
 ```
 
 ```
-# Trace: control-plane-smoke-test-20260611123301-6ffc19
+# Trace: control-plane-smoke-test-20260611154444-6f26b0
 
 | Field | Value |
 |---|---|
-| `trace_id` | `control-plane-smoke-test-20260611123301-6ffc19` |
+| `trace_id` | `control-plane-smoke-test-20260611154444-6f26b0` |
 | `loop_id` | `control-plane-smoke-test` |
 | `loop_version` | `0.2.0` |
 | `orchestrator` | vernier engine |
@@ -274,14 +329,18 @@ head -12 .vernier/work/evidence/traces/control-plane-smoke-test/control-plane-sm
 | `model_or_provider` | None |
 ```
 
+This run was made in a scratch project (`/private/tmp/quickstart-7s7WVg`)
+with the compiled bin — exactly the scaffolded experience, nothing staged.
+
 ---
 
 ## 4. The anatomy of a tick
 
-What just happened, slot by slot, against Pilot 0's actual source.
+What just happened, slot by slot, against the smoke template's actual
+source (now sitting in your scaffold dir as `smoke-loop.mjs`).
 
 **Signature.** `vernier run` parsed your inputs (here the registered
-default, `{ jobName: "watch-every-compound-engineering-upstream" }`)
+default, `{ jobName: "watch-upstream" }`)
 against `loop.signature.input` before anything executed. Bad inputs are a
 usage error (exit 2) — no journal is ever written for a run that could not
 have been valid.
@@ -303,9 +362,9 @@ against the *step's* input schema. One tick then does, in order
    every changed path against `fsScope(...)`.
 5. **Validate** — output against the step signature, then the contract
    (`run-trace.v1`) against the output value.
-6. **Decide** — build the Observation, call the pure policy. Pilot 0's
-   policy is `retryPolicy({ maxAttempts: 1 })`: pass → continue/stop,
-   fail → escalate (no retry budget).
+6. **Decide** — build the Observation, call the pure policy. The smoke
+   template's policy is a hand-rolled pure function with a 1-attempt
+   budget: pass → continue/stop, fail → escalate (no retry).
 7. **Append everything** to the ledger and project the next state.
 
 `vernier run` is `startRun` + `while (tick)`. Nothing else.
@@ -330,12 +389,14 @@ timelines, stats, resume — is a pure function of files like this one.
 
 ## 5. A real coding loop — plan-work-review
 
-> **LIVE section.** `plan-work-review` drives real agent CLIs; running it
-> needs whichever agent you bind — codex in this transcript, but any wired
-> provider can fill either role, and `vernier doctor` tells you what is
-> usable. (The test suite never needs any agent or auth.) The
-> output below is transcribed from a **real run of 2026-06-10** made while
-> building this tool. Those pre-rename ledgers live under the author's
+> **LIVE + HISTORICAL section.** `plan-work-review` is what
+> `vernier init coding-review` scaffolds today; it drives real agent CLIs —
+> codex in this transcript, but any wired provider can fill either role,
+> and `vernier doctor` tells you what is usable. (The test suite never
+> needs any agent or auth.) The output below is transcribed from a
+> **real run of 2026-06-10** made while building this tool — the
+> coding-review template descends from these runs (it shipped in-tree as
+> "Pilot 1" then). Those pre-rename ledgers live under the author's
 > checkout (gitignored, so not in the repo); they render with today's CLI
 > via `VERNIER_HOME=.looper vernier show …`. Two period details you will
 > see: `keys=loop-v1` (the journals predate the current `loop-v2` resume
@@ -343,21 +404,22 @@ timelines, stats, resume — is a pure function of files like this one.
 > Legacy journals degrade gracefully — that is a feature, and this is it
 > working.
 
-Pilot 1 is the shape most people come for: **an LLM gate, then an LLM
+This is the shape most people come for: **an LLM gate, then an LLM
 worker, with a contract and a bounded blast radius.**
 
 ```
 route      an LLM router approves/rejects the task   contract: route-decision.v1   effects: none
-implement  codex writes ONE artifact                 contract: dry-run-note.v1     effects: fsScope("docs/agent-workflows/**")
+implement  an agent writes ONE artifact              contract: dry-run-note.v1     effects: fsScope("docs/agent-workflows/**")
 ```
 
 The route gate is just a Step — there is no special "orchestrator" object.
 Its prompt plus the `route-decision.v1` contract are the entire role, and
 `structuredOutput: true` hands the executor a JSON Schema derived from the
 step's zod output signature (one source of truth, never hand-written).
-The policy ([src/pilot1/loop.ts](../src/pilot1/loop.ts)) allows the worker
-2 attempts but makes route failures non-retryable — a rejected gate goes
-straight to `needs_human`.
+The policy
+([templates/coding-review/coding-review-loop.mjs](../templates/coding-review/coding-review-loop.mjs))
+allows the worker 2 attempts but makes route failures non-retryable — a
+rejected gate goes straight to `needs_human`.
 
 ```sh
 vernier run plan-work-review --input '{"task":"Create docs/agent-workflows/runner-dry-runs/<traceId>.md as a harmless dry-run note. Do not edit any other file."}'
@@ -432,11 +494,13 @@ is resolved at run time through one chain:
 ```
 
 Keys are a step id (binds that step) or an executor id (binds the role
-everywhere it appears). Today's plan-work-review (v0.3.0) defaults *both*
-steps to codex, so one wired agent suffices — and because any agent can
-fill any role, that one agent does not have to be codex; the run above is
-what `--executor route=hermes` produces — the orchestrator role itself is
-just a binding, hermes optional:
+everywhere it appears). Today's plan-work-review (v0.4.0, the template)
+names NO provider at all: both steps declare the binding target `agent`,
+and the scaffolded `vernier.config.json` binds both roles to codex —
+visible data you edit, not a default baked into the loop. One wired agent
+suffices, and it does not have to be codex; the run above is what
+`--executor route=hermes` produces — the orchestrator role itself is just
+a binding, hermes optional:
 
 ```sh
 vernier run plan-work-review --executor route=hermes --input '{"task":"…"}'   # route on hermes (this is the historical configuration)
@@ -450,14 +514,16 @@ and the agent must be usable on this machine (`vernier doctor`).
 
 ## 6. Iterate until verified — verified-answer
 
-> **LIVE section.** Same provenance as §5: real run of 2026-06-10,
-> pre-rename ledger, rendered with today's `vernier show`.
+> **LIVE + HISTORICAL section.** Same provenance as §5: real run of
+> 2026-06-10, pre-rename ledger, rendered with today's `vernier show`. The
+> verified-answer template (`vernier init verified-answer`) descends from
+> these runs (in-tree "Pilot 2" then).
 
-Pilot 2 is the generalizability proof: a non-coding loop in the same five
-slots. `answer` (codex) produces; `grade` (an **independent** judge — a
-separate executor invocation with fresh context, holding a rubric the
-producer never sees) verifies; the `until` combinator loops back until the
-verdict passes:
+This is the generalizability proof: a non-coding loop in the same five
+slots. `answer` (an agent; the template binds it to codex) produces;
+`grade` (an **independent** judge — a separate executor invocation with
+fresh context, holding a rubric the producer never sees) verifies; the
+`until` combinator loops back until the verdict passes:
 
 ```ts
 policy: until((verdict) => verdict.passed === true, {
@@ -534,11 +600,14 @@ verification, with the verifier's exact words journaled.
 
 ## 7. Loops that learn — compounding-answer
 
-> **LIVE section.** Same provenance: two real runs of 2026-06-10, one
-> minute apart, pre-rename ledgers rendered with today's CLI. The rule
-> texts and recall outputs below are quoted verbatim from the journals.
+> **LIVE + HISTORICAL section.** Same provenance: two real runs of
+> 2026-06-10, one minute apart, pre-rename ledgers rendered with today's
+> CLI. The rule texts and recall outputs below are quoted verbatim from the
+> journals. The self-improving template (`vernier init self-improving`)
+> descends from these runs (in-tree "Pilot 3" then).
 
-Pilot 2 converges *within* a run. Pilot 3 compounds *across* runs:
+verified-answer converges *within* a run. compounding-answer compounds
+*across* runs:
 
 ```
 recall -> answer -> grade -> distill -> remember
@@ -896,11 +965,13 @@ vernier loops
 ```
 
 ```
-…(the four builtin pilots)…
 haiku-review@0.1.0  trust=dry-run  source=/Users/tyler/Dev/vernier/examples/getting-started/haiku-loop.mjs
   topic:string -> haiku:string, syllables:number[], verdict:string
   Getting-started loop: a deterministic haiku composer, syllable-checked by an independent reviewer.
 ```
+
+(Just yours — vernier ships no built-in loops, so the registry is exactly
+what your config registers.)
 
 ```sh
 vernier run haiku-review
@@ -908,11 +979,11 @@ vernier run haiku-review
 
 ```
 loop      haiku-review@0.1.0
-run       haiku-review-20260611123638-3eecea
+run       haiku-review-20260611154515-d2d7c1
 status    done
 decision  stop / success — haiku verified 5-7-5; done.
 output    {"haiku":"a vernier scale\nthe engine ticks on, dusk\nthe ledger recalls","syllables":[5,7,5],"verdict":"success"}
-ledger    /Users/tyler/Dev/vernier/examples/getting-started/.vernier/runs/haiku-review-20260611123638-3eecea/journal.jsonl
+ledger    /Users/tyler/Dev/vernier/examples/getting-started/.vernier/runs/haiku-review-20260611154515-d2d7c1/journal.jsonl
 --- ledger entries ---
   meta          haiku-review@0.1.0 keys=loop-v2
   step_started  compose iter=1 attempt=1
@@ -947,7 +1018,7 @@ vernier run haiku-review --input '{"topic":"rust"}' --json
 
 ```json
 {
-  "runId": "haiku-review-20260611123645-8697c1",
+  "runId": "haiku-review-20260611154523-f32212",
   "status": "done",
   "output": {
     "haiku": "rust, dusk, moon, wind, mist\nthe engine ticks on, dusk\nthe ledger recalls",
@@ -1058,14 +1129,14 @@ vernier runs
 ```
 
 ```
-haiku-review-20260611123705-5bbd89  haiku-review@0.1.0  running  last=review (iteration 1, attempt 1)  started=2026-06-11T12:37:05.968Z
+haiku-review-20260611154618-dfa71c  haiku-review@0.1.0  running  last=review (iteration 1, attempt 1)  started=2026-06-11T15:46:18.891Z
 ```
 
 The run is non-terminal — `running`, dead driver. Its timeline is torn
 exactly where the process died:
 
 ```sh
-vernier show haiku-review-20260611123705-5bbd89
+vernier show haiku-review-20260611154618-dfa71c
 ```
 
 ```
@@ -1085,11 +1156,11 @@ status      running (1 iteration, 1 step run)
 **lease**:
 
 ```sh
-cat .vernier/runs/haiku-review-20260611123705-5bbd89/lease.json
+cat .vernier/runs/haiku-review-20260611154618-dfa71c/lease.json
 ```
 
 ```json
-{"pid":75319,"host":"Tylers-MacBook-Pro.local","acquiredAt":"2026-06-11T12:37:05.968Z","heartbeatAt":"2026-06-11T12:37:05.968Z","ttlMs":30000}
+{"pid":2948,"host":"Tylers-MacBook-Pro.local","acquiredAt":"2026-06-11T15:46:18.890Z","heartbeatAt":"2026-06-11T15:46:18.890Z","ttlMs":30000}
 ```
 
 What the lease protects: **one driver per run**. `run`/`tick`/`resume`
@@ -1101,13 +1172,13 @@ that no longer exists) is taken over. So a crashed driver never wedges a
 run:
 
 ```sh
-vernier tick haiku-review-20260611123705-5bbd89
+vernier tick haiku-review-20260611154618-dfa71c
 ```
 
 ```
-note: took over a stale lease (pid 75319 on Tylers-MacBook-Pro.local, heartbeat 2026-06-11T12:37:05.968Z).
+note: took over a stale lease (pid 2948 on Tylers-MacBook-Pro.local, heartbeat 2026-06-11T15:46:18.890Z).
 loop      haiku-review@0.1.0
-run       haiku-review-20260611123705-5bbd89
+run       haiku-review-20260611154618-dfa71c
 status    done
 decision  stop / success — haiku verified 5-7-5; done.
 output    {"haiku":"a vernier scale\nthe engine ticks on, dusk\nthe ledger recalls","syllables":[5,7,5],"verdict":"success"}
@@ -1146,11 +1217,11 @@ run reached `done`. `vernier resume` does the same thing in a loop,
 driving to a terminal state. On a finished run both are safe no-ops:
 
 ```sh
-vernier resume haiku-review-20260611123705-5bbd89
+vernier resume haiku-review-20260611154618-dfa71c
 ```
 
 ```
-run haiku-review-20260611123705-5bbd89 is already terminal: done. Nothing to resume.
+run haiku-review-20260611154618-dfa71c is already terminal: done. Nothing to resume.
 ```
 
 (Exit 0 — `done` is success. The exit classes: 0 success, 1 terminal-but-
@@ -1302,8 +1373,10 @@ The real gotchas, in the order you will hit them:
   `test/until.test.ts` (the iterate combinator), `test/cli.test.ts` (every
   exit code), `test/config.test.ts` (out-of-tree registration),
   `test/walkthrough.test.ts` (this document's §8–9, kept honest in CI).
-- The four pilots in ascending sophistication: `src/pilot0..3/loop.ts` —
-  script, coding, verified, compounding. Each is a page of data.
+- The four starter templates in ascending sophistication:
+  [templates/](../templates) `smoke`, `coding-review`, `verified-answer`,
+  `self-improving` — script, coding, verified, compounding. Each is a page
+  of data; `vernier init <template>` makes any of them yours.
 
 The dogma, one last time — it is the test for every change you might make:
 the loop is data; the step is typed; the executor is fungible; the policy

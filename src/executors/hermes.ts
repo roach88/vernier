@@ -9,8 +9,8 @@
 // route-decision contract's job (the gate semantics are loop data, not
 // executor behavior). In the five-slot model the router is not special;
 // it is the first Step — and hermes is not special either: it is ONE
-// binding for the route role (pilot-1 defaults to codex; bind
-// `--executor route=hermes` to use this). Field mapping tolerates both
+// binding for the route role (the coding-review template ships bound to
+// codex; bind `--executor route=hermes` to use this). Field mapping tolerates both
 // snake_case (the Python-era prompt) and camelCase (the current
 // provider-agnostic prompt), so either prompt generation works.
 //

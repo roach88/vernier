@@ -1,0 +1,6 @@
+{
+  "order": 2,
+  "loop": "verified-answer",
+  "description": "An agent answers, an INDEPENDENT judge grades against a hidden rubric, until passed (feedback threaded back).",
+  "requires": "any wired agent CLI for the answer role (binding ships on codex); the judge runs on codex by default"
+}

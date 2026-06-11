@@ -2,8 +2,11 @@
 //
 // Two layers, reported in order:
 //
-//   executors  every executor the registered loops' runtimes register
-//              (builtin) plus the config-registered ones, each probed for
+//   executors  every executor the registered loops' runtimes register plus
+//              the config-registered ones (with ZERO loops registered: the
+//              baseline set every config loop's default runtime would get,
+//              so a fresh install still learns what this machine could
+//              run), each probed for
 //              the ONE thing it needs: CLI-backed executors a binary on
 //              PATH (claude included — the Claude Code CLI, like every
 //              other provider; judge/distill the binary of whichever
@@ -45,7 +48,7 @@ import { PiExecutor } from "../executors/pi.js"
 import type { ProviderId } from "../executors/vendor/omegacode/types.js"
 import type { Executor } from "../kernel/types.js"
 import { EMBEDDING_PACKAGE, EmbeddingRetriever } from "../memory/embedding.js"
-import { Memory } from "../memory/memory.js"
+import { Memory, retrieverFromEnv } from "../memory/memory.js"
 import type { Retriever } from "../memory/retriever.js"
 import { resolveExecutorId, type BindingLayer, type LoadedConfig } from "./config.js"
 import type { RegisteredLoop } from "./registry.js"
@@ -215,6 +218,32 @@ export async function diagnose(
     return report
   }
 
+  // ZERO LOOPS REGISTERED: there is no runtime to enumerate executors from,
+  // but the environment question is still worth answering — probe the set
+  // every config-registered loop's default runtime would get (the wired
+  // providers, the judge, hermes, the store ops, the selected memory
+  // retriever), so a fresh install learns what this machine could run.
+  // No loops means nothing is blocked: the doctor exits 0.
+  if (registry.size === 0) {
+    const baseline: Executor[] = [
+      new CodexExecutor(),
+      new CursorExecutor(),
+      new ClaudeExecutor(),
+      new OpencodeExecutor(),
+      new PiExecutor(),
+      new JudgeExecutor(),
+      new HermesExecutor(),
+      recallExecutor,
+      rememberExecutor,
+    ]
+    for (const executor of baseline) check(executor)
+    for (const executor of config?.executors ?? []) check(executor)
+    const retrieverReport = checkRetriever(retrieverFromEnv(), probes)
+    checked.set(retrieverReport.id, retrieverReport)
+    for (const executor of baseline) await (executor as { shutdown?: () => Promise<void> }).shutdown?.()
+    return { executors: [...checked.values()], loops: [], ok: true }
+  }
+
   const loops: LoopReport[] = []
   for (const entry of registry.values()) {
     let runtime: ReturnType<RegisteredLoop["runtime"]>
@@ -288,6 +317,10 @@ export function renderDoctor(report: DoctorReport): string[] {
     lines.push(`  ${mark(e.ok)}  ${e.id.padEnd(28)} ${e.detail}`)
   }
   lines.push("", "LOOPS")
+  if (report.loops.length === 0) {
+    lines.push("  none registered — nothing is broken, and nothing can run yet.")
+    lines.push("  Scaffold a starter with `vernier init` (templates) or register loops via vernier.config.")
+  }
   for (const l of report.loops) {
     const blocked = l.steps.filter((s) => !s.ok).length
     const summary = l.error ?? (l.runnable ? `runnable (${l.steps.length} step${l.steps.length === 1 ? "" : "s"})` : `${blocked} of ${l.steps.length} steps blocked`)
@@ -297,6 +330,13 @@ export function renderDoctor(report: DoctorReport): string[] {
       lines.push(`        ${s.stepId} -> ${binding}${s.ok ? "" : `  (${s.why})`}`)
     }
   }
-  lines.push("", report.ok ? "all registered loops are runnable." : "some loops are not runnable; see above.")
+  lines.push(
+    "",
+    report.loops.length === 0
+      ? "no loops registered; the executor probes above say what this machine could run."
+      : report.ok
+        ? "all registered loops are runnable."
+        : "some loops are not runnable; see above.",
+  )
   return lines
 }

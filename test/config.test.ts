@@ -53,23 +53,16 @@ const home = (): string => mkdtempSync(join(tmpdir(), "vernier-config-"))
 const scratch = (): string => mkdtempSync(join(tmpdir(), "vernier-config-scratch-"))
 
 describe("vernier.config: out-of-tree loops and executors", () => {
-  it("discovers vernier.config.json from cwd and lists the user loop with its source (builtins keep theirs)", async () => {
+  it("discovers vernier.config.json from cwd and lists the user loop with its source (the registry IS the config)", async () => {
     const result = await cli({ home: home() }, "loops", "--json")
     expect(result.code).toBe(0)
     const loops = JSON.parse(result.stdout) as Array<Record<string, unknown>>
-    expect(loops.map((l) => l.id)).toEqual([
-      "control-plane-smoke-test",
-      "plan-work-review",
-      "verified-answer",
-      "compounding-answer",
-      "echo-shout",
-    ])
+    expect(loops.map((l) => l.id)).toEqual(["echo-shout"]) // zero builtins: only what the config registers
     const echo = loops.at(-1)!
     expect(echo.version).toBe("0.1.0")
     expect(echo.trust).toBe("dry-run")
     expect(echo.live).toBe(false)
     expect(String(echo.source)).toMatch(/echo-loop\.mjs$/)
-    expect(loops.filter((l) => l.source === "builtin")).toHaveLength(4)
   })
 
   it("runs the user loop end-to-end on its own executor: `vernier run echo-shout`", async () => {
@@ -158,11 +151,10 @@ describe("vernier.config: out-of-tree loops and executors", () => {
     expect(missing.stderr).toContain("$VERNIER_CONFIG")
   })
 
-  it("without a config, the registry is exactly the four builtins (no accidental discovery)", async () => {
+  it("without a config, the registry is EMPTY (no accidental discovery, no builtins)", async () => {
     const result = await cli({ home: home(), cwd: scratch() }, "loops", "--json")
     expect(result.code).toBe(0)
-    const loops = JSON.parse(result.stdout) as Array<Record<string, unknown>>
-    expect(loops).toHaveLength(4)
-    expect(loops.every((l) => l.source === "builtin")).toBe(true)
+    expect(JSON.parse(result.stdout)).toEqual([])
+    expect(result.stderr).toContain("vernier init") // the friendly empty-state pointer
   })
 })

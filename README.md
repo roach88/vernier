@@ -10,7 +10,7 @@ New here? Start with [docs/walkthrough.md](docs/walkthrough.md) — the guided t
 Design doc: [docs/orchestration-direction.md](docs/orchestration-direction.md)
 (authoritative — this repo is its "smallest first step on the TS path").
 The Python `agent_workflows` repo remains the frozen executable spec until
-the TS Pilot 1 trace output matches it.
+the TS plan-work-review trace output matches it.
 
 ## The five-slot model
 
@@ -39,15 +39,16 @@ signature + contract → pure Policy decides → append everything to the ledger
 next state. `runLoop()` is just `while (tick)`.
 
 A coding loop, a research loop, and a pure-script loop are all this shape;
-the engine never knows which kind of executor it is driving. Pilot 0
-([src/pilot0/loop.ts](src/pilot0/loop.ts)) proves the shape with a
-deterministic no-agent script: gateway / job / no-op / trace / delivery
-behavior, contract-checked (`run-trace.v1`) and journaled per tick.
-Pilot 1 ([src/pilot1/loop.ts](src/pilot1/loop.ts)) proves it with REAL
-agents: a `hermes` route step (an LLM gate is just a Step, checked by
-`route-decision.v1`) and a live `codex` implement step (the vendored
-omegacode app-server worker behind the same seam, checked by
-`dry-run-note.v1`, effects observed by the git-aware observer).
+the engine never knows which kind of executor it is driving. vernier ships
+NO built-in loops — the proof lives in the four starter templates
+([templates/](templates), scaffolded by `vernier init`): `smoke` proves the
+shape with a deterministic no-agent script (gateway / job / no-op / trace /
+delivery, contract-checked by `run-trace.v1`, journaled per tick);
+`coding-review` proves it with REAL agents (an LLM route gate checked by
+`route-decision.v1`, then a bound agent writing one `dry-run-note.v1`-checked
+artifact inside a git-observed effect scope); `verified-answer` and
+`self-improving` prove the iterate-until-verified and compounding-memory
+shapes on the same five slots.
 
 ## Install
 
@@ -72,8 +73,10 @@ optional peer dependency — see "Memory & recall".
 
 ```sh
 vernier doctor                                # which executors are usable; which loops are runnable
-vernier run control-plane-smoke-test --json   # deterministic, no LLM — the smoke loop end-to-end
-vernier loops                                 # everything registered (builtin + your config)
+vernier init                                  # list the starter templates
+vernier init smoke                            # scaffold the deterministic starter into . (no agent, no auth)
+vernier run control-plane-smoke-test --json   # the scaffolded smoke loop end-to-end
+vernier loops                                 # everything registered (your config — vernier ships no builtins)
 ```
 
 ## Dev flows (no build needed)
@@ -81,9 +84,7 @@ vernier loops                                 # everything registered (builtin +
 ```sh
 npm test                   # vitest: all fake/deterministic — no auth, no network
 npm run vernier -- loops    # the CLI from source through tsx
-npm run pilot0             # the deterministic control-plane smoke loop
-npm run pilot1             # LIVE: route + real codex implement in a /tmp scratch git repo
-VERNIER_LIVE=1 npm test -- pilot1.live   # the same live path as a gated test
+VERNIER_LIVE=1 npm test -- coding-review.live   # gated: the coding-review template on real agents
 ```
 
 `bin/vernier.js` prefers `dist/` when it exists and falls back to running
@@ -92,12 +93,12 @@ the TypeScript through tsx — after editing source, rebuild (or remove
 
 ## The CLI
 
-Loops are registered by id — the four in-tree pilots in
-`src/cli/registry.ts`, yours via `vernier.config` (see "Write your own
-loop"); the `vernier` bin drives them by name and resumes runs from their
-ledgers:
+Loops are registered by id, via `vernier.config` only — the registry ships
+EMPTY (see "Starter templates" and "Write your own loop"); the `vernier`
+bin drives them by name and resumes runs from their ledgers:
 
 ```sh
+vernier init [template]                             # list starter templates / scaffold one into . (never overwrites)
 vernier loops                                       # list registered loops (id@version, signature, trust)
 vernier run <loopId> [--input '<json>'] [--input-file <path>] [--workdir <dir>]
            [--executor <stepIdOrExecutorId>=<executorId>]...
@@ -120,7 +121,7 @@ resolves to is reported but does not fail the doctor.
 
 `show` renders a run's journal as a timeline: relative time offsets, contract
 pass/fail with failed-check names, effect attribution, and retry/iterate
-transitions made explicit (a pilot-2 fail → iterate → pass arc reads at a
+transitions made explicit (a verified-answer fail → iterate → pass arc reads at a
 glance) — plus per-STEP token/duration attribution and a closing summary.
 The per-step number is the one an operator tunes on; in practice the judge
 step, not the answer step, eats most of the tokens. `stats` rolls the ledger
@@ -158,27 +159,50 @@ on terminal state or process exit. A crashed driver therefore never wedges
 a run.
 
 `npm test` never needs credentials, agents, or auth — agent executors are
-tested against deterministic fake workers and injected subprocess runners.
-The live Pilot 1 paths (`npm run pilot1`, `VERNIER_LIVE=1`) need whichever
-agent you bind — both steps default to `codex` (with `hermes` an optional
-route binding), but any wired provider can fill either role, and `vernier
-doctor` tells you what is usable. The implement step runs under sandbox
-`workspace-write` rooted at a throwaway scratch dir — the sandbox level is
-DERIVED from the step's `EffectScope` (no scope → read-only;
-danger-full-access is unconstructible from a loop declaration).
+tested against deterministic fake workers and injected subprocess runners,
+and the agent templates are driven with fakes through the same binding
+resolution the CLI uses. The live template paths (`VERNIER_LIVE=1 npm test
+-- coding-review.live` / `verified-answer.live` / `self-improving.live`)
+need whichever agent the bindings name — the shipped configs say codex, but
+any wired provider can fill any role, and `vernier doctor` tells you what
+is usable. Write-scoped steps run under sandbox `workspace-write` rooted at
+a throwaway scratch dir — the sandbox level is DERIVED from the step's
+`EffectScope` (no scope → read-only; danger-full-access is unconstructible
+from a loop declaration).
 
-Pilot 0 writes its workdir to `./.vernier/work` (pass a path as the first
-argument to override). Run journals land in `./.vernier/runs/<runId>/journal.jsonl`
-(override the root with `$VERNIER_HOME`); Pilot 1 also drops its evidence
-bundle (route JSON, codex transcript, rendered `trace.md`) in that run dir —
+Run journals land in `./.vernier/runs/<runId>/journal.jsonl` (override the
+root with `$VERNIER_HOME`); agent-driven loops also drop their evidence
+bundles (route JSON, transcripts, rendered prompts) in that run dir —
 runner-managed evidence lives OUTSIDE the workdir by construction, so effect
 attribution never excludes files by name.
+
+## Starter templates
+
+vernier ships **no built-in loops** — the registry is exactly what your
+config registers. `vernier init` scaffolds a starter into the current
+directory (config + loop module + README; it never overwrites existing
+files), and the scaffold is yours to edit:
+
+| template | loop id | teaches | needs |
+|---|---|---|---|
+| `smoke` | `control-plane-smoke-test` | the whole five-slot lifecycle, hand-rolled, nothing hidden | nothing — no agent, no auth |
+| `coding-review` | `plan-work-review` | an LLM route gate + a contract-checked artifact in a bounded fs scope | any wired agent (bindings ship on codex; `implement` needs codex or claude for enforced writes) |
+| `verified-answer` | `verified-answer` | independent judging + `until` iteration with feedback threading | any wired agent for `answer`; the judge runs on codex by default |
+| `self-improving` | `compounding-answer` | recall → answer → grade → distill → remember; memory compounds across runs | any wired agent for `answer`; judge/distill on codex by default |
+
+The agent templates name NO provider in the loop data: steps declare the
+binding target `agent`, and each scaffolded `vernier.config.json` carries
+the binding (`"bindings": { "answer": "codex" }`) — visible data you point
+at codex, claude, cursor-agent, opencode, or pi (`vernier doctor` says
+which are usable; providers without enforced write boundaries fail closed
+on write-scoped steps). Each template's README spells out its bindings and
+its honest provider caveats.
 
 ## Write your own loop
 
 The point of v1: your loops live in **your** repo, not this one. A config
 file registers loop modules, executor modules, and bindings; the CLI
-discovers it and merges it over the builtins. The executable version of
+discovers it and merges it into the registry. The executable version of
 everything below lives in
 [test/fixtures/user-config](test/fixtures/user-config) — the test suite
 runs it, so it cannot rot.
@@ -315,8 +339,8 @@ closed on write scopes); they do not sandbox the config itself. Do not point ver
 
 Self-improving loops compound through a durable rule store
 ([src/memory/memory.ts](src/memory/memory.ts)): an append-only
-`rules.jsonl` of distilled, VERIFIED rules — Pilot 3's `remember` step is
-only reachable after a passing grade, by loop shape. From the loop's
+`rules.jsonl` of distilled, VERIFIED rules — the self-improving template's
+`remember` step is only reachable after a passing grade, by loop shape. From the loop's
 perspective `recall`/`remember` stay deterministic store operations; HOW
 recall ranks the store is pluggable — the **Retriever** seam on `Memory`,
 three tiers:
@@ -412,9 +436,10 @@ mini-language parser needed (the design doc's §7 Python risk dissolves here).
   change attribution → `src/kernel/effects.ts`, `GitSnapshotter` semantics →
   the git-aware observer (`src/kernel/git-effects.ts`), `HermesCli` + route
   parsing → `src/executors/hermes.ts`, `dry-run-note.v1` + the inline route
-  approval check → `src/pilot1/contracts.ts`, the Pilot-1 prompts
-  (`rendering/prompts.py`, `build_retry_prompt`) → the prompt templates in
-  `src/pilot1/loop.ts`, and both pilots' loop definitions.
+  approval check and the Pilot-1 prompts
+  (`rendering/prompts.py`, `build_retry_prompt`) → the contracts and prompt
+  templates now shipped in `templates/coding-review/`, and the loop
+  definitions now shipped as the starter templates.
 - **New here**: the five-slot kernel types, the tick interpreter, the
   script executor, the ledger entry types for contracts/effects/decisions
   (the gap omegacode's journal has), the `CodexExecutor` AgentResult →

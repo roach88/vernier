@@ -1,9 +1,10 @@
-// LIVE Pilot 2: codex answer + independent codex judge, end-to-end through
-// tick(), producing a VALUE (no file effects — both steps run read-only).
-// Gated behind VERNIER_LIVE=1 so the default `npm test` stays green without
-// auth or network:
+// LIVE verified-answer template: codex answer + independent codex judge,
+// end-to-end through tick(), producing a VALUE (no file effects — both
+// steps run read-only), with the answer role resolved through the
+// template's SHIPPED config bindings. Gated behind VERNIER_LIVE=1 so the
+// default `npm test` stays green without auth or network:
 //
-//   VERNIER_LIVE=1 npm test -- pilot2.live
+//   VERNIER_LIVE=1 npm test -- verified-answer.live
 //
 // Requires an authed `codex` CLI on PATH. The judge holds the rubric; the
 // producer answers blind, so a first-iteration failure (and a real
@@ -13,23 +14,25 @@
 import { mkdtempSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
+import { bindExecutors } from "../src/cli/config.js"
 import { runLoop } from "../src/engine/tick.js"
 import { CodexExecutor } from "../src/executors/codex.js"
 import { JudgeExecutor } from "../src/executors/judge.js"
 import { executorRegistry } from "../src/executors/script.js"
 import { ContractRegistry } from "../src/kernel/contract.js"
 import { Ledger, journalPath } from "../src/ledger/ledger.js"
-import { verifiedAnswerLoop } from "../src/pilot2/loop.js"
+import { templateBindings, templateRegistration } from "./templates.js"
 
 const LIVE = process.env.VERNIER_LIVE === "1"
 
-describe.runIf(LIVE)("pilot 2 LIVE: verified-answer through tick()", () => {
+describe.runIf(LIVE)("verified-answer template LIVE: through tick()", () => {
   it(
     "produces an answer, grades it with the independent judge, and iterates until passed",
     async () => {
-      const workdir = mkdtempSync("/tmp/vernier-pilot2-live-")
-      const ledgerRoot = mkdtempSync("/tmp/vernier-pilot2-ledger-")
-      const loop = { ...verifiedAnswerLoop, ledger: { root: ledgerRoot } }
+      const registration = await templateRegistration("verified-answer", "verified-answer-loop.mjs")
+      const workdir = mkdtempSync("/tmp/vernier-verified-answer-live-")
+      const ledgerRoot = mkdtempSync("/tmp/vernier-verified-answer-ledger-")
+      const loop = bindExecutors({ ...registration.loop, ledger: { root: ledgerRoot } }, [templateBindings("verified-answer")])
 
       const answerer = new CodexExecutor()
       const judge = new JudgeExecutor()
@@ -61,8 +64,8 @@ describe.runIf(LIVE)("pilot 2 LIVE: verified-answer through tick()", () => {
         for (const e of entries) {
           if (e.type === "effects") expect(e.observation.changed).toEqual([])
         }
-        console.log(`[pilot2.live] iterations=${outcome.state.iteration} journal=${journalPath(ledgerRoot, outcome.state.runId)}`)
-        console.log(`[pilot2.live] answer:\n${String(outcome.output?.answer)}`)
+        console.log(`[verified-answer.live] iterations=${outcome.state.iteration} journal=${journalPath(ledgerRoot, outcome.state.runId)}`)
+        console.log(`[verified-answer.live] answer:\n${String(outcome.output?.answer)}`)
       } finally {
         await answerer.shutdown()
         await judge.shutdown()
