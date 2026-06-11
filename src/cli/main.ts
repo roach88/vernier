@@ -22,8 +22,10 @@ import { parseArgs } from "node:util"
 import { ZodError } from "zod"
 import { acquireLease, LeaseHeldError } from "../engine/lease.js"
 import { resumeRun, summarizeJournal, type JournalSummary } from "../engine/resume.js"
-import { driveRun, finalOutput, newRunId, startRun, tick, type Run, type TickOutcome } from "../engine/tick.js"
+import { driveRun, finalOutput, newRunId, startRun, tick, type EngineDeps, type Run, type TickOutcome } from "../engine/tick.js"
+import type { Executor, Loop } from "../kernel/types.js"
 import { journalPath, Ledger, resolveLedgerRoot, type LedgerEntry } from "../ledger/ledger.js"
+import { bindExecutors, ConfigError, loadConfig, type BindingLayer, type LoadedConfig } from "./config.js"
 import { loopRegistry, type LoopRuntime, type RegisteredLoop } from "./registry.js"
 
 const EXIT = { ok: 0, failed: 1, usage: 2, leaseHeld: 3 } as const
@@ -37,16 +39,32 @@ const json = (value: unknown): void => out(JSON.stringify(value, null, 2))
 const HELP = `looper — the loop is data; the ledger is append-only; resume is replay.
 
 USAGE
-  looper loops                                       list registered loops
+  looper loops                                       list registered loops (builtin + config)
   looper run <loopId> [--input '<json>'] [--input-file <path>] [--workdir <dir>]
+             [--executor <stepIdOrExecutorId>=<executorId>]...
                                                      start a run, drive to terminal
-  looper tick <runId> [--workdir <dir>]              advance ONE step from the ledger
-  looper resume <runId> [--workdir <dir>]            continue a run to terminal
+  looper tick <runId> [--workdir <dir>] [--executor ...]
+                                                     advance ONE step from the ledger
+  looper resume <runId> [--workdir <dir>] [--executor ...]
+                                                     continue a run to terminal
   looper runs                                        list runs under the ledger root
   looper show <runId>                                print a run's journal
 
 Every command accepts --json (machine output on stdout; diagnostics on stderr).
 Ledger root: $LOOPER_HOME, else ./.looper
+
+CONFIG
+  looper.config.{ts,js,mjs,json} — discovered from cwd upward (stops at the
+  repo root), or set $LOOPER_CONFIG. Registers user loops, user executors,
+  and executor bindings alongside the built-in pilots.
+  Trust: loading a config EXECUTES its code with this process's privileges —
+  the same trust you give any npm script.
+
+EXECUTOR BINDING
+  A step names an executor id; the implementation is resolved at run time:
+  --executor overrides > config bindings > the loop's declared default.
+  Keys may be a step id (binds that step) or an executor id (binds the role
+  everywhere it appears in the loop).
 
 EXIT CODES
   0 success   1 needs_human/stopped/failed   2 usage error   3 lease held`
@@ -58,6 +76,8 @@ interface Flags {
   readonly input?: string
   readonly inputFile?: string
   readonly workdir?: string
+  /** Repeatable --executor <stepIdOrExecutorId>=<executorId> overrides. */
+  readonly executor: readonly string[]
   readonly positionals: readonly string[]
 }
 
@@ -70,6 +90,7 @@ function parseFlags(args: readonly string[]): Flags {
         input: { type: "string" },
         "input-file": { type: "string" },
         workdir: { type: "string" },
+        executor: { type: "string", multiple: true },
         help: { type: "boolean", default: false },
       },
       allowPositionals: true,
@@ -84,11 +105,64 @@ function parseFlags(args: readonly string[]): Flags {
       ...(values.input !== undefined ? { input: values.input } : {}),
       ...(values["input-file"] !== undefined ? { inputFile: values["input-file"] } : {}),
       ...(values.workdir !== undefined ? { workdir: resolve(values.workdir) } : {}),
+      executor: values.executor ?? [],
       positionals,
     }
   } catch (error) {
     throw new UsageError(error instanceof Error ? error.message : String(error))
   }
+}
+
+/**
+ * Parse --executor overrides, strictly: a key must name a step id or an
+ * executor id the loop actually declares — a typo is a usage error, not a
+ * silent no-op. (Config bindings are the lenient layer: global, applied
+ * where they match.)
+ */
+function parseExecutorOverrides(pairs: readonly string[], loop: Loop): BindingLayer {
+  const map = new Map<string, string>()
+  if (pairs.length === 0) return map
+  const stepIds = [...new Set(loop.steps.map((s) => s.id))]
+  const executorIds = [...new Set(loop.steps.map((s) => s.executor))]
+  for (const pair of pairs) {
+    const eq = pair.indexOf("=")
+    if (eq <= 0 || eq === pair.length - 1) {
+      throw new UsageError(`--executor expects <stepIdOrExecutorId>=<executorId>, got \`${pair}\`.`)
+    }
+    const key = pair.slice(0, eq)
+    const value = pair.slice(eq + 1)
+    if (!stepIds.includes(key) && !executorIds.includes(key)) {
+      throw new UsageError(
+        `--executor \`${key}\` names no step or executor in \`${loop.id}\` (steps: ${stepIds.join(", ")}; executors: ${executorIds.join(", ")}).`,
+      )
+    }
+    map.set(key, value)
+  }
+  return map
+}
+
+/** Layered bindings for one invocation: CLI overrides first, then config bindings. */
+function bindingLayers(flags: Flags, loop: Loop, config: LoadedConfig | undefined): BindingLayer[] {
+  return [parseExecutorOverrides(flags.executor, loop), config?.bindings ?? new Map<string, string>()]
+}
+
+/** Config-registered executors merge OVER the entry's runtime set (the user's config is closest to the user's intent). */
+function withConfigExecutors(deps: EngineDeps, extra: readonly Executor[]): EngineDeps {
+  if (extra.length === 0) return deps
+  const executors = new Map(deps.executors)
+  for (const executor of extra) executors.set(executor.id, executor)
+  return { ...deps, executors }
+}
+
+/** Fail BEFORE the first journal write when a bound step names an executor nobody registered. */
+function assertExecutorsResolvable(loop: Loop, executors: ReadonlyMap<string, Executor>): void {
+  const missing = loop.steps.filter((s) => !executors.has(s.executor))
+  if (missing.length === 0) return
+  const detail = missing.map((s) => `step \`${s.id}\` -> executor \`${s.executor}\``).join("; ")
+  throw new UsageError(
+    `Unresolved executor binding(s): ${detail}. Registered executors: ${[...executors.keys()].join(", ")}. ` +
+      `Register the executor in looper.config (executors: [...]) or rebind with --executor <stepId>=<executorId>.`,
+  )
 }
 
 function lookupLoop(registry: ReadonlyMap<string, RegisteredLoop>, loopId: string | undefined): RegisteredLoop {
@@ -182,8 +256,8 @@ const terminalExit = (status: string): number => (status === "done" ? EXIT.ok : 
 
 // ----------------------------------------------------------------- commands
 
-function cmdLoops(flags: Flags): number {
-  const registry = loopRegistry()
+async function cmdLoops(flags: Flags): Promise<number> {
+  const registry = loopRegistry(await loadConfig())
   if (flags.json) {
     json(
       [...registry.values()].map((entry) => ({
@@ -193,13 +267,14 @@ function cmdLoops(flags: Flags): number {
         trust: entry.loop.trust,
         steps: entry.loop.steps.map((s) => s.id),
         live: entry.live,
+        source: entry.source,
         summary: entry.summary,
       })),
     )
     return EXIT.ok
   }
   for (const entry of registry.values()) {
-    out(`${entry.loop.id}@${entry.loop.version}  trust=${entry.loop.trust}${entry.live ? "  [live]" : ""}`)
+    out(`${entry.loop.id}@${entry.loop.version}  trust=${entry.loop.trust}  source=${entry.source}${entry.live ? "  [live]" : ""}`)
     out(`  ${entry.signature}`)
     out(`  ${entry.summary}`)
   }
@@ -207,21 +282,27 @@ function cmdLoops(flags: Flags): number {
 }
 
 async function cmdRun(flags: Flags): Promise<number> {
-  const registry = loopRegistry()
+  const config = await loadConfig()
+  const registry = loopRegistry(config)
   const entry = lookupLoop(registry, flags.positionals[0])
   const inputs = parseInputs(entry, flags)
+  // Resolve executor bindings BEFORE the run: the Loop stays declarative
+  // data — binding is a pure rewrite of step.executor ids at this layer.
+  const loop = bindExecutors(entry.loop, bindingLayers(flags, entry.loop, config))
   const workdir = flags.workdir ?? entry.defaultWorkdir()
   if (entry.live) note(`note: \`${entry.loop.id}\` drives live LLM CLIs; this requires authed binaries on PATH.`)
 
   // Lease BEFORE the first journal write: the run dir is leased from birth.
-  const runId = newRunId(entry.loop)
-  const runDir = dirname(journalPath(resolveLedgerRoot(entry.loop.ledger), runId))
+  const runId = newRunId(loop)
+  const runDir = dirname(journalPath(resolveLedgerRoot(loop.ledger), runId))
   const { lease } = acquireLease(runDir)
   let runtime: LoopRuntime | undefined
   try {
     runtime = entry.runtime(workdir)
-    const run = startRun(entry.loop, inputs, runtime.deps, { runId })
-    const outcome = await driveRun(run, runtime.deps)
+    const deps = withConfigExecutors(runtime.deps, config?.executors ?? [])
+    assertExecutorsResolvable(loop, deps.executors)
+    const run = startRun(loop, inputs, deps, { runId })
+    const outcome = await driveRun(run, deps)
     printOutcome(run, outcome, flags, { workdir })
     return terminalExit(outcome.state.status)
   } finally {
@@ -237,11 +318,11 @@ interface ResumeTarget {
   readonly workdir: string
 }
 
-function resumeTarget(flags: Flags): ResumeTarget {
+function resumeTarget(flags: Flags, registry: ReadonlyMap<string, RegisteredLoop>): ResumeTarget {
   const { runId, path, summary } = loadJournal(flags.positionals[0])
   const meta = summary.meta
   if (!meta) throw new UsageError(`Run \`${runId}\` has a journal but no meta entry; it cannot be resumed.`)
-  const entry = lookupLoop(loopRegistry(), meta.loopId)
+  const entry = lookupLoop(registry, meta.loopId)
   const workdir = flags.workdir ?? meta.workdir
   if (!workdir) {
     throw new UsageError(`Run \`${runId}\` predates workdir recording in the journal; pass --workdir <dir> (the dir the run originally used).`)
@@ -250,13 +331,20 @@ function resumeTarget(flags: Flags): ResumeTarget {
 }
 
 async function cmdTickOrResume(flags: Flags, mode: "tick" | "resume"): Promise<number> {
-  const target = resumeTarget(flags)
+  const config = await loadConfig()
+  const target = resumeTarget(flags, loopRegistry(config))
+  // Same binding resolution as `run`: completed steps replay from the
+  // ledger regardless (the resume key ignores the executor), so a rebind
+  // only affects steps that still have to execute.
+  const loop = bindExecutors(target.entry.loop, bindingLayers(flags, target.entry.loop, config))
   const { lease, tookOver } = acquireLease(target.runDir)
   if (tookOver) note(`note: took over a stale lease (pid ${tookOver.pid} on ${tookOver.host}, heartbeat ${tookOver.heartbeatAt}).`)
   let runtime: LoopRuntime | undefined
   try {
     runtime = target.entry.runtime(target.workdir)
-    const run = resumeRun(target.entry.loop, target.runId)
+    const deps = withConfigExecutors(runtime.deps, config?.executors ?? [])
+    assertExecutorsResolvable(loop, deps.executors)
+    const run = resumeRun(loop, target.runId)
     if (run.state.status !== "running") {
       const lastDecision = run.replayed?.lastDecision?.decision
       if (flags.json) {
@@ -273,7 +361,7 @@ async function cmdTickOrResume(flags: Flags, mode: "tick" | "resume"): Promise<n
       }
       return terminalExit(run.state.status)
     }
-    const outcome = mode === "tick" ? await tick(run, runtime.deps) : await driveRun(run, runtime.deps)
+    const outcome = mode === "tick" ? await tick(run, deps) : await driveRun(run, deps)
     printOutcome(run, outcome, flags, { workdir: target.workdir, resumed: true })
     return outcome.state.status === "running" ? EXIT.ok : terminalExit(outcome.state.status)
   } finally {
@@ -390,6 +478,11 @@ try {
   if (error instanceof UsageError) {
     note(`usage error: ${error.message}`)
     note(`run \`looper --help\` for the command surface.`)
+    process.exit(EXIT.usage)
+  }
+  if (error instanceof ConfigError) {
+    note(`config error: ${error.message}`)
+    note(`reminder: looper.config code runs with this process's full privileges — only load configs you trust.`)
     process.exit(EXIT.usage)
   }
   if (error instanceof LeaseHeldError) {

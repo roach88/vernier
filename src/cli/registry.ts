@@ -7,6 +7,12 @@
 // `looper resume <runId>` can reconstruct the same deps the original driver
 // used. Executor construction is lazy where it matters: CodexWorker spawns
 // its app-server on first runAgent(), so listing loops costs nothing.
+//
+// User loops arrive through looper.config (cli/config.ts) and merge in here
+// with `source` naming where they came from; the in-tree pilots stay
+// registered as examples. Executor BINDING is resolved before a run starts
+// (config.ts bindExecutors) — the registry maps ids to implementations, the
+// binding decides which id a step resolves to.
 
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
@@ -28,6 +34,7 @@ import { dryRunNoteV1, routeDecisionV1 } from "../pilot1/contracts.js"
 import { planWorkReviewLoop } from "../pilot1/loop.js"
 import { verifiedAnswerLoop } from "../pilot2/loop.js"
 import { compoundingAnswerLoop } from "../pilot3/loop.js"
+import { ConfigError, type LoadedConfig, type LoopRegistration } from "./config.js"
 
 export interface LoopRuntime {
   readonly deps: EngineDeps
@@ -40,6 +47,8 @@ export interface RegisteredLoop {
   /** Human-readable `in -> out` (zod schemas don't render themselves). */
   readonly signature: string
   readonly summary: string
+  /** Where the loop came from: "builtin", or the config/module path that registered it. */
+  readonly source: string
   /** True when the loop drives live LLM CLIs — `looper run` warns; the test suite never runs these. */
   readonly live: boolean
   /** Inputs used when `looper run` gets no --input. Omitted = inputs are required. */
@@ -49,6 +58,8 @@ export interface RegisteredLoop {
   /** Build the runtime deps rooted at a workdir, preparing the workdir as the loop expects. */
   runtime(workdir: string): LoopRuntime
 }
+
+const BUILTIN = "builtin"
 
 const noShutdown = async (): Promise<void> => {}
 
@@ -61,6 +72,7 @@ function smokeEntry(): RegisteredLoop {
     loop: controlPlaneSmokeLoop,
     signature: "jobName:string, upstreamChanged?:boolean -> ok:boolean, trace:path",
     summary: "Pilot 0: deterministic no-agent control-plane smoke (gateway/job/no-op/trace/delivery).",
+    source: BUILTIN,
     live: false,
     defaultInputs: { jobName: "watch-every-compound-engineering-upstream" },
     defaultWorkdir() {
@@ -85,7 +97,9 @@ function planWorkReviewEntry(): RegisteredLoop {
   return {
     loop: planWorkReviewLoop,
     signature: "task:string -> artifact:path, verdict:string",
-    summary: "Pilot 1: hermes routes, codex implements a contract-checked dry-run note (LIVE codex + hermes).",
+    summary:
+      "Pilot 1: an LLM router gates, codex implements a contract-checked dry-run note (LIVE; route + implement default to codex — bind route=hermes to route on hermes).",
+    source: BUILTIN,
     live: true,
     defaultWorkdir: () => scratchDir("plan-work-review"),
     runtime(workdir) {
@@ -114,6 +128,7 @@ function verifiedAnswerEntry(): RegisteredLoop {
     loop: verifiedAnswerLoop,
     signature: "goal:string, rubric:string -> answer:string, verdict:string",
     summary: "Pilot 2: codex answers, an independent judge grades, until passed (LIVE codex).",
+    source: BUILTIN,
     live: true,
     defaultWorkdir: () => scratchDir("verified-answer"),
     runtime(workdir) {
@@ -139,6 +154,7 @@ function compoundingAnswerEntry(): RegisteredLoop {
     loop: compoundingAnswerLoop,
     signature: "goal:string, rubric:string -> answer:string, verdict:string, learnedRule:string",
     summary: "Pilot 3: recall -> answer -> grade -> distill -> remember; memory compounds across runs (LIVE codex).",
+    source: BUILTIN,
     live: true,
     defaultWorkdir: () => scratchDir("compounding-answer"),
     runtime(workdir) {
@@ -166,11 +182,56 @@ function compoundingAnswerEntry(): RegisteredLoop {
   }
 }
 
-export function loopRegistry(): ReadonlyMap<string, RegisteredLoop> {
+/**
+ * A user loop from looper.config, behind the same RegisteredLoop seam as
+ * the pilots. The default runtime hands it the full built-in executor set
+ * (construction is lazy — nothing spawns until a step actually runs on it)
+ * plus whatever the registration brings; `runtime` on the registration
+ * overrides all of that for full control.
+ */
+function userEntry(reg: LoopRegistration, source: string): RegisteredLoop {
+  return {
+    loop: reg.loop,
+    signature: reg.signature ?? "(zod signature; see the loop module)",
+    summary: reg.summary ?? `User loop \`${reg.loop.id}\`.`,
+    source,
+    live: reg.live ?? false,
+    ...(reg.defaultInputs !== undefined ? { defaultInputs: reg.defaultInputs } : {}),
+    defaultWorkdir: reg.defaultWorkdir ?? (() => scratchDir(reg.loop.id)),
+    runtime(workdir) {
+      if (reg.runtime) return reg.runtime(workdir)
+      const codex = new CodexExecutor()
+      const judge = new JudgeExecutor()
+      const contracts = defaultContractRegistry()
+      for (const contract of reg.contracts ?? []) contracts.register(contract)
+      return {
+        deps: {
+          executors: executorRegistry(codex, judge, new HermesExecutor(), recallExecutor, rememberExecutor, ...(reg.executors ?? [])),
+          contracts,
+          workdir,
+          ...(reg.observer === "git" ? { observer: gitObserver } : {}),
+          memory: new Memory(rulesPath(resolveMemoryRoot({}))),
+        },
+        shutdown: async () => {
+          await codex.shutdown()
+          await judge.shutdown()
+        },
+      }
+    },
+  }
+}
+
+export function loopRegistry(config?: LoadedConfig): ReadonlyMap<string, RegisteredLoop> {
   const entries = [smokeEntry(), planWorkReviewEntry(), verifiedAnswerEntry(), compoundingAnswerEntry()]
+  for (const { registration, source } of config?.loops ?? []) entries.push(userEntry(registration, source))
   const map = new Map<string, RegisteredLoop>()
   for (const entry of entries) {
-    if (map.has(entry.loop.id)) throw new Error(`Duplicate loop id \`${entry.loop.id}\` in the registry.`)
+    const existing = map.get(entry.loop.id)
+    if (existing) {
+      throw new ConfigError(
+        `Duplicate loop id \`${entry.loop.id}\` (registered by ${existing.source} and ${entry.source}). Rename one of them.`,
+      )
+    }
     map.set(entry.loop.id, entry)
   }
   return map

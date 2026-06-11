@@ -1,0 +1,4 @@
+{
+  "loops": ["./echo-loop.mjs"],
+  "executors": ["./reverse-executor.mjs"]
+}

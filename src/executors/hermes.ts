@@ -8,7 +8,11 @@
 // value. Whether the route is APPROVED is not decided here — that is the
 // route-decision contract's job (the gate semantics are loop data, not
 // executor behavior). In the five-slot model the router is not special;
-// it is the first Step.
+// it is the first Step — and hermes is not special either: it is ONE
+// binding for the route role (pilot-1 defaults to codex; bind
+// `--executor route=hermes` to use this). Field mapping tolerates both
+// snake_case (the Python-era prompt) and camelCase (the current
+// provider-agnostic prompt), so either prompt generation works.
 //
 // Evidence mirrors the Python task bundle: route-prompt.md, route-raw.txt,
 // route-decision.json under StepSpec.runDir.
@@ -141,8 +145,8 @@ export class HermesExecutor implements Executor {
     return {
       status: "completed",
       output: {
-        gateDecision: String(route.gate_decision ?? ""),
-        routeToWorker: route.route_to_worker === true,
+        gateDecision: String(route.gate_decision ?? route.gateDecision ?? ""),
+        routeToWorker: route.route_to_worker === true || route.routeToWorker === true,
         worker: String(route.worker ?? ""),
         reason: String(route.reason ?? ""),
         route,

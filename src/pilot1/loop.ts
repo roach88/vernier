@@ -2,12 +2,22 @@
 //
 // Mirrors the frozen Python spec's executable facts (docs/agent-workflows/
 // definitions/loops/plan-work-review.toml + policies/plan-work-review.retry.toml):
-//   worker = codex, orchestrator = hermes, contract = dry-run-note.v1,
+//   worker = codex, contract = dry-run-note.v1,
 //   allowed worker artifact root = docs/agent-workflows,
 //   retry policy = max 2 worker attempts, auto-execute, escalate to needs_human.
 // The 833-line RunLoop.run() sequence (route -> render prompt -> snapshot ->
 // exec -> diff -> validate -> decide -> maybe retry once) is no longer code;
 // it is this declaration plus the generic tick interpreter.
+//
+// THE ROUTE ROLE IS PROVIDER-AGNOSTIC. The Python spec hardwired
+// orchestrator = hermes; here the route step is just "an LLM gate that
+// returns route-decision JSON" — its prompt plus the route-decision.v1
+// contract are the whole role. Any structured-output-capable executor can
+// fill it (`structuredOutput: true` hands the executor a JSON Schema
+// derived from the step's zod output signature). The DEFAULT binding is
+// codex for both steps, so `looper run plan-work-review` needs only one
+// authed CLI; rebind with `--executor route=hermes` (or config bindings)
+// to route on hermes — it is one binding among many, not a requirement.
 //
 // Prompt templates are ported from agent_workflows/rendering/prompts.py
 // (build_route_prompt / build_codex_prompt) and dynamic_workflow_harness.py
@@ -17,12 +27,12 @@ import { z } from "zod"
 import { artifactFromEffects } from "../kernel/effects.js"
 import type { Policy } from "../kernel/policy.js"
 import { retryPolicy } from "../kernel/policy.js"
-import { fsScope, noEffects, sig, type Loop, type PromptTemplate } from "../kernel/types.js"
+import { fsScope, noEffects, sig, type Loop, type OutputProjection, type PromptTemplate } from "../kernel/types.js"
 import { ALLOWED_WORKER_ROOT, DRY_RUN_NOTE_V1, ROUTE_DECISION_V1, expectedArtifactPath } from "./contracts.js"
 
 const LOOP_ID = "plan-work-review"
-const LOOP_VERSION = "0.2.0" // TS re-expression of the Python 0.1.0 definition
-const ORCHESTRATOR = "hermes"
+const LOOP_VERSION = "0.3.0" // 0.2.0 + provider-agnostic route role (default binding: codex)
+const ROUTER = "codex" // the route step's DEFAULT binding — overridable per run, not a requirement
 const WORKER = "codex"
 
 // ------------------------------------------------------------------ prompts
@@ -35,7 +45,7 @@ Do not use tools. Do not edit files. Return compact JSON only, no markdown.
 Loop card summary:
 - loop_id: ${spec.loopId}
 - loop_version: ${spec.loopVersion}
-- orchestrator: ${ORCHESTRATOR} for routing and stop/retry policy
+- router: this step (an LLM gate returning route-decision JSON; the engine, not you, applies stop/retry policy)
 - worker: ${WORKER}
 - mutation authority: workspace docs under ${ALLOWED_WORKER_ROOT} (workdir-relative)
 - forbidden: global agent config edits, scheduler activation, remote writes, secret inspection
@@ -49,7 +59,7 @@ Expected worker artifact:
 ${expectedArtifactPath(spec.traceId)}
 
 Return JSON fields:
-gate_decision, route_to_worker, worker, allowed_mutation, required_evidence, stop_conditions, trace_expectations, reason.
+gateDecision (approve|reject), routeToWorker (boolean), worker (the worker name above), reason (one sentence).
 `
 }
 
@@ -89,7 +99,7 @@ Rules:
   const route = spec.inputs.route ?? {}
   return `You are the ${WORKER} worker for loop \`${spec.loopId}\`.
 
-${ORCHESTRATOR} route decision:
+Approved route decision:
 \`\`\`json
 ${JSON.stringify(route, null, 2)}
 \`\`\`
@@ -119,7 +129,7 @@ Required content for the expected artifact:
 - Title with trace id \`${spec.traceId}\`.
 - The loop id \`${spec.loopId}\` and loop version \`${spec.loopVersion}\`.
 - The worker name \`${WORKER}\`.
-- A short statement that ${ORCHESTRATOR} approved the route and ${WORKER} executed the worker pass.
+- A short statement that the router approved the route and ${WORKER} executed the worker pass.
 - The bundle path \`${spec.runDir}\`.
 - The artifact path \`${expected}\`.
 - A verification note saying the runner will validate the artifact and write the trace.
@@ -160,13 +170,35 @@ export const planWorkReviewPolicy: Policy = (obs) => {
 
 // --------------------------------------------------------------------- loop
 
+/**
+ * `route` (the raw decision record threaded to the implement prompt) is
+ * optional in the schema because the engine derives it when the executor
+ * does not report one — see routeRecord below. Executors that surface the
+ * raw parsed JSON (hermes) keep theirs; structured-output executors (codex,
+ * a judge, a config-registered agent) just emit the four decision fields.
+ */
 const routeOutput = z.object({
   gateDecision: z.string(),
   routeToWorker: z.boolean(),
   worker: z.string(),
   reason: z.string(),
-  route: z.record(z.unknown()),
+  route: z.record(z.unknown()).optional(),
 })
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+/**
+ * OutputProjection for the route step: when the executor reported no raw
+ * route record, the decision fields ARE the record. Deterministic — no
+ * second model turn, no executor-specific shape leaking into the loop.
+ */
+const routeRecord: OutputProjection = ({ output }) => {
+  if (isRecord(output.route) && Object.keys(output.route).length > 0) return {}
+  const { route: _route, ...fields } = output
+  return { route: fields }
+}
 
 /**
  * `artifact` is not model-reported: the engine derives it from effect
@@ -186,11 +218,15 @@ export const planWorkReviewLoop: Loop<{ task: string }, { artifact: string; verd
     {
       id: "route",
       signature: sig(z.object({ task: z.string() }), routeOutput),
-      executor: ORCHESTRATOR, // an LLM gate is just a step
+      executor: ROUTER, // an LLM gate is just a step; the id is a DEFAULT binding, resolved at the CLI/registry layer
       contract: ROUTE_DECISION_V1,
       effects: noEffects(), // the router may touch nothing
       prompt: routePrompt,
-      timeoutMs: 60_000, // Python hermes_timeout = 60
+      outputFrom: routeRecord,
+      // Any structured-output-capable executor can fill the route role: the
+      // engine derives the JSON Schema from routeOutput (one source of truth).
+      structuredOutput: true,
+      timeoutMs: 60_000, // Python hermes_timeout = 60 (codex routing reuses the same budget)
     },
     {
       id: "implement",

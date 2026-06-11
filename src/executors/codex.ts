@@ -4,9 +4,10 @@
 // stdio) and maps its AgentResult onto the kernel's StepResult honestly:
 //
 //   AgentResult.text        -> output.text (or evidence-only when structured)
-//   AgentResult.structured  -> output (only if a spec sets the outputSchema
-//                              escape hatch; no v1 step does — deterministic
-//                              fields come from effect attribution instead)
+//   AgentResult.structured  -> output (when a spec sets the outputSchema
+//                              escape hatch — e.g. pilot-1's route step;
+//                              deterministic fields still come from effect
+//                              attribution instead)
 //   AgentResult.status      -> StepResult.status        (same closed set)
 //   AgentResult.usage       -> StepResult.usage (+ wall-clock durationMs)
 //   AgentError / AgentInterrupted -> status "failed" / "interrupted",

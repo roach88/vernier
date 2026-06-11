@@ -1,14 +1,19 @@
 // Pilot 1 (plan-work-review) through the generic tick interpreter with
-// FAKE executors behind the same ids the live run uses ("hermes",
-// "codex") — the loop declaration cannot tell the difference, which is
-// the agent-agnosticism claim in test form. Covers: the contract-pass
-// path, the route-rejected path (needs_human, no retry — Python parity),
-// and the contract-FAIL -> retry -> escalate path.
+// FAKE executors — the loop declaration cannot tell the difference, which
+// is the agent-agnosticism claim in test form. The loop's DEFAULT binding
+// runs route AND implement on "codex"; most suites here rebind route onto
+// the fake "hermes" (the original cast) via bindExecutors — the same
+// resolution the CLI applies. Covers: the contract-pass path, the
+// route-rejected path (needs_human, no retry — Python parity), the
+// contract-FAIL -> retry -> escalate path, the provider-agnostic route
+// role (a non-hermes structured fake fills it), and the codex-only
+// default (one executor id serves both steps).
 
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { describe, expect, it } from "vitest"
+import { bindExecutors } from "../src/cli/config.js"
 import { runLoop, startRun, tick, type EngineDeps } from "../src/engine/tick.js"
 import { defaultContractRegistry } from "../src/kernel/contract.js"
 import type { StepSpec } from "../src/kernel/types.js"
@@ -26,7 +31,8 @@ function setup(ledgerRoot?: string) {
   return {
     workdir,
     ledgerRoot: ledgerRoot ?? join(root, "ledger"),
-    loop: (lr: string) => ({ ...planWorkReviewLoop, ledger: { root: lr } }),
+    // The original cast: route on hermes (a binding now, not the default).
+    loop: (lr: string) => bindExecutors({ ...planWorkReviewLoop, ledger: { root: lr } }, [new Map([["route", "hermes"]])]),
   }
 }
 
@@ -234,7 +240,8 @@ describe("pilot 1: plan-work-review through tick()", () => {
     const routePrompt = route!.prompt!({ ...base, stepId: "route", inputs: { task: TASK } })
     expect(routePrompt).toContain("control-plane router")
     expect(routePrompt).toContain(expectedArtifactPath("plan-work-review-test"))
-    expect(routePrompt).toContain("gate_decision, route_to_worker, worker")
+    expect(routePrompt).toContain("gateDecision")
+    expect(routePrompt).toContain("routeToWorker")
 
     const implPrompt = implement!.prompt!({ ...base, stepId: "implement", inputs: { task: TASK, route: { gate_decision: "approve" } } })
     expect(implPrompt).toContain("## Improvement Candidate")
@@ -249,5 +256,73 @@ describe("pilot 1: plan-work-review through tick()", () => {
     expect(retryPrompt).toContain("worker retry")
     expect(retryPrompt).toContain("dry-run-note.v1")
     expect(retryPrompt).toContain("trace id recorded — expected `plan-work-review-test`")
+  })
+
+  it("route role is provider-agnostic: a NON-hermes structured-output fake fills the gate", async () => {
+    const { workdir, ledgerRoot } = setup()
+    // Some other vendor's agent — not hermes, not codex. It receives the JSON
+    // Schema the engine derives from the step's zod output signature (the
+    // route step declares structuredOutput) and emits ONLY the four decision
+    // fields: no hermes-shaped raw `route` record anywhere.
+    let seenSchema: Record<string, unknown> | undefined
+    const otherVendor = scriptExecutor("some-other-agent", (spec) => {
+      seenSchema = spec.outputSchema
+      return { output: { gateDecision: "approve", routeToWorker: true, worker: "codex", reason: "Narrow, local, reviewable." } }
+    })
+    let seenRoute: unknown
+    const worker = scriptExecutor("codex", (spec, ctx) => {
+      seenRoute = spec.inputs.route
+      const absolute = join(ctx.workdir, expectedArtifactPath(spec.traceId))
+      mkdirSync(dirname(absolute), { recursive: true })
+      writeFileSync(absolute, conformingNote(spec), "utf8")
+      return { output: { text: "ok" } }
+    })
+    const loop = bindExecutors({ ...planWorkReviewLoop, ledger: { root: ledgerRoot } }, [new Map([["route", "some-other-agent"]])])
+
+    const outcome = await runLoop(loop, { task: TASK }, deps(workdir, [otherVendor, worker]))
+
+    expect(outcome.state.status).toBe("done")
+    expect(outcome.output?.verdict).toBe("success")
+    // The structured-output seam delivered the schema derived from routeOutput…
+    expect(seenSchema).toBeDefined()
+    const properties = Object.keys((seenSchema as { properties?: Record<string, unknown> }).properties ?? {})
+    expect(properties).toEqual(expect.arrayContaining(["gateDecision", "routeToWorker", "worker", "reason"]))
+    // …and the routeRecord projection derived the route record from the
+    // decision fields, so the data plane works without any executor-specific shape.
+    expect(seenRoute).toMatchObject({ gateDecision: "approve", routeToWorker: true })
+  })
+
+  it("executor resolution: a CLI --executor layer outranks config bindings and the loop default", async () => {
+    const { workdir, ledgerRoot } = setup()
+    const ran: string[] = []
+    const decision = { gateDecision: "approve", routeToWorker: true, worker: "codex", reason: "Narrow, local, reviewable." }
+    const cliRouter = scriptExecutor("cli-router", () => {
+      ran.push("cli-router")
+      return { output: decision }
+    })
+    const configRouter = scriptExecutor("config-router", () => {
+      ran.push("config-router")
+      return { output: decision }
+    })
+    const worker = scriptExecutor("codex", (spec, ctx) => {
+      ran.push("codex")
+      const absolute = join(ctx.workdir, expectedArtifactPath(spec.traceId))
+      mkdirSync(dirname(absolute), { recursive: true })
+      writeFileSync(absolute, conformingNote(spec), "utf8")
+      return { output: { text: "ok" } }
+    })
+    // Exactly the layers cmdRun builds: CLI --executor route=cli-router first,
+    // config bindings { route: config-router } second; implement stays unbound.
+    const layers = [new Map([["route", "cli-router"]]), new Map([["route", "config-router"]])]
+    const loop = bindExecutors({ ...planWorkReviewLoop, ledger: { root: ledgerRoot } }, layers)
+
+    const outcome = await runLoop(loop, { task: TASK }, deps(workdir, [cliRouter, configRouter, worker]))
+
+    expect(outcome.state.status).toBe("done")
+    expect(outcome.output?.verdict).toBe("success")
+    // route ran on the CLI binding — the config layer and the loop's declared
+    // default were both shadowed; implement, bound by nothing, fell through
+    // to the loop default. The config-bound router never ran at all.
+    expect(ran).toEqual(["cli-router", "codex"])
   })
 })

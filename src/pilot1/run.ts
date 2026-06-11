@@ -14,6 +14,7 @@
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
+import { bindExecutors } from "../cli/config.js"
 import { runLoop } from "../engine/tick.js"
 import { defaultContractRegistry } from "../kernel/contract.js"
 import { gitObserver } from "../kernel/git-effects.js"
@@ -23,6 +24,11 @@ import { HermesExecutor } from "../executors/hermes.js"
 import { executorRegistry } from "../executors/script.js"
 import { dryRunNoteV1, routeDecisionV1 } from "./contracts.js"
 import { planWorkReviewLoop } from "./loop.js"
+
+// This demo preserves the original cast — hermes routes, codex implements.
+// The loop's DEFAULT binding routes on codex (no required providers); the
+// rebind below is the binding seam in action, not a requirement.
+const loop = bindExecutors(planWorkReviewLoop, [new Map([["route", "hermes"]])])
 
 // --- scratch workdir: fresh git repo, docs/agent-workflows skeleton -------
 const workdir = process.argv[2]
@@ -58,7 +64,7 @@ console.log(`task      ${task}`)
 console.log("--- running (hermes route, then live codex implement) ---")
 
 const startedAt = new Date()
-const outcome = await runLoop(planWorkReviewLoop, { task }, deps, { runId: traceId })
+const outcome = await runLoop(loop, { task }, deps, { runId: traceId })
 const finishedAt = new Date()
 await codex.shutdown()
 
