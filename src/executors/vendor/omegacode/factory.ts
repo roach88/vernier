@@ -2,10 +2,12 @@
 // https://github.com/SawyerHood/omegacode — MIT License, Copyright (c) 2026 Sawyer Hood.
 // See LICENSE in this directory and the repository NOTICE file.
 // Local adaptations: imports of "../dsl/types.js" point at "./types.js"; the
-// claude-code / opencode / pi branches return notImplemented() instead of
-// constructing their workers — those adapters are vendored alongside this file
-// but not yet wired into looper (claude.ts additionally needs the
-// @anthropic-ai/claude-agent-sdk dependency, which looper does not carry yet).
+// claude-code branch returns notImplemented() instead of constructing its
+// worker — claude.ts statically imports @anthropic-ai/claude-agent-sdk (an
+// OPTIONAL peer), so constructing it here would force the SDK onto every
+// factory importer; looper wires claude at the executor layer instead
+// (src/executors/claude.ts, lazy dynamic import). codex / cursor-agent /
+// opencode / pi construct their real workers.
 
 import type { ProviderId } from "./types.js"
 import { type Worker, type WorkerFactory } from "./index.js"
@@ -13,6 +15,8 @@ import { notImplemented } from "./errors.js"
 import { FakeWorker } from "./fake.js"
 import { CodexWorker } from "./codex.js"
 import { CursorWorker } from "./cursor.js"
+import { OpencodeWorker } from "./opencode.js"
+import { PiWorker } from "./pi.js"
 import type { SpawnProcess } from "./subprocess-jsonl.js"
 
 export interface FactoryOpts {
@@ -23,6 +27,12 @@ export interface FactoryOpts {
   cursorConfigDir?: string
   cursorSpawnProcess?: SpawnProcess
   cursorStallTimeoutMs?: number
+  opencodeBin?: string
+  opencodeSpawnProcess?: SpawnProcess
+  opencodeStallTimeoutMs?: number
+  piBin?: string
+  piSpawnProcess?: SpawnProcess
+  piStallTimeoutMs?: number
 }
 
 export class DefaultWorkerFactory implements WorkerFactory {
@@ -50,11 +60,21 @@ export class DefaultWorkerFactory implements WorkerFactory {
           ...(this.opts.cursorSpawnProcess !== undefined ? { spawnProcess: this.opts.cursorSpawnProcess } : {}),
           ...(this.opts.cursorStallTimeoutMs !== undefined ? { stallTimeoutMs: this.opts.cursorStallTimeoutMs } : {}),
         })
-      case "claude-code":
       case "opencode":
+        return new OpencodeWorker({
+          ...(this.opts.opencodeBin !== undefined ? { bin: this.opts.opencodeBin } : {}),
+          ...(this.opts.opencodeSpawnProcess !== undefined ? { spawnProcess: this.opts.opencodeSpawnProcess } : {}),
+          ...(this.opts.opencodeStallTimeoutMs !== undefined ? { stallTimeoutMs: this.opts.opencodeStallTimeoutMs } : {}),
+        })
       case "pi":
-        // Vendored but not yet wired in looper — codex is the only live
-        // provider this step. The adapters sit next door when their turn comes.
+        return new PiWorker({
+          ...(this.opts.piBin !== undefined ? { bin: this.opts.piBin } : {}),
+          ...(this.opts.piSpawnProcess !== undefined ? { spawnProcess: this.opts.piSpawnProcess } : {}),
+          ...(this.opts.piStallTimeoutMs !== undefined ? { stallTimeoutMs: this.opts.piStallTimeoutMs } : {}),
+        })
+      case "claude-code":
+        // Wired at looper's executor layer instead (lazy optional-peer SDK);
+        // constructing ClaudeWorker here would statically drag the SDK in.
         return notImplemented(id)
     }
   }

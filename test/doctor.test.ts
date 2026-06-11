@@ -54,6 +54,8 @@ describe("diagnose()", () => {
 
     expect(executorById(report, "codex")).toMatchObject({ ok: false, requires: "codex" })
     expect(executorById(report, "cursor-agent")).toMatchObject({ ok: false, requires: "cursor-agent" })
+    expect(executorById(report, "opencode")).toMatchObject({ ok: false, requires: "opencode" })
+    expect(executorById(report, "pi")).toMatchObject({ ok: false, requires: "pi" })
     expect(executorById(report, "claude")).toMatchObject({ ok: false, requires: CLAUDE_SDK })
     expect(executorById(report, "claude")?.detail).toContain(`npm install ${CLAUDE_SDK}`)
     expect(executorById(report, "judge")).toMatchObject({ ok: false, requires: "codex" })
@@ -156,18 +158,20 @@ async function cli(env: { home: string; path: string; cwd?: string }, ...args: s
 
 const home = (): string => mkdtempSync(join(tmpdir(), "looper-doctor-cli-"))
 
-/** An inert executable named `codex` that doctor may FIND but never runs. */
-function codexShimDir(): string {
+/** Inert executables (codex, opencode, …) that doctor may FIND but never runs. */
+function shimDir(...names: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), "looper-doctor-shim-"))
-  const shim = join(dir, "codex")
-  writeFileSync(shim, "#!/bin/sh\nexit 0\n", "utf8")
-  chmodSync(shim, 0o755)
+  for (const name of names) {
+    const shim = join(dir, name)
+    writeFileSync(shim, "#!/bin/sh\nexit 0\n", "utf8")
+    chmodSync(shim, 0o755)
+  }
   return dir
 }
 
 describe("looper doctor (CLI)", () => {
   it("exit 0 + full --json report when every registered loop is runnable (codex shim on PATH)", async () => {
-    const shims = codexShimDir()
+    const shims = shimDir("codex")
     const result = await cli({ home: home(), path: basePath(shims) }, "doctor", "--json")
     expect(result.code).toBe(0)
     const report = JSON.parse(result.stdout) as DoctorReport
@@ -177,6 +181,17 @@ describe("looper doctor (CLI)", () => {
     expect(executorById(report, "codex")).toMatchObject({ ok: true, detail: expect.stringContaining(shims) })
     expect(executorById(report, "claude")?.ok).toBe(true) // the devDependency SDK is resolvable in this repo
     expect(executorById(report, "cursor-agent")?.ok).toBe(false) // reported, but no step resolves to it
+    expect(executorById(report, "opencode")?.ok).toBe(false) // reported, but no step resolves to it
+    expect(executorById(report, "pi")?.ok).toBe(false) // reported, but no step resolves to it
+  })
+
+  it("probes the opencode and pi binaries by PATH lookup only (shims found, never executed)", async () => {
+    const shims = shimDir("codex", "opencode", "pi")
+    const result = await cli({ home: home(), path: basePath(shims) }, "doctor", "--json")
+    expect(result.code).toBe(0)
+    const report = JSON.parse(result.stdout) as DoctorReport
+    expect(executorById(report, "opencode")).toMatchObject({ ok: true, requires: "opencode", detail: expect.stringContaining(shims) })
+    expect(executorById(report, "pi")).toMatchObject({ ok: true, requires: "pi", detail: expect.stringContaining(shims) })
   })
 
   it("exit 1 when agent-driven loops are blocked (bare PATH), with the missing binary named per step", async () => {

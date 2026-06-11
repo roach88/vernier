@@ -31,6 +31,8 @@ import { CodexExecutor } from "../executors/codex.js"
 import { CursorExecutor } from "../executors/cursor.js"
 import { HermesExecutor } from "../executors/hermes.js"
 import { JudgeExecutor } from "../executors/judge.js"
+import { OpencodeExecutor } from "../executors/opencode.js"
+import { PiExecutor } from "../executors/pi.js"
 import type { Executor } from "../kernel/types.js"
 import { resolveExecutorId, type BindingLayer, type LoadedConfig } from "./config.js"
 import type { RegisteredLoop } from "./registry.js"
@@ -132,9 +134,13 @@ function checkExecutor(executor: Executor, fromConfig: boolean, probes: DoctorPr
       ? "codex" // JudgeExecutor drives a CodexWorker by default
       : executor instanceof CursorExecutor
         ? "cursor-agent"
-        : executor instanceof HermesExecutor
-          ? "hermes"
-          : null
+        : executor instanceof OpencodeExecutor
+          ? "opencode"
+          : executor instanceof PiExecutor
+            ? "pi"
+            : executor instanceof HermesExecutor
+              ? "hermes"
+              : null
   if (bin !== null) {
     const found = probes.which(bin)
     return {

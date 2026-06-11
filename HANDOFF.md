@@ -45,9 +45,10 @@ special-casing**. That generality is the whole point; protect it.
 | Unit | Commit | What landed |
 |---|---|---|
 | 1 | `a7fb042` | Out-of-tree loops (`looper.config.{ts,js,mjs,json}`, discovery + `$LOOPER_CONFIG`), any-agent-any-role executor bindings (`--executor` > config `bindings` > loop default), multi-file artifacts (`artifactsFromEffects`) |
-| 2 | this commit | Shippability: build pipeline (tsc → `dist/`, compiled bin under plain node), `@roach88/looper` package surface (root export + types, files/exports), MIT LICENSE, `looper doctor`, claude executor wired (lazy optional-peer SDK), README tutorial |
+| 2 | `9f6f1b1` | Shippability: build pipeline (tsc → `dist/`, compiled bin under plain node), `@roach88/looper` package surface (root export + types, files/exports), MIT LICENSE, `looper doctor`, claude executor wired (lazy optional-peer SDK), README tutorial |
+| 3 | this commit | Breadth: opencode + pi executors wired (write scopes fail closed — the providers expose no enforceable sandbox; effect-free steps run on their only mode), vendored factory flipped to the real workers, doctor probes both binaries |
 
-**Health:** `npx tsc --noEmit` clean · `npm test` → 191 passed / 5 gated-live
+**Health:** `npx tsc --noEmit` clean · `npm test` → 210 passed / 7 gated-live
 skipped (auth-free) · `npm run build` green · `npm pack` installs and runs in
 a fresh consumer project without tsx or the claude SDK.
 
@@ -56,12 +57,12 @@ a fresh consumer project without tsx or the claude SDK.
 - `src/engine/` — `tick.ts` (the interpreter + replay-by-key), `resume.ts` (decision-fold reconstruction), `lease.ts` (file-based run lease)
 - `src/ledger/ledger.ts` — append-only `journal.jsonl`; resume key `loop-v2`
 - `src/memory/memory.ts` — append-only rule store; keyword/topic recall
-- `src/executors/` — `script`, `codex`, `cursor` (read-only steps), `claude` (lazy SDK), `hermes`, `judge`, `memory`, `evidence`; `vendor/omegacode/` (MIT — see `NOTICE`; opencode/pi vendored-unwired)
-- `src/cli/` — `main.ts` (commands), `registry.ts` (builtin pilots + user entries; `wiredProviders()` registers codex/cursor/claude in every agent-driven runtime), `config.ts` (out-of-tree registration + binding resolution), `doctor.ts` (probes + per-loop runnability)
+- `src/executors/` — `script`, `codex`, `cursor` (read-only steps), `claude` (lazy SDK), `opencode` / `pi` (effect-free steps only; writes fail closed), `hermes`, `judge`, `memory`, `evidence`; `vendor/omegacode/` (MIT — see `NOTICE`)
+- `src/cli/` — `main.ts` (commands), `registry.ts` (builtin pilots + user entries; `wiredProviders()` registers codex/cursor/claude/opencode/pi in every agent-driven runtime), `config.ts` (out-of-tree registration + binding resolution), `doctor.ts` (probes + per-loop runnability)
 - `src/index.ts` — the library surface (`@roach88/looper` root export, deliberately small)
 - `bin/looper.js` — prefers `dist/` (plain node); falls back to tsx for unbuilt checkouts
 - `src/pilot0..3/` — the four loops as data + standalone runners
-- `test/` — deterministic suites; `*.live.test.ts` gated behind `LOOPER_LIVE=1` (claude additionally behind `LOOPER_LIVE_CLAUDE=1`)
+- `test/` — deterministic suites; `*.live.test.ts` gated behind `LOOPER_LIVE=1` (claude/opencode/pi additionally behind `LOOPER_LIVE_CLAUDE=1` / `LOOPER_LIVE_OPENCODE=1` / `LOOPER_LIVE_PI=1`)
 
 ### Run it
 ```bash
@@ -97,8 +98,6 @@ npm test                                   # auth-free suite
 
 ## Deferred (deliberate, in rough priority order)
 
-- **opencode / pi wiring** — adapters vendored, factory returns
-  not-implemented. Follow the claude pattern (lazy where a dep is heavy).
 - **Trust / promotion lifecycle** — only "draft may not execute" is enforced.
   The Python spec's promotion criteria (ledger-evidence gates, human
   approval, `looper promote`) are the next trust step; criteria as data,
@@ -136,6 +135,14 @@ npm test                                   # auth-free suite
   take over; fine for cron + human, not adversarial concurrency.
 - **cursor-agent is read-only:** write scopes fail closed before the
   provider starts (no hard sandbox for writes in Cursor).
+- **opencode/pi run effect-free steps unconfined:** both providers expose
+  NO enforceable sandbox (opencode's permission rules leave bash
+  unconfined; pi's tool allowlists are not OS confinement), so their
+  vendored workers accept only `danger-full-access`. The executors fail
+  closed on write scopes (cursor precedent) and run noEffects() steps on
+  the providers' only mode — read-only intent is observed post-hoc by
+  effect attribution, never enforced up front. Documented in both
+  executor headers; bind codex/claude where enforcement matters.
 - **`HermesExecutor` ignores `ctx.signal`** (its subprocess has its own
   timeout; no caller passes a signal yet).
 - **doctor's judge probe assumes the default worker:** `judge`/`distill`
@@ -149,6 +156,6 @@ npm test                                   # auth-free suite
 The kernel is done, the tool is operable, and v1 made it *shippable*: users
 register their own loops out of tree, bind any agent to any role, run the
 compiled bin under plain node, and `looper doctor` tells them what their
-machine can actually run. Next moves are breadth (opencode/pi), trust
-(promotion lifecycle), or publish (naming). Whatever you build, the test
+machine can actually run; all five vendored providers are wired. Next
+moves are trust (promotion lifecycle) or publish (naming). Whatever you build, the test
 stays: _did the kernel stay general, or did you special-case something?_

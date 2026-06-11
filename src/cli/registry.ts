@@ -25,6 +25,8 @@ import { CursorExecutor } from "../executors/cursor.js"
 import { HermesExecutor } from "../executors/hermes.js"
 import { JudgeExecutor } from "../executors/judge.js"
 import { recallExecutor, rememberExecutor } from "../executors/memory.js"
+import { OpencodeExecutor } from "../executors/opencode.js"
+import { PiExecutor } from "../executors/pi.js"
 import { executorRegistry } from "../executors/script.js"
 import { ContractRegistry, defaultContractRegistry } from "../kernel/contract.js"
 import { gitObserver } from "../kernel/git-effects.js"
@@ -70,22 +72,25 @@ function scratchDir(label: string): string {
 }
 
 /**
- * The wired provider executors (codex / cursor-agent / claude), constructed
- * lazily as a set: every agent-driven entry registers ALL of them so any
- * role can be rebound onto any agent (`--executor <step>=claude`) without a
- * custom runtime. Nothing spawns or imports an SDK until a step actually
- * runs on one of them, so registering the full set costs nothing.
+ * The wired provider executors (codex / cursor-agent / claude / opencode /
+ * pi), constructed lazily as a set: every agent-driven entry registers ALL
+ * of them so any role can be rebound onto any agent (`--executor
+ * <step>=claude`) without a custom runtime. Nothing spawns or imports an
+ * SDK until a step actually runs on one of them, so registering the full
+ * set costs nothing.
  */
 function wiredProviders(): { readonly executors: readonly Executor[]; shutdown(): Promise<void> } {
-  const codex = new CodexExecutor()
-  const cursor = new CursorExecutor()
-  const claude = new ClaudeExecutor()
+  const executors = [
+    new CodexExecutor(),
+    new CursorExecutor(),
+    new ClaudeExecutor(),
+    new OpencodeExecutor(),
+    new PiExecutor(),
+  ]
   return {
-    executors: [codex, cursor, claude],
+    executors,
     async shutdown() {
-      await codex.shutdown()
-      await cursor.shutdown()
-      await claude.shutdown()
+      for (const executor of executors) await executor.shutdown()
     },
   }
 }

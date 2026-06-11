@@ -256,7 +256,7 @@ The resolution chain: `--executor` overrides > config `bindings` > the
 step's declared default. Keys are a step id (binds that step) or an
 executor id (binds the role everywhere it appears). The same chain rebinds
 roles onto the wired agents — every user loop's runtime registers `codex`,
-`cursor-agent`, and `claude` alongside your own executors, so
+`cursor-agent`, `claude`, `opencode`, and `pi` alongside your own executors, so
 `--executor echo=claude` resolves; an LLM-bound step must also declare a
 `prompt` template (the echo step doesn't — scripts read inputs, agents
 read prompts), and the agent must be usable on this machine
@@ -282,8 +282,8 @@ And the boundary that actually matters: **a registered config module runs
 with this process's full privileges** — loading a config or any module it
 names executes that code, exactly the trust you extend to any npm script.
 Effect scopes bound what a STEP may touch (observed, and for codex
-OS-sandboxed; for claude gate-enforced); they do not sandbox the config
-itself. Do not point looper at a config you would not `node` yourself.
+OS-sandboxed; for claude gate-enforced; cursor, opencode, and pi fail
+closed on write scopes); they do not sandbox the config itself. Do not point looper at a config you would not `node` yourself.
 
 ## Providers
 
@@ -292,9 +292,10 @@ itself. Do not point looper at a config you would not `node` yourself.
 | `codex` | wired | `codex` on PATH; sandbox derived from EffectScope, never full-access |
 | `cursor-agent` | wired | `cursor-agent` on PATH; read-only steps only (no hard sandbox for writes) |
 | `claude` | wired | `@anthropic-ai/claude-agent-sdk` (optional peer); sandbox enforced via the SDK's canUseTool gate |
+| `opencode` | wired | `opencode` (>= 1.16.2) on PATH; noEffects() steps only — the provider has no enforceable sandbox, so write scopes fail closed and effect-free steps run unconfined (read-only intent observed post-hoc, not enforced) |
+| `pi` | wired | `pi` (>= 0.79.1, `@earendil-works/pi-coding-agent`) on PATH; same posture as opencode — write scopes fail closed, effect-free steps run unconfined |
 | `hermes` | optional binding | `hermes` on PATH; a router CLI behind the same seam (`--executor route=hermes`) |
 | `judge` / `distill` | wired | drives the codex binary; independent structured-output grading |
-| `opencode`, `pi` | vendored, unwired | adapters sit in `src/executors/vendor/omegacode/`; their factory returns not-implemented |
 
 ## Toolchain
 
@@ -314,9 +315,9 @@ mini-language parser needed (the design doc's §7 Python risk dissolves here).
   codex app-server worker + JSON-RPC protocol/transport, the subprocess
   JSONL mechanics, schema strictify/validation, the error taxonomy, the
   deterministic `FakeWorker` test double, and the claude/opencode/pi
-  adapters (vendored as a family; codex, cursor-agent, and claude are wired
-  behind the seam — claude lazily, its SDK being an optional peer;
-  opencode/pi remain unwired). Also adapted:
+  adapters (vendored as a family; all five — codex, cursor-agent, claude,
+  opencode, pi — are wired behind the seam, claude lazily, its SDK being
+  an optional peer). Also adapted:
   the `journal.jsonl` shape and canonical hashing (`src/ledger/ledger.ts`);
   the Executor seam as a rename of `Worker.runAgent(spec, ctx) →
   AgentResult`. Deliberately left behind: the `node:vm` sandbox trunk, the
@@ -345,8 +346,6 @@ mini-language parser needed (the design doc's §7 Python risk dissolves here).
 
 ## Deliberately deferred (next steps, per the design doc)
 
-- Wiring opencode/pi behind the seam (vendored, factory returns
-  not-implemented).
 - Trust/promotion lifecycle enforcement from ledger evidence (today only
   "draft may not execute" is enforced); a `looper promote` command.
 - npm publish — blocked on the final package name (`@roach88/looper` is a

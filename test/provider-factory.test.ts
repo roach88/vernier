@@ -15,9 +15,14 @@ interface SpawnCall {
   opts: { cwd?: string | undefined; env?: NodeJS.ProcessEnv | undefined }
 }
 
-function scriptedSpawn(stdout: readonly unknown[]): { spawnProcess: SpawnProcess; calls: SpawnCall[] } {
+/** Each spawned subprocess emits the NEXT script in order: raw text lines as-is, others as JSONL. */
+function scriptedSpawn(...scripts: ReadonlyArray<{ raw?: string; lines?: readonly unknown[] }>): {
+  spawnProcess: SpawnProcess
+  calls: SpawnCall[]
+} {
   const calls: SpawnCall[] = []
   const spawnProcess: SpawnProcess = (bin, args, opts) => {
+    const script = scripts[calls.length] ?? {}
     calls.push({ bin, args, opts })
     const stdin = new PassThrough()
     const out = new PassThrough()
@@ -32,7 +37,8 @@ function scriptedSpawn(stdout: readonly unknown[]): { spawnProcess: SpawnProcess
       },
     })
     queueMicrotask(() => {
-      for (const line of stdout) out.write(JSON.stringify(line) + "\n")
+      if (script.raw !== undefined) out.write(script.raw)
+      for (const line of script.lines ?? []) out.write(JSON.stringify(line) + "\n")
       out.end()
       err.end()
       child.emit("exit", 0, null)
@@ -43,12 +49,12 @@ function scriptedSpawn(stdout: readonly unknown[]): { spawnProcess: SpawnProcess
   return { spawnProcess, calls }
 }
 
-function agentSpec(provider: AgentSpec["provider"]): AgentSpec {
+function agentSpec(provider: AgentSpec["provider"], sandbox: AgentSpec["sandbox"] = "read-only"): AgentSpec {
   return {
     prompt: "hello",
     provider,
     cwd: mkdtempSync(join(tmpdir(), "looper-provider-factory-")),
-    sandbox: "read-only",
+    sandbox,
     approval: "never",
   }
 }
@@ -59,7 +65,7 @@ describe("DefaultWorkerFactory", () => {
   })
 
   it("constructs cursor-agent with its explicit provider options", async () => {
-    const { spawnProcess, calls } = scriptedSpawn([{ type: "result", result: "factory ok", is_error: false }])
+    const { spawnProcess, calls } = scriptedSpawn({ lines: [{ type: "result", result: "factory ok", is_error: false }] })
     const configDir = mkdtempSync(join(tmpdir(), "looper-factory-cursor-config-"))
     const factory = new DefaultWorkerFactory({
       cursorBin: "trusted-cursor",
@@ -89,10 +95,67 @@ describe("DefaultWorkerFactory", () => {
     }
   })
 
-  it("leaves opencode intentionally unwired in this step", async () => {
+  it("constructs the real opencode worker: version preflight, then a run turn, on its explicit bin", async () => {
+    const { spawnProcess, calls } = scriptedSpawn(
+      { raw: "1.16.2\n" }, // --version preflight
+      { lines: [{ type: "text", part: { text: "factory ok" } }] },
+    )
+    const factory = new DefaultWorkerFactory({
+      opencodeBin: "trusted-opencode",
+      opencodeSpawnProcess: spawnProcess,
+      opencodeStallTimeoutMs: 0,
+    })
+
+    const result = await factory.get("opencode").runAgent(agentSpec("opencode", "danger-full-access"), {
+      signal: new AbortController().signal,
+      onProgress() {},
+    })
+
+    expect(result.text).toBe("factory ok")
+    expect(calls.map((c) => c.bin)).toEqual(["trusted-opencode", "trusted-opencode"])
+    expect(calls[0]!.args).toEqual(["--version"])
+    expect(calls[1]!.args).toContain("run")
+    expect(calls[1]!.args).toContain("--dangerously-skip-permissions")
+    expect(calls[1]!.opts.env?.OPENCODE_DISABLE_AUTOUPDATE).toBe("1")
+  })
+
+  it("constructs the real pi worker: isolated version preflight, then a run turn, on its explicit bin", async () => {
+    const { spawnProcess, calls } = scriptedSpawn(
+      { raw: "0.79.1\n" }, // --version preflight (scratch agent dir, neutral cwd)
+      {
+        lines: [
+          {
+            type: "message_end",
+            message: { role: "assistant", content: [{ type: "text", text: "factory ok" }], usage: { input: 1, output: 2 } },
+          },
+        ],
+      },
+    )
+    const factory = new DefaultWorkerFactory({
+      piBin: "trusted-pi",
+      piSpawnProcess: spawnProcess,
+      piStallTimeoutMs: 0,
+    })
+
+    const spec = agentSpec("pi", "danger-full-access")
+    const result = await factory.get("pi").runAgent(spec, {
+      signal: new AbortController().signal,
+      onProgress() {},
+    })
+
+    expect(result.text).toBe("factory ok")
+    expect(calls.map((c) => c.bin)).toEqual(["trusted-pi", "trusted-pi"])
+    expect(calls[0]!.args).toEqual(["--version"])
+    expect(calls[0]!.opts.env?.PI_CODING_AGENT_DIR).toBeDefined() // scratch agent dir isolates the probe
+    expect(calls[0]!.opts.cwd).toBe(tmpdir()) // neutral cwd, never the run's
+    expect(calls[1]!.args).toContain("--no-session")
+    expect(calls[1]!.opts.cwd).toBe(spec.cwd)
+  })
+
+  it("keeps claude-code behind the executor layer (factory stays not-implemented; the SDK must not load here)", async () => {
     const factory = new DefaultWorkerFactory()
     await expect(
-      factory.get("opencode").runAgent(agentSpec("opencode"), {
+      factory.get("claude-code").runAgent(agentSpec("claude-code"), {
         signal: new AbortController().signal,
         onProgress() {},
       }),
