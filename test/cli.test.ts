@@ -231,6 +231,133 @@ describe("looper CLI", () => {
     expect(help.stdout).toContain("EXIT CODES")
   })
 
+  it("`show` renders a run TIMELINE for humans and an additive timeline block under --json", async () => {
+    const root = home()
+    const ran = await cli(root, "run", "control-plane-smoke-test", "--json")
+    const runId = String((JSON.parse(ran.stdout) as { runId: string }).runId)
+
+    const human = await cli(root, "show", runId)
+    expect(human.code).toBe(0)
+    expect(human.stdout).toContain("--- timeline (6 events) ---")
+    expect(human.stdout).toContain("◷ run start — control-plane-smoke-test@0.2.0")
+    expect(human.stdout).toContain("▶ smoke#1.1 started (script:control-plane-smoke)")
+    expect(human.stdout).toContain("✔ smoke#1.1 completed")
+    expect(human.stdout).toContain("contract run-trace.v1 passed")
+    expect(human.stdout).toContain("■ smoke#1.1 stop/success")
+    expect(human.stdout).toContain("--- per-step usage ---")
+    expect(human.stdout).toContain("--- summary ---")
+    expect(human.stdout).toContain("status      done (1 iteration, 1 step run)")
+
+    const shown = await cli(root, "show", runId, "--json")
+    expect(shown.code).toBe(0)
+    const parsed = JSON.parse(shown.stdout) as { entries: unknown[]; timeline: Record<string, unknown> }
+    expect(parsed.entries).toHaveLength(6) // the pre-timeline shape is intact (additive change)
+    expect(parsed.timeline).toMatchObject({ runId, loopId: "control-plane-smoke-test", status: "done", iterations: 1, stepsRun: 1, skipped: 0 })
+    expect(parsed.timeline.events).toHaveLength(6)
+    expect(parsed.timeline.steps).toEqual([expect.objectContaining({ stepId: "smoke", executions: 1, hasUsage: true })])
+  })
+
+  /** A synthesized verified-answer iterate arc (fail -> iterate -> pass) with usage, journaled as `looper run` would have. */
+  function writeIterateArcJournal(root: string, runId: string): void {
+    const T0 = Date.parse("2026-06-09T00:00:00.000Z") // older than any live smoke run in the same root
+    const at = (s: number): string => new Date(T0 + s * 1000).toISOString()
+    const usage = (inTok: number, outTok: number, ms: number) => ({ inputTokens: inTok, outputTokens: outTok, costUsd: 0, durationMs: ms })
+    const entries = [
+      { type: "meta", runId, traceId: runId, loopId: "verified-answer", loopVersion: "0.1.0", trust: "active", inputs: { goal: "g", rubric: "r" }, keyVersion: "loop-v2", at: at(0) },
+      { type: "step_started", key: "a11", stepId: "answer", attempt: 1, iteration: 1, executorId: "codex", at: at(0) },
+      { type: "step_result", key: "a11", stepId: "answer", attempt: 1, iteration: 1, status: "completed", output: {}, outputValid: true, evidence: [], usage: usage(26_432, 109, 8_374), at: at(8.4) },
+      { type: "decision", key: "a11", stepId: "answer", attempt: 1, iteration: 1, decision: { kind: "continue", classification: "success", summary: "next", notes: [], improvement: "none" }, at: at(8.4) },
+      { type: "step_started", key: "g11", stepId: "grade", attempt: 1, iteration: 1, executorId: "judge", at: at(8.5) },
+      { type: "step_result", key: "g11", stepId: "grade", attempt: 1, iteration: 1, status: "completed", output: { passed: false }, outputValid: true, evidence: [], usage: usage(2_000, 50, 3_000), at: at(11.5) },
+      { type: "decision", key: "g11", stepId: "grade", attempt: 1, iteration: 1, decision: { kind: "iterate", classification: "failure", summary: "verdict FAIL", notes: [], improvement: "none", restartAt: "answer" }, at: at(11.5) },
+      { type: "step_started", key: "a21", stepId: "answer", attempt: 1, iteration: 2, executorId: "codex", at: at(11.6) },
+      { type: "step_result", key: "a21", stepId: "answer", attempt: 1, iteration: 2, status: "completed", output: {}, outputValid: true, evidence: [], usage: usage(27_000, 120, 9_000), at: at(20.6) },
+      { type: "decision", key: "a21", stepId: "answer", attempt: 1, iteration: 2, decision: { kind: "continue", classification: "success", summary: "next", notes: [], improvement: "none" }, at: at(20.6) },
+      { type: "step_started", key: "g21", stepId: "grade", attempt: 1, iteration: 2, executorId: "judge", at: at(20.7) },
+      { type: "step_result", key: "g21", stepId: "grade", attempt: 1, iteration: 2, status: "completed", output: { passed: true }, outputValid: true, evidence: [], usage: usage(2_100, 48, 2_800), at: at(24) },
+      { type: "decision", key: "g21", stepId: "grade", attempt: 1, iteration: 2, decision: { kind: "stop", classification: "success", summary: "passed", notes: [], improvement: "none" }, at: at(24) },
+    ]
+    const path = journalPath(root, runId)
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, entries.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8")
+  }
+
+  it("`stats` rolls up runs per loop with per-step usage; --loop and --last filter; tokens only without prices", async () => {
+    const root = home()
+    await cli(root, "run", "control-plane-smoke-test", "--json")
+    writeIterateArcJournal(root, "verified-answer-20260609-fixture")
+
+    const result = await cli(root, "stats", "--json")
+    expect(result.code).toBe(0)
+    const stats = JSON.parse(result.stdout) as { runs: Array<Record<string, any>>; loops: Array<Record<string, any>>; prices: unknown }
+    expect(stats.prices).toBeNull()
+    expect(stats.runs).toHaveLength(2)
+    expect(stats.runs[0]).toMatchObject({
+      runId: "verified-answer-20260609-fixture", // sorted by startedAt: the fixture is older
+      loopId: "verified-answer",
+      status: "done",
+      iterations: 2,
+      stepsRun: 4,
+      wallMs: 24_000,
+      totals: { inputTokens: 57_532, outputTokens: 327 },
+    })
+    expect(stats.runs[0]!.costUsd).toBeUndefined() // no prices -> no invented dollars
+    // Per-STEP attribution in the roll-up: the answer step ate the tokens.
+    const va = stats.loops.find((l) => l.loopId === "verified-answer")!
+    expect(va).toMatchObject({ runs: 1, succeeded: 1, successRate: 1, meanIterations: 2 })
+    expect(va.steps).toEqual([
+      expect.objectContaining({ stepId: "answer", executions: 2, inputTokens: 53_432 }),
+      expect.objectContaining({ stepId: "grade", executions: 2, inputTokens: 4_100 }),
+    ])
+    expect(stats.loops.map((l) => l.loopId)).toContain("control-plane-smoke-test")
+
+    const filtered = await cli(root, "stats", "--loop", "verified-answer", "--json")
+    expect((JSON.parse(filtered.stdout) as { runs: unknown[] }).runs).toHaveLength(1)
+
+    const lastOne = await cli(root, "stats", "--last", "1", "--json")
+    const lastRuns = (JSON.parse(lastOne.stdout) as { runs: Array<{ loopId: string }> }).runs
+    expect(lastRuns).toHaveLength(1)
+    expect(lastRuns[0]!.loopId).toBe("control-plane-smoke-test") // most recent: the live smoke run
+
+    const human = await cli(root, "stats")
+    expect(human.code).toBe(0)
+    expect(human.stdout).toContain("runs (2)")
+    expect(human.stdout).toContain("TOK-IN")
+    expect(human.stdout).toContain("57,532")
+    expect(human.stdout).toContain("per loop")
+    expect(human.stdout).toContain("verified-answer  runs=1  success=100%  mean-iter=2.0")
+    expect(human.stdout).toMatch(/answer\s+2\s+53,432/) // per-step usage under the loop
+    expect(human.stdout).not.toContain("$")
+    expect(human.stdout).toContain("pass --price-in/--price-out")
+  })
+
+  it("`stats` computes a cost column ONLY when both prices are given; one-sided prices and bad --last are usage errors", async () => {
+    const root = home()
+    writeIterateArcJournal(root, "verified-answer-20260609-fixture")
+
+    const priced = await cli(root, "stats", "--price-in", "3", "--price-out", "15", "--json")
+    expect(priced.code).toBe(0)
+    const stats = JSON.parse(priced.stdout) as { prices: unknown; runs: Array<{ costUsd?: number }> }
+    expect(stats.prices).toEqual({ inUsdPerMTok: 3, outUsdPerMTok: 15 })
+    expect(stats.runs[0]!.costUsd).toBeCloseTo((57_532 * 3 + 327 * 15) / 1_000_000) // 0.177501
+
+    const pricedHuman = await cli(root, "stats", "--price-in", "3", "--price-out", "15")
+    expect(pricedHuman.stdout).toContain("COST")
+    expect(pricedHuman.stdout).toContain("$0.1775")
+
+    const oneSided = await cli(root, "stats", "--price-in", "3")
+    expect(oneSided.code).toBe(2)
+    expect(oneSided.stderr).toContain("BOTH --price-in and --price-out")
+
+    const badLast = await cli(root, "stats", "--last", "0")
+    expect(badLast.code).toBe(2)
+    expect(badLast.stderr).toContain("--last expects a positive integer")
+
+    const empty = await cli(home(), "stats", "--json")
+    expect(empty.code).toBe(0)
+    expect(JSON.parse(empty.stdout)).toMatchObject({ runs: [], loops: [] })
+  })
+
   it("keeps stdout machine-clean under --json: diagnostics go to stderr", async () => {
     const root = home()
     const { runId, runDir } = crashedSmokeRun(root)

@@ -47,16 +47,17 @@ special-casing**. That generality is the whole point; protect it.
 | 1 | `a7fb042` | Out-of-tree loops (`looper.config.{ts,js,mjs,json}`, discovery + `$LOOPER_CONFIG`), any-agent-any-role executor bindings (`--executor` > config `bindings` > loop default), multi-file artifacts (`artifactsFromEffects`) |
 | 2 | `9f6f1b1` | Shippability: build pipeline (tsc → `dist/`, compiled bin under plain node), `@roach88/looper` package surface (root export + types, files/exports), MIT LICENSE, `looper doctor`, claude executor wired (lazy optional-peer SDK), README tutorial |
 | 3 | `26f4c9d` | Breadth: opencode + pi executors wired (write scopes fail closed — the providers expose no enforceable sandbox; effect-free steps run on their only mode), vendored factory flipped to the real workers, doctor probes both binaries |
-| B | this commit | Semantic recall: pluggable `Retriever` seam on Memory — BM25 lexical default (ranked, tiny-store-safe), optional embedding tier (`LOOPER_RETRIEVER=embedding`, `@huggingface/transformers` as a lazy optional peer, remember-time vectors versioned on the JSONL record, lexical fallback for un-embedded records), custom retrievers via the exported interface + Memory constructor; doctor probes the selected tier |
+| B | `544e280` | Semantic recall: pluggable `Retriever` seam on Memory — BM25 lexical default (ranked, tiny-store-safe), optional embedding tier (`LOOPER_RETRIEVER=embedding`, `@huggingface/transformers` as a lazy optional peer, remember-time vectors versioned on the JSONL record, lexical fallback for un-embedded records), custom retrievers via the exported interface + Memory constructor; doctor probes the selected tier |
+| C | this commit | Observability: `looper show` renders run timelines (relative offsets, contract/effects/decision events, retry↔iterate transitions explicit, per-STEP usage attribution, closing summary) and new `looper stats` rolls up usage per run + per loop (`--loop`/`--last` filters, cost ONLY from explicit `--price-in/--price-out` USD-per-1M-token prices — tokens are the honest unit); pure derivations over the ledger in `src/ledger/stats.ts`, legacy/torn journals degrade gracefully |
 
-**Health:** `npx tsc --noEmit` clean · `npm test` → 227 passed / 8 gated-live
+**Health:** `npx tsc --noEmit` clean · `npm test` → 240 passed / 8 gated-live
 skipped (auth-free) · `npm run build` green · `npm pack` installs and runs in
 a fresh consumer project without tsx or the claude SDK.
 
 ### Code map
 - `src/kernel/` — `types.ts` (the five-slot model), `policy.ts` (`decideNextStep`, `retryPolicy`, `until`), `contract.ts`, `effects.ts` (hash observer + `artifactsFromEffects`), `git-effects.ts`
 - `src/engine/` — `tick.ts` (the interpreter + replay-by-key), `resume.ts` (decision-fold reconstruction), `lease.ts` (file-based run lease)
-- `src/ledger/ledger.ts` — append-only `journal.jsonl`; resume key `loop-v2`
+- `src/ledger/ledger.ts` — append-only `journal.jsonl`; resume key `loop-v2`; `stats.ts` — pure timeline + usage/cost roll-up derivations (`looper show`/`stats` render these)
 - `src/memory/` — `memory.ts` (append-only rule store; retriever-ranked recall), `retriever.ts` (the pluggable Retriever seam + BM25 lexical default), `embedding.ts` (optional embedding tier behind the lazy-optional-peer pattern)
 - `src/executors/` — `script`, `codex`, `cursor` (read-only steps), `claude` (lazy SDK), `opencode` / `pi` (effect-free steps only; writes fail closed), `hermes`, `judge`, `memory`, `evidence`; `vendor/omegacode/` (MIT — see `NOTICE`)
 - `src/cli/` — `main.ts` (commands), `registry.ts` (builtin pilots + user entries; `wiredProviders()` registers codex/cursor/claude/opencode/pi in every agent-driven runtime), `config.ts` (out-of-tree registration + binding resolution), `doctor.ts` (probes + per-loop runnability)
@@ -73,6 +74,7 @@ looper loops                               # list registered loops (builtin + lo
 looper run control-plane-smoke-test --json # deterministic, no LLM — safe smoke
 looper run <loop> --executor <step>=claude # any agent in any role (step needs a prompt template)
 looper runs | looper show <runId> | looper resume <runId>
+looper stats --loop <id> --last <n>        # usage roll-ups; add --price-in/--price-out for cost
 npm test                                   # auth-free suite
 ```
 
@@ -106,8 +108,6 @@ npm test                                   # auth-free suite
 - **npm publish** — blocked on final naming (`@roach88/looper` is a
   placeholder; `"private": true` stays until Tyler decides). The package
   surface is already verified via `npm pack` + consumer-install smoke.
-- **Observability** — beyond `show`/`doctor`: run timelines, usage/cost
-  roll-ups from the ledger.
 - **Config-level retriever registration** — semantic recall itself SHIPPED
   (Retriever seam, BM25 default, optional embedding tier; see README
   "Memory & recall"); what remains deferred is a `retriever` key in

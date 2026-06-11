@@ -101,7 +101,8 @@ looper run <loopId> [--input '<json>'] [--input-file <path>] [--workdir <dir>]
 looper tick <runId>                                # advance ONE step of an existing run from its ledger
 looper resume <runId>                              # continue an existing run to a terminal state
 looper runs                                        # list runs under the ledger root
-looper show <runId>                                # print a run's journal
+looper show <runId>                                # run timeline: events, per-step usage, totals
+looper stats [--loop <id>] [--last <n>]            # usage/cost roll-ups across runs, per run + per loop
 looper doctor                                      # probe executors + per-loop runnability
 ```
 
@@ -112,6 +113,22 @@ things up, they never execute them), then every loop's steps are resolved
 through the same binding chain a run would use and judged runnable. Exit 0
 iff every registered loop is runnable; an unusable executor that no step
 resolves to is reported but does not fail the doctor.
+
+`show` renders a run's journal as a timeline: relative time offsets, contract
+pass/fail with failed-check names, effect attribution, and retry/iterate
+transitions made explicit (a pilot-2 fail → iterate → pass arc reads at a
+glance) — plus per-STEP token/duration attribution and a closing summary.
+The per-step number is the one an operator tunes on; in practice the judge
+step, not the answer step, eats most of the tokens. `stats` rolls the ledger
+root up per run and per loop id (runs, success rate, mean iterations,
+tokens, wall time, per-step usage), filtered by `--loop <id>` / `--last <n>`.
+**Cost is honest:** the ledger records tokens, not prices, so `stats` shows
+dollars only when you pass `--price-in <usd> --price-out <usd>` (USD per 1M
+tokens) — the only other money shown is what an executor itself reported.
+No prices, no invented dollar figures. Both commands are pure reads over the
+journals (`src/ledger/stats.ts`); legacy and torn journals degrade
+gracefully — missing usage renders blank, unknown entry types are skipped
+and counted.
 
 Agent-ergonomic by contract: every command takes `--json` (machine output on
 stdout, diagnostics on stderr) and exit codes are classed — `0` success,

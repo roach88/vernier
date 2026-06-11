@@ -25,6 +25,7 @@ import { resumeRun, summarizeJournal, type JournalSummary } from "../engine/resu
 import { driveRun, finalOutput, newRunId, startRun, tick, type EngineDeps, type Run, type TickOutcome } from "../engine/tick.js"
 import type { Executor, Loop } from "../kernel/types.js"
 import { journalPath, Ledger, resolveLedgerRoot, type LedgerEntry } from "../ledger/ledger.js"
+import { buildTimeline, computedCostUsd, renderStats, renderTimeline, rollupByLoop, runStatsRow, type PriceModel, type RunStatsRow } from "../ledger/stats.js"
 import { bindExecutors, ConfigError, loadConfig, type BindingLayer, type LoadedConfig } from "./config.js"
 import { diagnose, renderDoctor } from "./doctor.js"
 import { loopRegistry, type LoopRuntime, type RegisteredLoop } from "./registry.js"
@@ -49,7 +50,10 @@ USAGE
   looper resume <runId> [--workdir <dir>] [--executor ...]
                                                      continue a run to terminal
   looper runs                                        list runs under the ledger root
-  looper show <runId>                                print a run's journal
+  looper show <runId>                                run timeline + per-step usage from the journal
+  looper stats [--loop <id>] [--last <n>]            usage/cost roll-ups across runs, per run and
+               [--price-in <usd> --price-out <usd>]  per loop (prices are USD per 1M tokens; without
+                                                     them the output is tokens only — never invented $)
   looper doctor                                      probe executors + per-loop runnability
                                                      (exit 0 iff every registered loop is runnable)
 
@@ -81,6 +85,11 @@ interface Flags {
   readonly workdir?: string
   /** Repeatable --executor <stepIdOrExecutorId>=<executorId> overrides. */
   readonly executor: readonly string[]
+  /** `stats` filters/prices (raw strings; validated in cmdStats). */
+  readonly loop?: string
+  readonly last?: string
+  readonly priceIn?: string
+  readonly priceOut?: string
   readonly positionals: readonly string[]
 }
 
@@ -94,6 +103,10 @@ function parseFlags(args: readonly string[]): Flags {
         "input-file": { type: "string" },
         workdir: { type: "string" },
         executor: { type: "string", multiple: true },
+        loop: { type: "string" },
+        last: { type: "string" },
+        "price-in": { type: "string" },
+        "price-out": { type: "string" },
         help: { type: "boolean", default: false },
       },
       allowPositionals: true,
@@ -109,6 +122,10 @@ function parseFlags(args: readonly string[]): Flags {
       ...(values["input-file"] !== undefined ? { inputFile: values["input-file"] } : {}),
       ...(values.workdir !== undefined ? { workdir: resolve(values.workdir) } : {}),
       executor: values.executor ?? [],
+      ...(values.loop !== undefined ? { loop: values.loop } : {}),
+      ...(values.last !== undefined ? { last: values.last } : {}),
+      ...(values["price-in"] !== undefined ? { priceIn: values["price-in"] } : {}),
+      ...(values["price-out"] !== undefined ? { priceOut: values["price-out"] } : {}),
       positionals,
     }
   } catch (error) {
@@ -413,6 +430,9 @@ function cmdRuns(flags: Flags): number {
 
 function cmdShow(flags: Flags): number {
   const { runId, path, entries, summary } = loadJournal(flags.positionals[0])
+  // The timeline is a pure derivation of the journal (ledger/stats.ts);
+  // this command only loads and renders.
+  const timeline = buildTimeline(entries)
   if (flags.json) {
     json({
       runId,
@@ -424,6 +444,7 @@ function cmdShow(flags: Flags): number {
       workdir: summary.meta?.workdir ?? null,
       journal: path,
       entries,
+      timeline, // additive: events with offsets, per-step usage, totals
     })
     return EXIT.ok
   }
@@ -434,8 +455,70 @@ function cmdShow(flags: Flags): number {
   out(`started   ${summary.startedAt}`)
   out(`workdir   ${summary.meta?.workdir ?? "<not recorded>"}`)
   out(`journal   ${path}`)
-  out("--- ledger entries ---")
-  for (const entry of entries) out(entryLine(entry))
+  for (const line of renderTimeline(timeline)) out(line)
+  return EXIT.ok
+}
+
+/** `stats` flag validation: --last a positive integer; prices both-or-neither (a one-sided price would lie). */
+function parseStatsFlags(flags: Flags): { loop: string | null; last: number | null; prices: PriceModel | null } {
+  let last: number | null = null
+  if (flags.last !== undefined) {
+    last = Number(flags.last)
+    if (!Number.isInteger(last) || last <= 0) throw new UsageError(`--last expects a positive integer, got \`${flags.last}\`.`)
+  }
+  if ((flags.priceIn === undefined) !== (flags.priceOut === undefined)) {
+    throw new UsageError("Pass BOTH --price-in and --price-out (USD per 1M tokens), or neither — a one-sided price would misstate cost.")
+  }
+  let prices: PriceModel | null = null
+  if (flags.priceIn !== undefined && flags.priceOut !== undefined) {
+    const inUsdPerMTok = Number(flags.priceIn)
+    const outUsdPerMTok = Number(flags.priceOut)
+    if (!Number.isFinite(inUsdPerMTok) || inUsdPerMTok < 0 || !Number.isFinite(outUsdPerMTok) || outUsdPerMTok < 0) {
+      throw new UsageError(`--price-in/--price-out expect non-negative USD per 1M tokens, got \`${flags.priceIn}\` / \`${flags.priceOut}\`.`)
+    }
+    prices = { inUsdPerMTok, outUsdPerMTok }
+  }
+  return { loop: flags.loop ?? null, last, prices }
+}
+
+function cmdStats(flags: Flags): number {
+  const { loop, last, prices } = parseStatsFlags(flags)
+  const root = resolveLedgerRoot({})
+  const runsDir = join(root, "runs")
+  let ids: string[] = []
+  try {
+    ids = readdirSync(runsDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+  } catch {
+    ids = [] // no runs yet
+  }
+  let rows = ids
+    .map((id) => runStatsRow(id, Ledger.load(journalPath(root, id))))
+    .filter((r): r is RunStatsRow => r !== null)
+    .sort((a, b) => (a.startedAt ?? "").localeCompare(b.startedAt ?? "") || a.runId.localeCompare(b.runId))
+  if (loop !== null) rows = rows.filter((r) => r.loopId === loop)
+  if (last !== null) rows = rows.slice(-last)
+  const rollups = rollupByLoop(rows)
+  if (flags.json) {
+    // Computed cost appears ONLY when prices were supplied; reportedCostUsd
+    // (inside totals) is what executors themselves billed, always present.
+    const withCost = <T extends { totals: RunStatsRow["totals"] }>(item: T): T & { costUsd?: number } =>
+      prices === null ? item : { ...item, costUsd: computedCostUsd(item.totals, prices) }
+    json({
+      ledgerRoot: root,
+      filters: { loop, last },
+      prices,
+      runs: rows.map(withCost),
+      loops: rollups.map(withCost),
+    })
+    return EXIT.ok
+  }
+  if (rows.length === 0) {
+    note(`no runs under ${runsDir}${loop === null ? "" : ` for loop \`${loop}\``}`)
+    return EXIT.ok
+  }
+  for (const line of renderStats(rows, rollups, prices)) out(line)
   return EXIT.ok
 }
 
@@ -477,10 +560,12 @@ export async function main(argv: readonly string[]): Promise<number> {
       return cmdRuns(flags)
     case "show":
       return cmdShow(flags)
+    case "stats":
+      return cmdStats(flags)
     case "doctor":
       return cmdDoctor(flags)
     default:
-      throw new UsageError(`Unknown command \`${command}\`. Commands: loops, run, tick, resume, runs, show, doctor.`)
+      throw new UsageError(`Unknown command \`${command}\`. Commands: loops, run, tick, resume, runs, show, stats, doctor.`)
   }
 }
 
