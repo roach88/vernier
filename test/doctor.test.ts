@@ -1,4 +1,4 @@
-// `looper doctor`, deterministic at two layers:
+// `vernier doctor`, deterministic at two layers:
 //   - in-process diagnose() with INJECTED probes (never the machine's PATH,
 //     never a real SDK probe) — semantics: probe classification, binding
 //     resolution, "unused unusable executor does not fail the doctor",
@@ -22,12 +22,12 @@ import type { LoadedConfig } from "../src/cli/config.js"
 import { loopRegistry, type RegisteredLoop } from "../src/cli/registry.js"
 
 const execFileAsync = promisify(execFile)
-const BIN = join(import.meta.dirname, "..", "bin", "looper.js")
+const BIN = join(import.meta.dirname, "..", "bin", "vernier.js")
 const FIXTURE = join(import.meta.dirname, "fixtures", "user-config")
 
-// pilot3's default runtime opens the durable memory store under the looper
+// pilot3's default runtime opens the durable memory store under the vernier
 // root; point it at scratch so in-process diagnose() never touches the repo.
-process.env.LOOPER_HOME = mkdtempSync(join(tmpdir(), "looper-doctor-home-"))
+process.env.VERNIER_HOME = mkdtempSync(join(tmpdir(), "vernier-doctor-home-"))
 
 const probes = (over: Partial<DoctorProbes> = {}): DoctorProbes => ({
   which: () => undefined,
@@ -39,7 +39,7 @@ const allFound = (over: Partial<DoctorProbes> = {}): DoctorProbes =>
   probes({ which: (bin) => `/fake/bin/${bin}`, resolvable: () => true, ...over })
 
 const config = (over: Partial<LoadedConfig>): LoadedConfig => ({
-  path: "/scratch/looper.config.json",
+  path: "/scratch/vernier.config.json",
   loops: [],
   executors: [],
   bindings: new Map<string, string>(),
@@ -103,7 +103,7 @@ describe("diagnose()", () => {
 
   describe("memory retriever probe", () => {
     afterEach(() => {
-      delete process.env.LOOPER_RETRIEVER
+      delete process.env.VERNIER_RETRIEVER
     })
 
     it("the lexical default needs nothing: probed in-process, memory loops unaffected", async () => {
@@ -112,8 +112,8 @@ describe("diagnose()", () => {
       expect(loopById(report, "compounding-answer")?.runnable).toBe(true)
     })
 
-    it("LOOPER_RETRIEVER=embedding without the package blocks exactly the store-op steps, actionably", async () => {
-      process.env.LOOPER_RETRIEVER = "embedding"
+    it("VERNIER_RETRIEVER=embedding without the package blocks exactly the store-op steps, actionably", async () => {
+      process.env.VERNIER_RETRIEVER = "embedding"
       const report = await diagnose(loopRegistry(), undefined, allFound({ resolvable: (s) => s !== EMBEDDING_PACKAGE }))
       expect(executorById(report, "memory:embedding")).toMatchObject({ ok: false, requires: EMBEDDING_PACKAGE })
       expect(executorById(report, "memory:embedding")?.detail).toContain(`npm install ${EMBEDDING_PACKAGE}`)
@@ -125,8 +125,8 @@ describe("diagnose()", () => {
       expect(report.ok).toBe(false)
     })
 
-    it("LOOPER_RETRIEVER=embedding with the package resolvable keeps memory loops runnable", async () => {
-      process.env.LOOPER_RETRIEVER = "embedding"
+    it("VERNIER_RETRIEVER=embedding with the package resolvable keeps memory loops runnable", async () => {
+      process.env.VERNIER_RETRIEVER = "embedding"
       const report = await diagnose(loopRegistry(), undefined, allFound())
       expect(executorById(report, "memory:embedding")).toMatchObject({ ok: true, requires: EMBEDDING_PACKAGE })
       expect(loopById(report, "compounding-answer")?.runnable).toBe(true)
@@ -149,7 +149,7 @@ describe("diagnose()", () => {
       summary: "fixture",
       source: "test",
       live: false,
-      defaultWorkdir: () => mkdtempSync(join(tmpdir(), "looper-doctor-broken-")),
+      defaultWorkdir: () => mkdtempSync(join(tmpdir(), "vernier-doctor-broken-")),
       runtime: () => {
         throw new Error("tool `frobnicator` is not installed")
       },
@@ -173,11 +173,11 @@ interface CliResult {
 const basePath = (shimDir?: string): string => [shimDir, "/usr/bin", "/bin"].filter(Boolean).join(":")
 
 async function cli(env: { home: string; path: string; cwd?: string }, ...args: string[]): Promise<CliResult> {
-  const spawnEnv: NodeJS.ProcessEnv = { ...process.env, LOOPER_HOME: env.home, PATH: env.path }
-  delete spawnEnv.LOOPER_CONFIG
+  const spawnEnv: NodeJS.ProcessEnv = { ...process.env, VERNIER_HOME: env.home, PATH: env.path }
+  delete spawnEnv.VERNIER_CONFIG
   try {
     const { stdout, stderr } = await execFileAsync(process.execPath, [BIN, ...args], {
-      cwd: env.cwd ?? mkdtempSync(join(tmpdir(), "looper-doctor-cwd-")),
+      cwd: env.cwd ?? mkdtempSync(join(tmpdir(), "vernier-doctor-cwd-")),
       env: spawnEnv,
       encoding: "utf8",
       timeout: 60_000,
@@ -189,11 +189,11 @@ async function cli(env: { home: string; path: string; cwd?: string }, ...args: s
   }
 }
 
-const home = (): string => mkdtempSync(join(tmpdir(), "looper-doctor-cli-"))
+const home = (): string => mkdtempSync(join(tmpdir(), "vernier-doctor-cli-"))
 
 /** Inert executables (codex, opencode, …) that doctor may FIND but never runs. */
 function shimDir(...names: string[]): string {
-  const dir = mkdtempSync(join(tmpdir(), "looper-doctor-shim-"))
+  const dir = mkdtempSync(join(tmpdir(), "vernier-doctor-shim-"))
   for (const name of names) {
     const shim = join(dir, name)
     writeFileSync(shim, "#!/bin/sh\nexit 0\n", "utf8")
@@ -202,7 +202,7 @@ function shimDir(...names: string[]): string {
   return dir
 }
 
-describe("looper doctor (CLI)", () => {
+describe("vernier doctor (CLI)", () => {
   it("exit 0 + full --json report when every registered loop is runnable (codex shim on PATH)", async () => {
     const shims = shimDir("codex")
     const result = await cli({ home: home(), path: basePath(shims) }, "doctor", "--json")

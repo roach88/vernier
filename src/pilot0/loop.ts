@@ -1,5 +1,5 @@
 // Pilot 0: the control-plane smoke loop, re-expressed as a five-slot Loop.
-// Ported from looper's docs/agent-workflows/definitions/loops/
+// Ported from the Python predecessor's docs/agent-workflows/definitions/loops/
 // control-plane-smoke-test.toml + its loop card: a deterministic no-agent
 // loop that proves gateway / job / no-op / trace / delivery behavior.
 // No model call; the simplicity is the point.
@@ -48,7 +48,7 @@ const controlPlaneSmoke: ScriptFn = (spec, ctx) => {
 | \`trace_id\` | \`${spec.traceId}\` |
 | \`loop_id\` | \`${spec.loopId}\` |
 | \`loop_version\` | \`${spec.loopVersion}\` |
-| \`orchestrator\` | looper engine |
+| \`orchestrator\` | vernier engine |
 | \`worker\` | No-agent script |
 | \`model_or_provider\` | None |
 

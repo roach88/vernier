@@ -1,4 +1,4 @@
-// Characterization tests for the Policy, ported from looper's
+// Characterization tests for the Policy, ported from vernier's
 // tests/test_dynamic_workflow_harness.py (the frozen Python spec).
 
 import { describe, expect, it } from "vitest"

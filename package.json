@@ -1,15 +1,14 @@
 {
-  "name": "@roach88/looper",
+  "name": "vernier",
   "version": "0.1.0",
-  "private": true,
-  "description": "Agent-orchestration kernel: the loop is data; the step is typed; the executor is fungible; the policy is pure; the ledger is append-only.",
+  "description": "vernier — agent-orchestration kernel: the loop is data; the step is typed; the executor is fungible; the policy is pure; the ledger is append-only.",
   "type": "module",
   "license": "MIT",
   "engines": {
     "node": ">=22"
   },
   "bin": {
-    "looper": "bin/looper.js"
+    "vernier": "bin/vernier.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -31,7 +30,7 @@
     "prepack": "npm run build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "looper": "tsx src/cli/main.ts",
+    "vernier": "tsx src/cli/main.ts",
     "pilot0": "tsx src/pilot0/run.ts",
     "pilot1": "tsx src/pilot1/run.ts",
     "pilot2": "tsx src/pilot2/run.ts",

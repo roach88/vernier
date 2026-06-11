@@ -1,8 +1,8 @@
 // LIVE Pilot 1: hermes route + real codex implement, end-to-end through
-// tick(), in a throwaway scratch git repo. Gated behind LOOPER_LIVE=1 so
+// tick(), in a throwaway scratch git repo. Gated behind VERNIER_LIVE=1 so
 // the default `npm test` stays green without auth or network:
 //
-//   LOOPER_LIVE=1 npm test -- pilot1.live
+//   VERNIER_LIVE=1 npm test -- pilot1.live
 //
 // Requires authed `hermes` and `codex` CLIs on PATH. Codex runs under
 // sandbox "workspace-write" rooted at the scratch dir (derived from the
@@ -22,16 +22,16 @@ import { executorRegistry } from "../src/executors/script.js"
 import { dryRunNoteV1, expectedArtifactPath, routeDecisionV1 } from "../src/pilot1/contracts.js"
 import { planWorkReviewLoop } from "../src/pilot1/loop.js"
 
-const LIVE = process.env.LOOPER_LIVE === "1"
+const LIVE = process.env.VERNIER_LIVE === "1"
 
 describe.runIf(LIVE)("pilot 1 LIVE: hermes + codex through tick()", () => {
   it(
     "routes, implements, validates dry-run-note.v1, and stays inside the effect scope",
     async () => {
-      const scratch = mkdtempSync("/tmp/looper-pilot1-live-")
+      const scratch = mkdtempSync("/tmp/vernier-pilot1-live-")
       mkdirSync(join(scratch, "docs", "agent-workflows"), { recursive: true })
       execFileSync("git", ["init", "--quiet"], { cwd: scratch })
-      const ledgerRoot = mkdtempSync("/tmp/looper-pilot1-ledger-")
+      const ledgerRoot = mkdtempSync("/tmp/vernier-pilot1-ledger-")
       const loop = { ...planWorkReviewLoop, ledger: { root: ledgerRoot } }
 
       const codex = new CodexExecutor()

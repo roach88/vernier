@@ -81,7 +81,7 @@ export function resumeRun(loop: Loop, runId: string): Run {
 // ----------------------------------------------------- loop-agnostic summary
 
 /**
- * What `looper runs` needs without knowing the loop: status is derivable
+ * What `vernier runs` needs without knowing the loop: status is derivable
  * from decisions alone (only escalate/stop change it), the rest from meta
  * and the last step_started entry.
  */

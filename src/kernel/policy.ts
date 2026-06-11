@@ -1,13 +1,13 @@
 // The Policy slot: a pure function from deterministic Observation to Decision.
 //
-// Ported from looper's decide_pilot1_next_step (agent_workflows/
+// Ported from the Python predecessor's decide_pilot1_next_step (agent_workflows/
 // dynamic_workflow_harness.py), generalized from Pilot-1 fields to per-step
 // observations. The mapping:
 //   route_available/route_approved/worker_ran  -> executorRan (stopped-before gates)
 //   worker_exit_status != 0                    -> stepStatus !== "completed"
 //   expected_artifact_exists/content_valid     -> outputValid / contractValid
 //   worker_changes_allowed/unexpected_changes  -> effectsAllowed / unexpectedChanges
-// looper's LoopRetryPolicy attempt cap (policies/retry.py) becomes the
+// the Python predecessor's LoopRetryPolicy attempt cap (policies/retry.py) becomes the
 // retryPolicy combinator below.
 
 // retry   = run the SAME step again (transient/contract failure).

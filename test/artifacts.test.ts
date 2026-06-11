@@ -35,7 +35,7 @@ describe("globMatch", () => {
 // ------------------------------------------------------------ loop fixture
 
 function setup() {
-  const root = mkdtempSync(join(tmpdir(), "looper-artifacts-"))
+  const root = mkdtempSync(join(tmpdir(), "vernier-artifacts-"))
   const workdir = join(root, "work")
   mkdirSync(workdir, { recursive: true })
   return { workdir, ledgerRoot: join(root, "ledger") }

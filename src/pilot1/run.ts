@@ -9,7 +9,7 @@
 //     trace) lands in the ledger run dir, not the workdir.
 //
 // Requires live `hermes` and `codex` CLIs on PATH, authed. The default
-// `npm test` never runs this; the live test is gated by LOOPER_LIVE=1.
+// `npm test` never runs this; the live test is gated by VERNIER_LIVE=1.
 
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
@@ -33,12 +33,12 @@ const loop = bindExecutors(planWorkReviewLoop, [new Map([["route", "hermes"]])])
 // --- scratch workdir: fresh git repo, docs/agent-workflows skeleton -------
 const workdir = process.argv[2]
   ? resolve(process.argv[2])
-  : mkdtempSync("/tmp/looper-pilot1-scratch-")
+  : mkdtempSync("/tmp/vernier-pilot1-scratch-")
 mkdirSync(join(workdir, "docs", "agent-workflows"), { recursive: true })
 execFileSync("git", ["init", "--quiet"], { cwd: workdir })
 writeFileSync(
   join(workdir, "README.md"),
-  "# looper pilot-1 scratch\n\nThrowaway workdir for the live plan-work-review run.\n",
+  "# vernier pilot-1 scratch\n\nThrowaway workdir for the live plan-work-review run.\n",
   "utf8",
 )
 
@@ -126,7 +126,7 @@ function renderTrace(all: readonly LedgerEntry[], started: Date, finished: Date)
 | \`loop_version\` | \`${planWorkReviewLoop.version}\` |
 | \`run_started_at\` | ${started.toISOString()} |
 | \`run_finished_at\` | ${finished.toISOString()} |
-| \`orchestrator\` | Hermes route JSON captured by the looper engine |
+| \`orchestrator\` | Hermes route JSON captured by the vernier engine |
 | \`worker\` | \`codex\` (app-server, sandbox workspace-write) |
 | \`mutation_authority\` | \`${workdir}/docs/agent-workflows\` |
 

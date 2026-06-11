@@ -1,6 +1,6 @@
 # Provider Executors
 
-Looper's kernel treats every worker as an `Executor`: scripts, coding agents, judges, and future
+Vernier's kernel treats every worker as an `Executor`: scripts, coding agents, judges, and future
 human gates all run one typed `StepSpec` and return one `StepResult`. Provider-specific behavior
 belongs in executor and worker adapters, not in loop policy, the engine, or the CLI registry.
 
@@ -27,10 +27,10 @@ The default test suite is deterministic and does not require Cursor auth or netw
 Cursor smoke test exists behind both flags:
 
 ```bash
-LOOPER_LIVE=1 LOOPER_LIVE_CURSOR=1 npm test -- provider-live
+VERNIER_LIVE=1 VERNIER_LIVE_CURSOR=1 npm test -- provider-live
 ```
 
-Set `LOOPER_CURSOR_BIN=agent` or an absolute path for machines that expose the Cursor CLI under a
+Set `VERNIER_CURSOR_BIN=agent` or an absolute path for machines that expose the Cursor CLI under a
 different trusted command name.
 
 Missing live credentials or a missing Cursor binary should not block normal development; the release
@@ -42,5 +42,5 @@ Claude and Pi are intentionally staged after Cursor:
 
 - `claude-code` should be wired only after the SDK/dependency compatibility gate is resolved.
 - `pi` remains guarded until there is an explicit sandbox decision; the vendored worker currently
-  accepts only `danger-full-access`, which is not a normal looper execution mode.
+  accepts only `danger-full-access`, which is not a normal vernier execution mode.
 - `opencode` is still intentionally unwired in this step.

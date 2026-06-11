@@ -3,7 +3,7 @@
 // One tick = run the next Step via its Executor, validate output against
 // signature + contract, observe effects, call the pure Policy, append
 // everything to the Ledger, return the next state. This is the generic
-// version of what looper's RunLoop.run() did by hand for Pilot 1.
+// version of what the Python predecessor's RunLoop.run() did by hand for Pilot 1.
 // run() stays `while (tick)` so the simple case is one call.
 
 import { randomBytes } from "node:crypto"

@@ -186,7 +186,7 @@ describe("buildTimeline", () => {
   })
 
   it("degrades gracefully on a legacy journal: torn line dropped, unknown entry counted, missing usage blank, missing iteration defaulted", () => {
-    const path = join(mkdtempSync(join(tmpdir(), "looper-stats-")), "journal.jsonl")
+    const path = join(mkdtempSync(join(tmpdir(), "vernier-stats-")), "journal.jsonl")
     writeFileSync(
       path,
       [

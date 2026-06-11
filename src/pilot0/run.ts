@@ -1,6 +1,6 @@
 // Run Pilot 0 end-to-end: `npm run pilot0`
-// Workdir and ledger default to ./.looper (override workdir with argv[2],
-// ledger root with $LOOPER_HOME).
+// Workdir and ledger default to ./.vernier (override workdir with argv[2],
+// ledger root with $VERNIER_HOME).
 
 import { mkdirSync } from "node:fs"
 import { join, resolve } from "node:path"
@@ -10,7 +10,7 @@ import { Ledger } from "../ledger/ledger.js"
 import { executorRegistry } from "../executors/script.js"
 import { controlPlaneSmokeExecutor, controlPlaneSmokeLoop } from "./loop.js"
 
-const workdir = resolve(process.argv[2] ?? join(process.cwd(), ".looper", "work"))
+const workdir = resolve(process.argv[2] ?? join(process.cwd(), ".vernier", "work"))
 mkdirSync(workdir, { recursive: true })
 
 const outcome = await runLoop(
@@ -30,7 +30,7 @@ console.log(`status    ${state.status}`)
 console.log(`decision  ${decision.kind} / ${decision.classification} — ${decision.summary}`)
 console.log(`output    ${JSON.stringify(output)}`)
 
-const ledgerRoot = process.env.LOOPER_HOME ?? join(process.cwd(), ".looper")
+const ledgerRoot = process.env.VERNIER_HOME ?? join(process.cwd(), ".vernier")
 const journal = join(ledgerRoot, "runs", state.runId, "journal.jsonl")
 console.log(`trace     ${join(workdir, String(output?.trace ?? ""))}`)
 console.log(`ledger    ${journal}`)

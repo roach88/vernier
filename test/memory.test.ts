@@ -14,7 +14,7 @@ import { noEffects, type RunContext, type StepSpec } from "../src/kernel/types.j
 import { Memory, resolveMemoryRoot, rulesPath, topicTokens } from "../src/memory/memory.js"
 
 function freshStore(): Memory {
-  return new Memory(rulesPath(mkdtempSync(join(tmpdir(), "looper-memory-"))))
+  return new Memory(rulesPath(mkdtempSync(join(tmpdir(), "vernier-memory-"))))
 }
 
 const record = (rule: string, topic: string) => ({
@@ -43,7 +43,7 @@ describe("memory store", () => {
   })
 
   it("persists across two loads of the same root — the file is the store", async () => {
-    const root = mkdtempSync(join(tmpdir(), "looper-memory-"))
+    const root = mkdtempSync(join(tmpdir(), "vernier-memory-"))
     await new Memory(rulesPath(root)).remember(record("Always name the year.", "apollo mission note"))
     const reopened = new Memory(rulesPath(root)) // a second process / a later run
     expect((await reopened.recall("apollo note")).map((r) => r.rule)).toEqual(["Always name the year."])
@@ -87,7 +87,7 @@ function spec(stepId: string, inputs: Record<string, unknown>): StepSpec {
     iteration: 1,
     inputs,
     effects: noEffects(),
-    runDir: mkdtempSync(join(tmpdir(), "looper-rundir-")),
+    runDir: mkdtempSync(join(tmpdir(), "vernier-rundir-")),
     timeoutMs: 1_000,
   }
 }

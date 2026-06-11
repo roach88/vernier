@@ -53,7 +53,7 @@ function agentSpec(provider: AgentSpec["provider"], sandbox: AgentSpec["sandbox"
   return {
     prompt: "hello",
     provider,
-    cwd: mkdtempSync(join(tmpdir(), "looper-provider-factory-")),
+    cwd: mkdtempSync(join(tmpdir(), "vernier-provider-factory-")),
     sandbox,
     approval: "never",
   }
@@ -66,7 +66,7 @@ describe("DefaultWorkerFactory", () => {
 
   it("constructs cursor-agent with its explicit provider options", async () => {
     const { spawnProcess, calls } = scriptedSpawn({ lines: [{ type: "result", result: "factory ok", is_error: false }] })
-    const configDir = mkdtempSync(join(tmpdir(), "looper-factory-cursor-config-"))
+    const configDir = mkdtempSync(join(tmpdir(), "vernier-factory-cursor-config-"))
     const factory = new DefaultWorkerFactory({
       cursorBin: "trusted-cursor",
       cursorConfigDir: configDir,

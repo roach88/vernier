@@ -50,7 +50,7 @@ const decision = (key: string): DecisionEntry => ({
 })
 
 function tempJournal(): string {
-  return join(mkdtempSync(join(tmpdir(), "looper-ledger-")), "journal.jsonl")
+  return join(mkdtempSync(join(tmpdir(), "vernier-ledger-")), "journal.jsonl")
 }
 
 describe("resumeKey", () => {

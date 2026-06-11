@@ -106,7 +106,7 @@ describe("embedding retriever (injected embedder — the optional package is nev
     const topic = "write short note apollo"
     const rule = "Always name the year."
     const embedder = fakeEmbedder({ [embeddingText({ topic, rule })]: [0.1, 0.2] })
-    const memory = new Memory(rulesPath(mkdtempSync(join(tmpdir(), "looper-embed-"))), new EmbeddingRetriever({ embedder }))
+    const memory = new Memory(rulesPath(mkdtempSync(join(tmpdir(), "vernier-embed-"))), new EmbeddingRetriever({ embedder }))
     const stored = await memory.remember({ rule, evidence: "the verified answer", topic, sourceRunId: "r1", loopId: "l1" })
     expect(stored.embedding).toEqual({ v: 1, model: FAKE_MODEL, vector: [0.1, 0.2] })
     // The persisted line carries the same versioned embedding — the store
@@ -143,16 +143,16 @@ describe("embedding retriever (injected embedder — the optional package is nev
   })
 
   it("fails actionably when the optional embedding package is missing (recall and remember)", async () => {
-    const missing = Object.assign(new Error(`Cannot find package '${EMBEDDING_PACKAGE}' imported from looper`), {
+    const missing = Object.assign(new Error(`Cannot find package '${EMBEDDING_PACKAGE}' imported from vernier`), {
       code: "ERR_MODULE_NOT_FOUND",
     })
     const retriever = new EmbeddingRetriever({ loadEmbedder: () => Promise.reject(missing) })
     const embedded = record("rule e", "topic e", { embedding: emb([1, 0]) })
     await expect(retriever.retrieve("some topic", [embedded])).rejects.toThrow(`npm install ${EMBEDDING_PACKAGE}`)
-    await expect(retriever.retrieve("some topic", [embedded])).rejects.toThrow(/looper doctor/)
+    await expect(retriever.retrieve("some topic", [embedded])).rejects.toThrow(/vernier doctor/)
 
     const memory = new Memory(
-      rulesPath(mkdtempSync(join(tmpdir(), "looper-embed-missing-"))),
+      rulesPath(mkdtempSync(join(tmpdir(), "vernier-embed-missing-"))),
       new EmbeddingRetriever({ loadEmbedder: () => Promise.reject(missing) }),
     )
     await expect(
@@ -188,7 +188,7 @@ function spec(stepId: string, inputs: Record<string, unknown>): StepSpec {
     iteration: 1,
     inputs,
     effects: noEffects(),
-    runDir: mkdtempSync(join(tmpdir(), "looper-rundir-")),
+    runDir: mkdtempSync(join(tmpdir(), "vernier-rundir-")),
     timeoutMs: 1_000,
   }
 }
@@ -204,7 +204,7 @@ describe("the seam, end-to-end", () => {
       [embeddingText({ topic: topicB, rule: ruleB })]: [0, 1],
       "apollo program history": [0.9, 0.1],
     })
-    const memory = new Memory(rulesPath(mkdtempSync(join(tmpdir(), "looper-embed-e2e-"))), new EmbeddingRetriever({ embedder }))
+    const memory = new Memory(rulesPath(mkdtempSync(join(tmpdir(), "vernier-embed-e2e-"))), new EmbeddingRetriever({ embedder }))
     await memory.remember({ rule: ruleB, evidence: "e", topic: topicB, sourceRunId: "r", loopId: "l" })
     await memory.remember({ rule: ruleA, evidence: "e", topic: topicA, sourceRunId: "r", loopId: "l" })
 
@@ -216,8 +216,8 @@ describe("the seam, end-to-end", () => {
 
   it("retrieverFromEnv: lexical default, embedding by knob, unknown named loudly", () => {
     expect(retrieverFromEnv({}).id).toBe("lexical")
-    expect(retrieverFromEnv({ LOOPER_RETRIEVER: "lexical" }).id).toBe("lexical")
-    expect(retrieverFromEnv({ LOOPER_RETRIEVER: "embedding" })).toBeInstanceOf(EmbeddingRetriever)
-    expect(() => retrieverFromEnv({ LOOPER_RETRIEVER: "vibes" })).toThrow(/LOOPER_RETRIEVER/)
+    expect(retrieverFromEnv({ VERNIER_RETRIEVER: "lexical" }).id).toBe("lexical")
+    expect(retrieverFromEnv({ VERNIER_RETRIEVER: "embedding" })).toBeInstanceOf(EmbeddingRetriever)
+    expect(() => retrieverFromEnv({ VERNIER_RETRIEVER: "vibes" })).toThrow(/VERNIER_RETRIEVER/)
   })
 })

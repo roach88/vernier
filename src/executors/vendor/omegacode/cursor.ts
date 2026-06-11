@@ -1,7 +1,7 @@
 // CursorWorker - drives Cursor Agent CLI print mode one shot at a time.
 //
 // Safety surface: Cursor Agent does not provide Codex-style OS confinement, so this worker only
-// accepts read-only specs. The looper-facing CursorExecutor fails write scopes before a subprocess
+// accepts read-only specs. The vernier-facing CursorExecutor fails write scopes before a subprocess
 // is spawned; this worker repeats the check for direct factory use.
 
 import { mkdirSync, mkdtempSync } from "node:fs"
@@ -99,7 +99,7 @@ export class CursorWorker implements Worker {
       throw new AgentError({
         provider: PROVIDER,
         code: "unsupported_option",
-        message: "cursor-agent print mode cannot surface approval prompts through looper; use approval: \"never\"",
+        message: "cursor-agent print mode cannot surface approval prompts through vernier; use approval: \"never\"",
       })
     }
 

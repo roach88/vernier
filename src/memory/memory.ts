@@ -12,7 +12,7 @@
 // HOW the store is ranked at recall time is pluggable (the Retriever seam,
 // memory/retriever.ts): the default is the deterministic, dependency-free
 // BM25 lexical ranker; an embedding tier (memory/embedding.ts) is selected
-// with LOOPER_RETRIEVER=embedding where registry runtimes construct Memory;
+// with VERNIER_RETRIEVER=embedding where registry runtimes construct Memory;
 // a custom retriever is constructed in directly. Persistence is none of the
 // retriever's business — append, dedupe-by-id, and torn-line tolerance all
 // live here, identically for every tier.
@@ -29,12 +29,12 @@ export { topicTokens } from "./retriever.js"
 
 /** Where the rule store lives. Resolved at construction; see resolveMemoryRoot. */
 export interface MemorySpec {
-  /** Root directory for the rule store. Default: $LOOPER_HOME, else ./.looper */
+  /** Root directory for the rule store. Default: $VERNIER_HOME, else ./.vernier */
   readonly root?: string
 }
 
 export function resolveMemoryRoot(spec: MemorySpec): string {
-  return spec.root ?? process.env.LOOPER_HOME ?? join(process.cwd(), ".looper")
+  return spec.root ?? process.env.VERNIER_HOME ?? join(process.cwd(), ".vernier")
 }
 
 export function rulesPath(root: string): string {
@@ -43,15 +43,15 @@ export function rulesPath(root: string): string {
 
 /**
  * The retriever-selection knob for registry-built runtimes:
- * LOOPER_RETRIEVER=lexical (the default) or embedding. Construction is
+ * VERNIER_RETRIEVER=lexical (the default) or embedding. Construction is
  * cheap either way — the embedding tier never touches its optional package
  * until a recall/remember actually needs vectors.
  */
 export function retrieverFromEnv(env: NodeJS.ProcessEnv = process.env): Retriever {
-  const choice = env.LOOPER_RETRIEVER?.trim() ?? ""
+  const choice = env.VERNIER_RETRIEVER?.trim() ?? ""
   if (choice === "" || choice === "lexical") return lexicalRetriever()
   if (choice === "embedding") return new EmbeddingRetriever()
-  throw new Error(`Unknown LOOPER_RETRIEVER \`${choice}\`; valid values: lexical (default), embedding.`)
+  throw new Error(`Unknown VERNIER_RETRIEVER \`${choice}\`; valid values: lexical (default), embedding.`)
 }
 
 export class Memory implements MemoryStore {

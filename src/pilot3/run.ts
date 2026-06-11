@@ -20,7 +20,7 @@
 //
 // Requires a live authed `codex` CLI on PATH. The default `npm test` never
 // runs this; the fake-backed compounding proof lives in test/pilot3.test.ts
-// and the gated live test in test/pilot3.live.test.ts (LOOPER_LIVE=1).
+// and the gated live test in test/pilot3.live.test.ts (VERNIER_LIVE=1).
 
 import { mkdtempSync } from "node:fs"
 import { resolve } from "node:path"
@@ -34,8 +34,8 @@ import { Ledger, journalPath, resolveLedgerRoot } from "../ledger/ledger.js"
 import { Memory, retrieverFromEnv, rulesPath } from "../memory/memory.js"
 import { compoundingAnswerLoop, topicFrom } from "./loop.js"
 
-const memoryRoot = process.argv[2] ? resolve(process.argv[2]) : mkdtempSync("/tmp/looper-pilot3-memory-")
-const memory = new Memory(rulesPath(memoryRoot), retrieverFromEnv()) // LOOPER_RETRIEVER selects the tier
+const memoryRoot = process.argv[2] ? resolve(process.argv[2]) : mkdtempSync("/tmp/vernier-pilot3-memory-")
+const memory = new Memory(rulesPath(memoryRoot), retrieverFromEnv()) // VERNIER_RETRIEVER selects the tier
 
 
 const rubric = `PASS only if ALL of the following hold:
@@ -60,7 +60,7 @@ interface RunSummary {
 }
 
 async function runOnce(label: string, goal: string): Promise<RunSummary> {
-  const workdir = mkdtempSync(`/tmp/looper-pilot3-${label}-`)
+  const workdir = mkdtempSync(`/tmp/vernier-pilot3-${label}-`)
   const deps = {
     executors: executorRegistry(answerer, judge, distiller, recallExecutor, rememberExecutor),
     contracts: new ContractRegistry(),

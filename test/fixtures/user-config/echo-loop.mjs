@@ -1,5 +1,5 @@
 // Fixture: an out-of-tree user loop, written as a USER would write it —
-// plain .mjs, no looper imports beyond what a Loop literally is (zod for
+// plain .mjs, no vernier imports beyond what a Loop literally is (zod for
 // the signature schemas; the policy is just a pure function). The module
 // default-exports a registration: { loop, ...runtime facts }, including
 // the executor its one step names.
@@ -64,8 +64,8 @@ export default {
     trust: "dry-run",
     ledger: {},
   },
-  summary: "Fixture: user-defined echo loop registered via looper.config.json.",
+  summary: "Fixture: user-defined echo loop registered via vernier.config.json.",
   signature: "message:string -> echoed:string, verdict:string",
-  defaultInputs: { message: "hello looper" },
+  defaultInputs: { message: "hello vernier" },
   executors: [upper],
 }

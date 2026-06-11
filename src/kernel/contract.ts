@@ -1,5 +1,5 @@
 // Contracts: deterministic semantic validation of a step's output value.
-// Ported from looper's agent_workflows/contracts/ (ContractCheck /
+// Ported from the Python predecessor's agent_workflows/contracts/ (ContractCheck /
 // ContractResult / registry). A `path`-valued output field whose file
 // content gets validated remains the common case (run-trace.v1 below).
 
@@ -23,9 +23,9 @@ export interface ContractContext {
   readonly loopId: string
   readonly loopVersion: string
   readonly workdir: string
-  /** The executor that produced the output (Python looper's `worker` context field). */
+  /** The executor that produced the output (the Python predecessor's `worker` context field). */
   readonly executorId: string
-  /** Absolute path of the run's ledger dir (Python looper's `bundle_path` context field). */
+  /** Absolute path of the run's ledger dir (the Python predecessor's `bundle_path` context field). */
   readonly runDir: string
 }
 

@@ -1,5 +1,5 @@
 // Effect observation: "what changed, and was it allowed."
-// Ported from looper's GitSnapshotter (adapters/git_snapshot.py) and the
+// Ported from the Python predecessor's GitSnapshotter (adapters/git_snapshot.py) and the
 // change-attribution semantics of assess_worker_state. omegacode's
 // worktree.ts only answers "did anything change?" — this attributes.
 
@@ -8,7 +8,7 @@ import { readdirSync, readFileSync } from "node:fs"
 import { join, relative } from "node:path"
 import type { EffectScope, OutputProjection } from "./types.js"
 
-const SKIP_DIRS = new Set([".git", "node_modules", ".looper"])
+const SKIP_DIRS = new Set([".git", "node_modules", ".vernier"])
 
 /** Map of workdir-relative posix path -> sha256 of contents. */
 export type Snapshot = ReadonlyMap<string, string>

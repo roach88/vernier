@@ -52,7 +52,7 @@ export function derivedOutputSchema(signature: Signature<any, any>): Record<stri
 /**
  * What a step is allowed to touch, as workdir-relative paths. Patterns are
  * either exact paths or `dir/**` prefixes. Observed (not just trusted) via
- * snapshot diff — see kernel/effects.ts, ported from looper's GitSnapshotter
+ * snapshot diff — see kernel/effects.ts, ported from the Python predecessor's GitSnapshotter
  * + assess_worker_state ("what changed, and was it allowed").
  */
 export interface EffectScope {
@@ -98,9 +98,9 @@ export interface StepSpec {
   /**
    * Absolute path of this run's ledger directory. Executors write
    * runner-managed evidence here (prompts, transcripts, route JSON) —
-   * looper's "task bundle". It is OUTSIDE the workdir, so effect
+   * the Python predecessor's "task bundle". It is OUTSIDE the workdir, so effect
    * observation never has to exclude runner-managed files by name
-   * (the Python looper's runner_managed_codex_files dance).
+   * (the Python predecessor's runner_managed_codex_files dance).
    */
   readonly runDir: string
   readonly timeoutMs: number
@@ -247,7 +247,7 @@ export type Trust = "draft" | "dry-run" | "active"
 
 /** Where the append-only journal lives. Resolved at run time; see ledger/ledger.ts. */
 export interface LedgerSpec {
-  /** Root directory for run journals. Default: $LOOPER_HOME, else ./.looper */
+  /** Root directory for run journals. Default: $VERNIER_HOME, else ./.vernier */
   readonly root?: string
 }
 

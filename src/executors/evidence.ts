@@ -1,5 +1,5 @@
 // Evidence file naming shared by the worker-backed executors. The Python
-// looper labeled the second worker pass "retry-"; iterate loop-backs add an
+// predecessor labeled the second worker pass "retry-"; iterate loop-backs add an
 // "iter-" prefix so no pass ever overwrites another pass's evidence in the
 // run dir (the ledger must keep every attempt of every iteration).
 

@@ -1,9 +1,9 @@
 // LIVE Pilot 2: codex answer + independent codex judge, end-to-end through
 // tick(), producing a VALUE (no file effects — both steps run read-only).
-// Gated behind LOOPER_LIVE=1 so the default `npm test` stays green without
+// Gated behind VERNIER_LIVE=1 so the default `npm test` stays green without
 // auth or network:
 //
-//   LOOPER_LIVE=1 npm test -- pilot2.live
+//   VERNIER_LIVE=1 npm test -- pilot2.live
 //
 // Requires an authed `codex` CLI on PATH. The judge holds the rubric; the
 // producer answers blind, so a first-iteration failure (and a real
@@ -21,14 +21,14 @@ import { ContractRegistry } from "../src/kernel/contract.js"
 import { Ledger, journalPath } from "../src/ledger/ledger.js"
 import { verifiedAnswerLoop } from "../src/pilot2/loop.js"
 
-const LIVE = process.env.LOOPER_LIVE === "1"
+const LIVE = process.env.VERNIER_LIVE === "1"
 
 describe.runIf(LIVE)("pilot 2 LIVE: verified-answer through tick()", () => {
   it(
     "produces an answer, grades it with the independent judge, and iterates until passed",
     async () => {
-      const workdir = mkdtempSync("/tmp/looper-pilot2-live-")
-      const ledgerRoot = mkdtempSync("/tmp/looper-pilot2-ledger-")
+      const workdir = mkdtempSync("/tmp/vernier-pilot2-live-")
+      const ledgerRoot = mkdtempSync("/tmp/vernier-pilot2-ledger-")
       const loop = { ...verifiedAnswerLoop, ledger: { root: ledgerRoot } }
 
       const answerer = new CodexExecutor()

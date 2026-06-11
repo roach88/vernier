@@ -1,8 +1,8 @@
 // LIVE Pilot 3: the two-run compounding demo through real codex workers.
-// Gated behind LOOPER_LIVE=1 so the default `npm test` stays green without
+// Gated behind VERNIER_LIVE=1 so the default `npm test` stays green without
 // auth or network:
 //
-//   LOOPER_LIVE=1 npm test -- pilot3.live
+//   VERNIER_LIVE=1 npm test -- pilot3.live
 //
 // Hard assertions: both runs complete, run 1 stores a rule, run 2 RECALLS it
 // (the deterministic part of compounding). The iteration delta — run 2
@@ -23,7 +23,7 @@ import { Ledger, journalPath } from "../src/ledger/ledger.js"
 import { Memory, rulesPath } from "../src/memory/memory.js"
 import { compoundingAnswerLoop } from "../src/pilot3/loop.js"
 
-const LIVE = process.env.LOOPER_LIVE === "1"
+const LIVE = process.env.VERNIER_LIVE === "1"
 
 const RUBRIC = `PASS only if ALL of the following hold:
 1. Mentions at least one specific year.
@@ -34,8 +34,8 @@ describe.runIf(LIVE)("pilot 3 LIVE: two runs, one memory store", () => {
   it(
     "run 1 learns and remembers a rule; run 2 recalls it (iteration delta reported)",
     async () => {
-      const memory = new Memory(rulesPath(mkdtempSync("/tmp/looper-pilot3-live-memory-")))
-      const ledgerRoot = mkdtempSync("/tmp/looper-pilot3-live-ledger-")
+      const memory = new Memory(rulesPath(mkdtempSync("/tmp/vernier-pilot3-live-memory-")))
+      const ledgerRoot = mkdtempSync("/tmp/vernier-pilot3-live-ledger-")
       const loop = { ...compoundingAnswerLoop, ledger: { root: ledgerRoot } }
 
       const answerer = new CodexExecutor()
@@ -44,7 +44,7 @@ describe.runIf(LIVE)("pilot 3 LIVE: two runs, one memory store", () => {
       const deps = {
         executors: executorRegistry(answerer, judge, distiller, recallExecutor, rememberExecutor),
         contracts: new ContractRegistry(),
-        workdir: mkdtempSync("/tmp/looper-pilot3-live-work-"),
+        workdir: mkdtempSync("/tmp/vernier-pilot3-live-work-"),
         memory,
       }
       try {

@@ -1,4 +1,4 @@
-# looper
+# vernier
 
 An agent-orchestration kernel. Not a framework.
 
@@ -49,61 +49,61 @@ omegacode app-server worker behind the same seam, checked by
 
 ## Install
 
-Not yet on npm — `@roach88/looper` is a placeholder while the final name
-settles; publish is deliberately deferred. Install from a checkout:
+Not yet on npm — the name (`vernier`) is settled; the publish itself is the
+remaining step. Install from a checkout:
 
 ```sh
-git clone https://github.com/roach88/looper && cd looper
+git clone https://github.com/roach88/vernier && cd vernier
 npm install
-npm run build     # tsc -> dist/ (ESM + .d.ts); bin/looper.js then runs under PLAIN node
-npm link          # optional: a global `looper` on PATH
+npm run build     # tsc -> dist/ (ESM + .d.ts); bin/vernier.js then runs under PLAIN node
+npm link          # optional: a global `vernier` on PATH
 ```
 
 The claude executor needs `@anthropic-ai/claude-agent-sdk`, an **optional**
-peer dependency — the base install stays light. Add it next to looper when
-you want claude (`looper doctor` tells you whether it is missing). The
-embedding memory retriever (`LOOPER_RETRIEVER=embedding`) needs
+peer dependency — the base install stays light. Add it next to vernier when
+you want claude (`vernier doctor` tells you whether it is missing). The
+embedding memory retriever (`VERNIER_RETRIEVER=embedding`) needs
 `@huggingface/transformers`, the same way — see "Memory & recall".
 
 ## Quickstart
 
 ```sh
-looper doctor                                # which executors are usable; which loops are runnable
-looper run control-plane-smoke-test --json   # deterministic, no LLM — the smoke loop end-to-end
-looper loops                                 # everything registered (builtin + your config)
+vernier doctor                                # which executors are usable; which loops are runnable
+vernier run control-plane-smoke-test --json   # deterministic, no LLM — the smoke loop end-to-end
+vernier loops                                 # everything registered (builtin + your config)
 ```
 
 ## Dev flows (no build needed)
 
 ```sh
 npm test                   # vitest: all fake/deterministic — no auth, no network
-npm run looper -- loops    # the CLI from source through tsx
+npm run vernier -- loops    # the CLI from source through tsx
 npm run pilot0             # the deterministic control-plane smoke loop
 npm run pilot1             # LIVE: route + real codex implement in a /tmp scratch git repo
-LOOPER_LIVE=1 npm test -- pilot1.live   # the same live path as a gated test
+VERNIER_LIVE=1 npm test -- pilot1.live   # the same live path as a gated test
 ```
 
-`bin/looper.js` prefers `dist/` when it exists and falls back to running
+`bin/vernier.js` prefers `dist/` when it exists and falls back to running
 the TypeScript through tsx — after editing source, rebuild (or remove
 `dist/`) before trusting the compiled bin.
 
 ## The CLI
 
 Loops are registered by id — the four in-tree pilots in
-`src/cli/registry.ts`, yours via `looper.config` (see "Write your own
-loop"); the `looper` bin drives them by name and resumes runs from their
+`src/cli/registry.ts`, yours via `vernier.config` (see "Write your own
+loop"); the `vernier` bin drives them by name and resumes runs from their
 ledgers:
 
 ```sh
-looper loops                                       # list registered loops (id@version, signature, trust)
-looper run <loopId> [--input '<json>'] [--input-file <path>] [--workdir <dir>]
+vernier loops                                       # list registered loops (id@version, signature, trust)
+vernier run <loopId> [--input '<json>'] [--input-file <path>] [--workdir <dir>]
            [--executor <stepIdOrExecutorId>=<executorId>]...
-looper tick <runId>                                # advance ONE step of an existing run from its ledger
-looper resume <runId>                              # continue an existing run to a terminal state
-looper runs                                        # list runs under the ledger root
-looper show <runId>                                # run timeline: events, per-step usage, totals
-looper stats [--loop <id>] [--last <n>]            # usage/cost roll-ups across runs, per run + per loop
-looper doctor                                      # probe executors + per-loop runnability
+vernier tick <runId>                                # advance ONE step of an existing run from its ledger
+vernier resume <runId>                              # continue an existing run to a terminal state
+vernier runs                                        # list runs under the ledger root
+vernier show <runId>                                # run timeline: events, per-step usage, totals
+vernier stats [--loop <id>] [--last <n>]            # usage/cost roll-ups across runs, per run + per loop
+vernier doctor                                      # probe executors + per-loop runnability
 ```
 
 `doctor` answers "can this installation actually run its loops": every
@@ -133,10 +133,10 @@ and counted.
 Agent-ergonomic by contract: every command takes `--json` (machine output on
 stdout, diagnostics on stderr) and exit codes are classed — `0` success,
 `1` terminal-but-not-success (needs_human/stopped) or failure, `2` usage
-error, `3` run lease held. The ledger root is `$LOOPER_HOME`, else
-`./.looper`.
+error, `3` run lease held. The ledger root is `$VERNIER_HOME`, else
+`./.vernier`.
 
-**Resume is replay of the ledger, not re-execution.** `looper resume`
+**Resume is replay of the ledger, not re-execution.** `vernier resume`
 rebuilds the run by folding the journal's decisions through the same
 state projection the live tick used, landing on the exact
 (stepId, iteration, attempt) the crashed driver stood at — completed steps
@@ -155,15 +155,15 @@ a run.
 
 `npm test` never needs credentials: agent executors are tested against
 omegacode's deterministic `FakeWorker` and injected subprocess runners.
-The live Pilot 1 paths (`npm run pilot1`, `LOOPER_LIVE=1`) require authed
+The live Pilot 1 paths (`npm run pilot1`, `VERNIER_LIVE=1`) require authed
 `hermes` and `codex` CLIs on PATH; codex runs under sandbox
 `workspace-write` rooted at a throwaway scratch dir — the sandbox level is
 DERIVED from the step's `EffectScope` (no scope → read-only;
 danger-full-access is unconstructible from a loop declaration).
 
-Pilot 0 writes its workdir to `./.looper/work` (pass a path as the first
-argument to override). Run journals land in `./.looper/runs/<runId>/journal.jsonl`
-(override the root with `$LOOPER_HOME`); Pilot 1 also drops its evidence
+Pilot 0 writes its workdir to `./.vernier/work` (pass a path as the first
+argument to override). Run journals land in `./.vernier/runs/<runId>/journal.jsonl`
+(override the root with `$VERNIER_HOME`); Pilot 1 also drops its evidence
 bundle (route JSON, codex transcript, rendered `trace.md`) in that run dir —
 runner-managed evidence lives OUTSIDE the workdir by construction, so effect
 attribution never excludes files by name.
@@ -177,7 +177,7 @@ everything below lives in
 [test/fixtures/user-config](test/fixtures/user-config) — the test suite
 runs it, so it cannot rot.
 
-Three files in your own directory. First, `looper.config.json`:
+Three files in your own directory. First, `vernier.config.json`:
 
 ```json
 {
@@ -187,8 +187,8 @@ Three files in your own directory. First, `looper.config.json`:
 ```
 
 Relative paths resolve against the config file's directory. Discovery walks
-up from cwd to the repo root, or set `$LOOPER_CONFIG`. (TS/JS configs work
-too — `looper.config.{ts,js,mjs}` default-exporting `defineConfig({...})` —
+up from cwd to the repo root, or set `$VERNIER_CONFIG`. (TS/JS configs work
+too — `vernier.config.{ts,js,mjs}` default-exporting `defineConfig({...})` —
 and may register loops/executors as in-place objects instead of paths.)
 
 Second, a loop module. A Loop is plain data — zod signatures, ordered
@@ -240,7 +240,7 @@ export default {
   },
   summary: "User-defined echo loop.",
   signature: "message:string -> echoed:string, verdict:string",
-  defaultInputs: { message: "hello looper" },
+  defaultInputs: { message: "hello vernier" },
   executors: [upper],
 }
 ```
@@ -267,8 +267,8 @@ Run it, then rebind the step onto a different executor — the any-agent-
 any-role seam, smallest possible form:
 
 ```sh
-looper run echo-shout --json                          # output.echoed: "HELLO LOOPER"
-looper run echo-shout --executor echo=reverse --json  # output.echoed: "repool olleh"
+vernier run echo-shout --json                          # output.echoed: "HELLO VERNIER"
+vernier run echo-shout --executor echo=reverse --json  # output.echoed: "reinrev olleh"
 ```
 
 The resolution chain: `--executor` overrides > config `bindings` > the
@@ -279,22 +279,22 @@ roles onto the wired agents — every user loop's runtime registers `codex`,
 `--executor echo=claude` resolves; an LLM-bound step must also declare a
 `prompt` template (the echo step doesn't — scripts read inputs, agents
 read prompts), and the agent must be usable on this machine
-(`looper doctor`).
+(`vernier doctor`).
 
 Rough edge, named honestly: a loop module's bare specifiers (`zod` above)
 resolve from the **config dir's own node_modules** — an out-of-tree config
 importing packages needs its own `npm install zod` (or run from a
-directory that can already resolve it). Once looper is published, prefer
+directory that can already resolve it). Once vernier is published, prefer
 importing the helpers — `sig`, `until`, `retryPolicy`, `decideNextStep`,
 `fsScope`/`noEffects`, `artifactsFromEffects`, `scriptExecutor`,
-`defineConfig`/`defineLoop`, and the types — from `"@roach88/looper"`;
+`defineConfig`/`defineLoop`, and the types — from `"vernier"`;
 that root export is the library surface, and it is deliberately small.
 
 ## Trust
 
 Honest v1 status: the `Trust` slot is declared but minimally enforced —
 `draft` loops refuse to execute, and that is all. There is no promotion
-lifecycle yet (no ledger-evidence gates, no `looper promote`), so
+lifecycle yet (no ledger-evidence gates, no `vernier promote`), so
 `dry-run`/`active` are labels, not guarantees.
 
 And the boundary that actually matters: **a registered config module runs
@@ -302,7 +302,7 @@ with this process's full privileges** — loading a config or any module it
 names executes that code, exactly the trust you extend to any npm script.
 Effect scopes bound what a STEP may touch (observed, and for codex
 OS-sandboxed; for claude gate-enforced; cursor, opencode, and pi fail
-closed on write scopes); they do not sandbox the config itself. Do not point looper at a config you would not `node` yourself.
+closed on write scopes); they do not sandbox the config itself. Do not point vernier at a config you would not `node` yourself.
 
 ## Memory & recall
 
@@ -324,10 +324,10 @@ three tiers:
 - **embedding (optional)** — cosine similarity over vectors computed at
   REMEMBER time and stored on the JSONL record, versioned with the model
   id ([src/memory/embedding.ts](src/memory/embedding.ts)). Select it with
-  `LOOPER_RETRIEVER=embedding` (read where the registry constructs
+  `VERNIER_RETRIEVER=embedding` (read where the registry constructs
   Memory). Needs `@huggingface/transformers`, an optional peer exactly
   like the claude SDK — `npm install @huggingface/transformers`, and
-  `looper doctor` probes it. After the one-time model download every
+  `vernier doctor` probes it. After the one-time model download every
   embed is local: no network at query time. Records without a comparable
   embedding (every pre-embedding store, or vectors from a different
   model) stay retrievable through the lexical tier — hybrid fallback,
@@ -336,18 +336,18 @@ three tiers:
   the store with it in a `defineLoop` runtime:
 
   ```ts
-  import { Memory, rulesPath, type Retriever } from "@roach88/looper"
+  import { Memory, rulesPath, type Retriever } from "vernier"
 
   const recencyFirst: Retriever = {
     id: "recency",
     retrieve: (_topic, records) => [...records].reverse(),
   }
-  const memory = new Memory(rulesPath(".looper"), recencyFirst)
+  const memory = new Memory(rulesPath(".vernier"), recencyFirst)
   // defineLoop({ loop, runtime: (workdir) => ({ deps: { ..., memory }, shutdown: async () => {} }) })
   ```
 
   Config-level retriever registration (a `retriever` key in
-  `looper.config`) is deferred; the constructor seam is the supported path.
+  `vernier.config`) is deferred; the constructor seam is the supported path.
 
 Determinism, stated honestly: an embedding lookup is deterministic given
 the store contents and the **model version** — a different model version is
@@ -395,7 +395,7 @@ mini-language parser needed (the design doc's §7 Python risk dissolves here).
   workflow DSL, and the v3 call-tree resume-key lineage — under
   loop-as-data a step has stable identity, so the resume key is
   `hash(stepId + inputs)`.
-- **Ported as design from Python looper** (the frozen spec at
+- **Ported as design from the Python predecessor** (the frozen spec at
   `Dev Workflow Workshop/agent_workflows/`): `decide_pilot1_next_step` →
   `decideNextStep` (`src/kernel/policy.ts`, with its characterization
   tests), `LoopRetryPolicy` → the `retryPolicy` combinator, the contracts
@@ -412,21 +412,21 @@ mini-language parser needed (the design doc's §7 Python risk dissolves here).
   StepResult mapping with EffectScope-derived sandboxing, the pluggable
   `EffectsObserver` seam, the resume fold + replay-by-key
   (`src/engine/resume.ts`, the tick's `replayTick`), the heartbeat run
-  lease (`src/engine/lease.ts`), and the `looper` CLI + loop registry
+  lease (`src/engine/lease.ts`), and the `vernier` CLI + loop registry
   (`src/cli/`).
 
 ## Deliberately deferred (next steps, per the design doc)
 
 - Trust/promotion lifecycle enforcement from ledger evidence (today only
-  "draft may not execute" is enforced); a `looper promote` command.
-- npm publish — blocked on the final package name (`@roach88/looper` is a
-  placeholder; `"private": true` stays until that call is made).
+  "draft may not execute" is enforced); a `vernier promote` command.
+- npm publish — the name (`vernier`) is settled and `"private": true` is
+  gone; what remains is the publish itself.
 - Resuming with effect re-observation across the torn-tick window: when a
   crash lands between a step_result and its effects entry, replay assumes a
   clean scope (the before-snapshot is gone). Honest, narrow, documented in
   `replayTick`.
 - Observability beyond `show`/`doctor` (run timelines, usage roll-ups);
   config-level retriever registration (semantic recall itself shipped —
-  see "Memory & recall"; only the `looper.config` plumbing is deferred).
+  see "Memory & recall"; only the `vernier.config` plumbing is deferred).
 - Loop cards generated from the Loop object; deleting the Python repo
   (Tyler's call, after reviewing the trace comparison).

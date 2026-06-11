@@ -16,7 +16,7 @@
 // weaker on reads): pi's tool allowlists are model/tool-layer controls, not
 // OS confinement (write/edit accept absolute paths; bash is unrestricted),
 // so the vendored worker refuses to pretend and accepts only
-// "danger-full-access". Looper therefore:
+// "danger-full-access". Vernier therefore:
 //   (a) FAILS CLOSED on write scopes: a step with a non-empty EffectScope
 //       refuses pre-spawn with an actionable error (worker never invoked);
 //   (b) runs effect-free steps with the worker's only accepted mode. Such a
@@ -27,8 +27,8 @@
 //       (SDK canUseTool gate), and cursor (provider read-only mode) — bind
 //       those providers to steps where read enforcement matters.
 //
-// The worker also rejects maxTurns pre-spawn; looper never sets it, so that
-// refusal is unreachable from here. (pi supports effort/instructions; looper
+// The worker also rejects maxTurns pre-spawn; vernier never sets it, so that
+// refusal is unreachable from here. (pi supports effort/instructions; vernier
 // does not set those either.)
 
 import { mkdirSync, writeFileSync } from "node:fs"
@@ -78,7 +78,7 @@ export class PiExecutor implements Executor {
     if (spec.effects.allow.length > 0) {
       const message =
         `pi has no enforceable sandbox (tool allowlists are not OS confinement; bash is unrestricted), ` +
-        `so looper refuses to hand it write scope(s): ${spec.effects.allow.join(", ")} — use noEffects() ` +
+        `so vernier refuses to hand it write scope(s): ${spec.effects.allow.join(", ")} — use noEffects() ` +
         `steps with pi, or bind this step to codex/claude, which enforce scoped writes`
       const preflightPath = join(spec.runDir, `${prefix}pi-preflight.json`)
       writeFileSync(

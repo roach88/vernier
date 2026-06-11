@@ -12,7 +12,7 @@ import { gitObserver, gitStatus, gitTreeSnapshot } from "../src/kernel/git-effec
 import { fsScope } from "../src/kernel/types.js"
 
 function gitRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), "looper-git-"))
+  const dir = mkdtempSync(join(tmpdir(), "vernier-git-"))
   execFileSync("git", ["init", "--quiet"], { cwd: dir })
   mkdirSync(join(dir, "docs", "agent-workflows"), { recursive: true })
   writeFileSync(join(dir, "README.md"), "scratch\n")

@@ -1,4 +1,4 @@
-// The looper CLI: drive loops by name, resume runs from their ledgers.
+// The vernier CLI: drive loops by name, resume runs from their ledgers.
 //
 // Agent-ergonomic by design — this tool orchestrates agents, so its own CLI
 // serves them: every command takes --json (machine output on stdout,
@@ -38,31 +38,31 @@ const out = (line: string): void => void process.stdout.write(line + "\n")
 const note = (line: string): void => void process.stderr.write(line + "\n")
 const json = (value: unknown): void => out(JSON.stringify(value, null, 2))
 
-const HELP = `looper — the loop is data; the ledger is append-only; resume is replay.
+const HELP = `vernier — the loop is data; the ledger is append-only; resume is replay.
 
 USAGE
-  looper loops                                       list registered loops (builtin + config)
-  looper run <loopId> [--input '<json>'] [--input-file <path>] [--workdir <dir>]
+  vernier loops                                       list registered loops (builtin + config)
+  vernier run <loopId> [--input '<json>'] [--input-file <path>] [--workdir <dir>]
              [--executor <stepIdOrExecutorId>=<executorId>]...
                                                      start a run, drive to terminal
-  looper tick <runId> [--workdir <dir>] [--executor ...]
+  vernier tick <runId> [--workdir <dir>] [--executor ...]
                                                      advance ONE step from the ledger
-  looper resume <runId> [--workdir <dir>] [--executor ...]
+  vernier resume <runId> [--workdir <dir>] [--executor ...]
                                                      continue a run to terminal
-  looper runs                                        list runs under the ledger root
-  looper show <runId>                                run timeline + per-step usage from the journal
-  looper stats [--loop <id>] [--last <n>]            usage/cost roll-ups across runs, per run and
+  vernier runs                                        list runs under the ledger root
+  vernier show <runId>                                run timeline + per-step usage from the journal
+  vernier stats [--loop <id>] [--last <n>]            usage/cost roll-ups across runs, per run and
                [--price-in <usd> --price-out <usd>]  per loop (prices are USD per 1M tokens; without
                                                      them the output is tokens only — never invented $)
-  looper doctor                                      probe executors + per-loop runnability
+  vernier doctor                                      probe executors + per-loop runnability
                                                      (exit 0 iff every registered loop is runnable)
 
 Every command accepts --json (machine output on stdout; diagnostics on stderr).
-Ledger root: $LOOPER_HOME, else ./.looper
+Ledger root: $VERNIER_HOME, else ./.vernier
 
 CONFIG
-  looper.config.{ts,js,mjs,json} — discovered from cwd upward (stops at the
-  repo root), or set $LOOPER_CONFIG. Registers user loops, user executors,
+  vernier.config.{ts,js,mjs,json} — discovered from cwd upward (stops at the
+  repo root), or set $VERNIER_CONFIG. Registers user loops, user executors,
   and executor bindings alongside the built-in pilots.
   Trust: loading a config EXECUTES its code with this process's privileges —
   the same trust you give any npm script.
@@ -181,14 +181,14 @@ function assertExecutorsResolvable(loop: Loop, executors: ReadonlyMap<string, Ex
   const detail = missing.map((s) => `step \`${s.id}\` -> executor \`${s.executor}\``).join("; ")
   throw new UsageError(
     `Unresolved executor binding(s): ${detail}. Registered executors: ${[...executors.keys()].join(", ")}. ` +
-      `Register the executor in looper.config (executors: [...]) or rebind with --executor <stepId>=<executorId>.`,
+      `Register the executor in vernier.config (executors: [...]) or rebind with --executor <stepId>=<executorId>.`,
   )
 }
 
 function lookupLoop(registry: ReadonlyMap<string, RegisteredLoop>, loopId: string | undefined): RegisteredLoop {
   if (!loopId) throw new UsageError(`Missing <loopId>. Registered loops: ${[...registry.keys()].join(", ")}`)
   const entry = registry.get(loopId)
-  if (!entry) throw new UsageError(`Unknown loop \`${loopId}\`. Registered loops: ${[...registry.keys()].join(", ")} (see \`looper loops\`).`)
+  if (!entry) throw new UsageError(`Unknown loop \`${loopId}\`. Registered loops: ${[...registry.keys()].join(", ")} (see \`vernier loops\`).`)
   return entry
 }
 
@@ -219,11 +219,11 @@ function parseInputs(entry: RegisteredLoop, flags: Flags): Record<string, unknow
 }
 
 function loadJournal(runId: string | undefined): { runId: string; path: string; entries: LedgerEntry[]; summary: JournalSummary } {
-  if (!runId) throw new UsageError("Missing <runId>. See `looper runs`.")
+  if (!runId) throw new UsageError("Missing <runId>. See `vernier runs`.")
   const root = resolveLedgerRoot({})
   const path = journalPath(root, runId)
   const entries = Ledger.load(path)
-  if (entries.length === 0) throw new UsageError(`No run \`${runId}\` under \`${root}\` (no journal at ${path}). See \`looper runs\`.`)
+  if (entries.length === 0) throw new UsageError(`No run \`${runId}\` under \`${root}\` (no journal at ${path}). See \`vernier runs\`.`)
   return { runId, path, entries, summary: summarizeJournal(entries) }
 }
 
@@ -579,12 +579,12 @@ try {
 } catch (error) {
   if (error instanceof UsageError) {
     note(`usage error: ${error.message}`)
-    note(`run \`looper --help\` for the command surface.`)
+    note(`run \`vernier --help\` for the command surface.`)
     process.exit(EXIT.usage)
   }
   if (error instanceof ConfigError) {
     note(`config error: ${error.message}`)
-    note(`reminder: looper.config code runs with this process's full privileges — only load configs you trust.`)
+    note(`reminder: vernier.config code runs with this process's full privileges — only load configs you trust.`)
     process.exit(EXIT.usage)
   }
   if (error instanceof LeaseHeldError) {

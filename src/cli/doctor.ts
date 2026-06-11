@@ -1,4 +1,4 @@
-// `looper doctor`: can this installation actually run its registered loops?
+// `vernier doctor`: can this installation actually run its registered loops?
 //
 // Two layers, reported in order:
 //
@@ -23,7 +23,7 @@
 //
 // Truth over declaration: doctor enumerates executors by building each
 // entry's REAL runtime in a throwaway scratch dir (construction is lazy —
-// nothing spawns), so the report can never drift from what `looper run`
+// nothing spawns), so the report can never drift from what `vernier run`
 // would resolve. Probes never execute the probed thing: binaries are
 // looked up on PATH, the SDK is resolved but not imported. Exit 0 iff
 // every registered loop is runnable; an unusable executor no step resolves
@@ -53,7 +53,7 @@ import type { RegisteredLoop } from "./registry.js"
 export interface DoctorProbes {
   /** PATH lookup: absolute path of the first executable match, or undefined. Never runs the binary. */
   which(bin: string): string | undefined
-  /** Module presence: resolvable from looper's own location, without importing it. */
+  /** Module presence: resolvable from vernier's own location, without importing it. */
   resolvable(specifier: string): boolean
 }
 
@@ -212,7 +212,7 @@ export async function diagnose(
   for (const entry of registry.values()) {
     let runtime: ReturnType<RegisteredLoop["runtime"]>
     try {
-      runtime = entry.runtime(mkdtempSync(join(tmpdir(), "looper-doctor-")))
+      runtime = entry.runtime(mkdtempSync(join(tmpdir(), "vernier-doctor-")))
     } catch (error) {
       loops.push({
         loopId: entry.loop.id,
@@ -224,7 +224,7 @@ export async function diagnose(
       continue
     }
     try {
-      // The same merge `looper run` performs: config executors over the entry's set.
+      // The same merge `vernier run` performs: config executors over the entry's set.
       const executors = new Map(runtime.deps.executors)
       for (const executor of config?.executors ?? []) executors.set(executor.id, executor)
       for (const executor of executors.values()) check(executor)

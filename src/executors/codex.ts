@@ -20,7 +20,7 @@
 //
 // Evidence: the streamed progress feed (reasoning, tool use, text deltas)
 // and the final message are written under StepSpec.runDir — the run's
-// ledger directory — mirroring the Python looper's runner-managed bundle
+// ledger directory — mirroring the Python predecessor's runner-managed bundle
 // files (codex-events.jsonl / codex-final.md), kept OUTSIDE the workdir so
 // effect attribution never has to exclude them by name.
 

@@ -3,7 +3,7 @@
 // See LICENSE in this directory and the repository NOTICE file.
 // Local adaptations: imports of "../dsl/types.js" point at "./types.js" (vendored
 // subset); optional Options fields (model, maxTurns) use conditional spread because
-// looper compiles with exactOptionalPropertyTypes (omegacode does not).
+// vernier compiles with exactOptionalPropertyTypes (omegacode does not).
 
 // ClaudeWorker — drives Claude Code via @anthropic-ai/claude-agent-sdk `query()`.
 // Structured output uses the SDK's native `outputFormat: { type: "json_schema" }`; sandbox maps to a

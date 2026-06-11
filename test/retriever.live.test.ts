@@ -2,7 +2,7 @@
 // first run downloads the embedding model (network + disk), so it never
 // runs in the auth-free suite. Run it deliberately:
 //
-//   LOOPER_LIVE=1 LOOPER_LIVE_EMBEDDING=1 npm test -- retriever.live
+//   VERNIER_LIVE=1 VERNIER_LIVE_EMBEDDING=1 npm test -- retriever.live
 //
 // After the one-time model download every embed is local; the proof is the
 // dogma sentence made concrete: an embedding lookup is deterministic given
@@ -17,14 +17,14 @@ import { describe, expect, it } from "vitest"
 import { EMBEDDING_PACKAGE, EmbeddingRetriever } from "../src/memory/embedding.js"
 import { Memory, rulesPath } from "../src/memory/memory.js"
 
-const LIVE_EMBEDDING_REQUESTED = process.env.LOOPER_LIVE === "1" && process.env.LOOPER_LIVE_EMBEDDING === "1"
+const LIVE_EMBEDDING_REQUESTED = process.env.VERNIER_LIVE === "1" && process.env.VERNIER_LIVE_EMBEDDING === "1"
 const EMBEDDING_AVAILABLE = LIVE_EMBEDDING_REQUESTED && packageResolvable()
 
 describe("embedding retriever live proof", () => {
   it.skipIf(!EMBEDDING_AVAILABLE)(
     "remembers with real vectors and recalls semantically related rules first",
     async () => {
-      const memory = new Memory(rulesPath(mkdtempSync(join(tmpdir(), "looper-embed-live-"))), new EmbeddingRetriever())
+      const memory = new Memory(rulesPath(mkdtempSync(join(tmpdir(), "vernier-embed-live-"))), new EmbeddingRetriever())
       await memory.remember({
         rule: "Name the launch year of the observatory.",
         evidence: "verified",

@@ -1,14 +1,14 @@
-// The loop registry: every loop this looper installation can run, by id.
+// The loop registry: every loop this vernier installation can run, by id.
 //
 // A registry entry is the loop (data) plus the one thing data cannot carry —
 // how to build its runtime dependencies (executors, contracts, observer,
 // memory, workdir prep). The per-pilot run.ts scripts each wired this by
-// hand; the registry is that wiring, named, so `looper run <loopId>` and
-// `looper resume <runId>` can reconstruct the same deps the original driver
+// hand; the registry is that wiring, named, so `vernier run <loopId>` and
+// `vernier resume <runId>` can reconstruct the same deps the original driver
 // used. Executor construction is lazy where it matters: CodexWorker spawns
 // its app-server on first runAgent(), so listing loops costs nothing.
 //
-// User loops arrive through looper.config (cli/config.ts) and merge in here
+// User loops arrive through vernier.config (cli/config.ts) and merge in here
 // with `source` naming where they came from; the in-tree pilots stay
 // registered as examples. Executor BINDING is resolved before a run starts
 // (config.ts bindExecutors) — the registry maps ids to implementations, the
@@ -53,9 +53,9 @@ export interface RegisteredLoop {
   readonly summary: string
   /** Where the loop came from: "builtin", or the config/module path that registered it. */
   readonly source: string
-  /** True when the loop drives live LLM CLIs — `looper run` warns; the test suite never runs these. */
+  /** True when the loop drives live LLM CLIs — `vernier run` warns; the test suite never runs these. */
   readonly live: boolean
-  /** Inputs used when `looper run` gets no --input. Omitted = inputs are required. */
+  /** Inputs used when `vernier run` gets no --input. Omitted = inputs are required. */
   readonly defaultInputs?: Record<string, unknown>
   /** Create (if needed) and return the workdir used when --workdir is not given. */
   defaultWorkdir(): string
@@ -68,7 +68,7 @@ const BUILTIN = "builtin"
 const noShutdown = async (): Promise<void> => {}
 
 function scratchDir(label: string): string {
-  return mkdtempSync(join(tmpdir(), `looper-${label}-`))
+  return mkdtempSync(join(tmpdir(), `vernier-${label}-`))
 }
 
 /**
@@ -135,7 +135,7 @@ function planWorkReviewEntry(): RegisteredLoop {
       mkdirSync(join(workdir, "docs", "agent-workflows"), { recursive: true })
       if (!existsSync(join(workdir, ".git"))) execFileSync("git", ["init", "--quiet"], { cwd: workdir })
       if (!existsSync(join(workdir, "README.md"))) {
-        writeFileSync(join(workdir, "README.md"), "# looper plan-work-review scratch\n", "utf8")
+        writeFileSync(join(workdir, "README.md"), "# vernier plan-work-review scratch\n", "utf8")
       }
       const providers = wiredProviders()
       return {
@@ -189,10 +189,10 @@ function compoundingAnswerEntry(): RegisteredLoop {
       const providers = wiredProviders()
       const judge = new JudgeExecutor()
       const distiller = new JudgeExecutor({ id: "distill" })
-      // ONE durable store under the looper root — sharing it across CLI
+      // ONE durable store under the vernier root — sharing it across CLI
       // invocations is the compounding seam (pilot3/run.ts shares it across
       // two in-process runs; the CLI shares it across processes). The
-      // retriever tier (lexical default / LOOPER_RETRIEVER=embedding) is
+      // retriever tier (lexical default / VERNIER_RETRIEVER=embedding) is
       // selected here, where Memory is constructed — never in the loop.
       const memory = new Memory(rulesPath(resolveMemoryRoot({})), retrieverFromEnv())
       return {
@@ -213,7 +213,7 @@ function compoundingAnswerEntry(): RegisteredLoop {
 }
 
 /**
- * A user loop from looper.config, behind the same RegisteredLoop seam as
+ * A user loop from vernier.config, behind the same RegisteredLoop seam as
  * the pilots. The default runtime hands it the full built-in executor set
  * (construction is lazy — nothing spawns until a step actually runs on it)
  * plus whatever the registration brings; `runtime` on the registration

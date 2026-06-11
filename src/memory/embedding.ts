@@ -4,7 +4,7 @@
 // without it. Nothing touches the package until a retrieval/remember
 // actually needs vectors: constructing the retriever (registry listing,
 // doctor) is free; a use without the package fails with an actionable error
-// naming the install command, and `looper doctor` reports the same probe.
+// naming the install command, and `vernier doctor` reports the same probe.
 //
 // Package choice: @huggingface/transformers (transformers.js) — official,
 // actively maintained, pure-node install (ONNX runtime, no Python), and
@@ -100,8 +100,8 @@ export class EmbeddingRetriever implements Retriever {
       if (code !== "ERR_MODULE_NOT_FOUND" || !message.includes(EMBEDDING_PACKAGE)) throw error
       throw new Error(
         `memory retriever \`embedding\` needs ${EMBEDDING_PACKAGE}, an optional peer dependency this install does not carry. ` +
-          `Install it next to looper (\`npm install ${EMBEDDING_PACKAGE}\`) and re-run, or unset LOOPER_RETRIEVER to stay on the lexical default. ` +
-          `\`looper doctor\` shows the same probe.`,
+          `Install it next to vernier (\`npm install ${EMBEDDING_PACKAGE}\`) and re-run, or unset VERNIER_RETRIEVER to stay on the lexical default. ` +
+          `\`vernier doctor\` shows the same probe.`,
       )
     }
     return this.embedder

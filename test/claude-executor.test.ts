@@ -13,7 +13,7 @@ import type { AgentResult, AgentSpec } from "../src/executors/vendor/omegacode/t
 import { fsScope, noEffects, type StepSpec } from "../src/kernel/types.js"
 
 function spec(overrides: Partial<StepSpec> = {}): StepSpec {
-  const runDir = mkdtempSync(join(tmpdir(), "looper-claude-run-"))
+  const runDir = mkdtempSync(join(tmpdir(), "vernier-claude-run-"))
   return {
     runId: "run-1",
     traceId: "run-1",
@@ -31,7 +31,7 @@ function spec(overrides: Partial<StepSpec> = {}): StepSpec {
   }
 }
 
-const workdir = (): string => mkdtempSync(join(tmpdir(), "looper-claude-work-"))
+const workdir = (): string => mkdtempSync(join(tmpdir(), "vernier-claude-work-"))
 
 function recordingWorker(result: AgentResult): { worker: Worker; seen: AgentSpec[] } {
   const seen: AgentSpec[] = []
@@ -93,7 +93,7 @@ describe("ClaudeExecutor", () => {
   })
 
   it("fails actionably (not crashes) when the optional SDK is missing, without retry-burning", async () => {
-    const missing = Object.assign(new Error(`Cannot find package '${CLAUDE_SDK}' imported from looper`), {
+    const missing = Object.assign(new Error(`Cannot find package '${CLAUDE_SDK}' imported from vernier`), {
       code: "ERR_MODULE_NOT_FOUND",
     })
     const s = spec()
@@ -102,7 +102,7 @@ describe("ClaudeExecutor", () => {
     expect(result.status).toBe("failed")
     expect(result.output).toMatchObject({ code: "sdk_missing", retryable: false })
     expect(String(result.output.error)).toContain(`npm install ${CLAUDE_SDK}`)
-    expect(String(result.output.error)).toContain("looper doctor")
+    expect(String(result.output.error)).toContain("vernier doctor")
     expect(readFileSync(join(s.runDir, "claude-final.md"), "utf8")).toContain(CLAUDE_SDK)
   })
 

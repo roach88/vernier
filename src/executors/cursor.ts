@@ -1,7 +1,7 @@
 // CursorExecutor: Cursor Agent behind the Executor seam.
 //
 // Cursor Agent Step 6A is deliberately read-only only. Unlike Codex, Cursor does not expose the
-// hard sandbox looper needs for scoped writes, so write scopes become evidence-bearing failures
+// hard sandbox vernier needs for scoped writes, so write scopes become evidence-bearing failures
 // before the provider process starts.
 
 import { mkdirSync, writeFileSync } from "node:fs"

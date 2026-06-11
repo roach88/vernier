@@ -1,6 +1,6 @@
 // Pilot-1 contracts.
 //
-// route-decision.v1: the Python looper computed route approval inline in
+// route-decision.v1: the Python predecessor computed route approval inline in
 // RunLoop.run (gate_decision in an approve-set, route_to_worker true,
 // worker == the loop's worker). Here those gate semantics are a contract —
 // loop data — because in the five-slot model the router is just a Step and

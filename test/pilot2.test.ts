@@ -53,12 +53,12 @@ const verdict = (v: { passed: boolean; feedback: string; missing: string[] }): A
 function harness(answers: AgentResult[], verdicts: AgentResult[]) {
   const answerer = scriptedWorker(answers)
   const judge = scriptedWorker(verdicts)
-  const ledgerRoot = mkdtempSync(join(tmpdir(), "looper-pilot2-ledger-"))
+  const ledgerRoot = mkdtempSync(join(tmpdir(), "vernier-pilot2-ledger-"))
   const loop = { ...verifiedAnswerLoop, ledger: { root: ledgerRoot } }
   const deps = {
     executors: executorRegistry(new CodexExecutor({ worker: answerer.worker }), new JudgeExecutor({ worker: judge.worker })),
     contracts: new ContractRegistry(),
-    workdir: mkdtempSync(join(tmpdir(), "looper-pilot2-work-")),
+    workdir: mkdtempSync(join(tmpdir(), "vernier-pilot2-work-")),
   }
   return { loop, deps, answerer, judge, ledgerRoot }
 }

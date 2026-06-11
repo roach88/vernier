@@ -8,7 +8,7 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { acquireLease, isStale, LeaseHeldError, leasePath, type LeaseRecord } from "../src/engine/lease.js"
 
-const runDir = (): string => mkdtempSync(join(tmpdir(), "looper-lease-"))
+const runDir = (): string => mkdtempSync(join(tmpdir(), "vernier-lease-"))
 
 function writeRecord(dir: string, record: LeaseRecord): void {
   writeFileSync(leasePath(dir), JSON.stringify(record) + "\n", "utf8")

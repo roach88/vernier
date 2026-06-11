@@ -14,7 +14,7 @@
 // fails the rubric, so this run is expected to exercise a real loop-back.
 //
 // Requires a live authed `codex` CLI on PATH. The default `npm test` never
-// runs this; the live test is gated by LOOPER_LIVE=1.
+// runs this; the live test is gated by VERNIER_LIVE=1.
 
 import { mkdtempSync } from "node:fs"
 import { resolve } from "node:path"
@@ -26,7 +26,7 @@ import { JudgeExecutor } from "../executors/judge.js"
 import { executorRegistry } from "../executors/script.js"
 import { verifiedAnswerLoop } from "./loop.js"
 
-const workdir = process.argv[2] ? resolve(process.argv[2]) : mkdtempSync("/tmp/looper-pilot2-scratch-")
+const workdir = process.argv[2] ? resolve(process.argv[2]) : mkdtempSync("/tmp/vernier-pilot2-scratch-")
 
 const goal = "Write a short note explaining why the Apollo 11 mission mattered."
 const rubric = `PASS only if ALL of the following hold:

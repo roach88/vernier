@@ -84,9 +84,9 @@ function harness() {
     usage,
   }))
 
-  const memoryRoot = mkdtempSync(join(tmpdir(), "looper-pilot3-memory-"))
+  const memoryRoot = mkdtempSync(join(tmpdir(), "vernier-pilot3-memory-"))
   const memory = new Memory(rulesPath(memoryRoot))
-  const ledgerRoot = mkdtempSync(join(tmpdir(), "looper-pilot3-ledger-"))
+  const ledgerRoot = mkdtempSync(join(tmpdir(), "vernier-pilot3-ledger-"))
   const loop = { ...compoundingAnswerLoop, ledger: { root: ledgerRoot } }
   const deps = {
     executors: executorRegistry(
@@ -97,7 +97,7 @@ function harness() {
       rememberExecutor,
     ),
     contracts: new ContractRegistry(),
-    workdir: mkdtempSync(join(tmpdir(), "looper-pilot3-work-")),
+    workdir: mkdtempSync(join(tmpdir(), "vernier-pilot3-work-")),
     memory, // ONE store, shared by every run that uses these deps
   }
   return { loop, deps, memory, ledgerRoot, answerer, judge, distiller }

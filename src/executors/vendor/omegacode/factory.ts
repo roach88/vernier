@@ -5,7 +5,7 @@
 // claude-code branch returns notImplemented() instead of constructing its
 // worker — claude.ts statically imports @anthropic-ai/claude-agent-sdk (an
 // OPTIONAL peer), so constructing it here would force the SDK onto every
-// factory importer; looper wires claude at the executor layer instead
+// factory importer; vernier wires claude at the executor layer instead
 // (src/executors/claude.ts, lazy dynamic import). codex / cursor-agent /
 // opencode / pi construct their real workers.
 
@@ -73,7 +73,7 @@ export class DefaultWorkerFactory implements WorkerFactory {
           ...(this.opts.piStallTimeoutMs !== undefined ? { stallTimeoutMs: this.opts.piStallTimeoutMs } : {}),
         })
       case "claude-code":
-        // Wired at looper's executor layer instead (lazy optional-peer SDK);
+        // Wired at vernier's executor layer instead (lazy optional-peer SDK);
         // constructing ClaudeWorker here would statically drag the SDK in.
         return notImplemented(id)
     }

@@ -1,6 +1,6 @@
 // HermesExecutor: an LLM gate is just a Step.
 //
-// Ported from the Python looper's HermesCli adapter
+// Ported from the Python predecessor's HermesCli adapter
 // (agent_workflows/adapters/hermes_cli.py) and the route handling in
 // RunLoop.run (application/run_loop.py): run `hermes -t clarify -z
 // <prompt>`, capture stdout/stderr, loose-parse the route JSON (tolerating

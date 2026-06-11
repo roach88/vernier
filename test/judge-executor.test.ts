@@ -30,13 +30,13 @@ function spec(overrides: Partial<StepSpec> = {}): StepSpec {
     prompt: "Grade the answer against the rubric.",
     outputSchema: verdictSchema,
     effects: noEffects(),
-    runDir: mkdtempSync(join(tmpdir(), "looper-judge-run-")),
+    runDir: mkdtempSync(join(tmpdir(), "vernier-judge-run-")),
     timeoutMs: 60_000,
     ...overrides,
   }
 }
 
-const workdir = (): string => mkdtempSync(join(tmpdir(), "looper-judge-work-"))
+const workdir = (): string => mkdtempSync(join(tmpdir(), "vernier-judge-work-"))
 
 function recordingWorker(result: AgentResult): { worker: Worker; seen: AgentSpec[] } {
   const seen: AgentSpec[] = []

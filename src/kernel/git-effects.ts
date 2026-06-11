@@ -1,4 +1,4 @@
-// Git-aware effect observation, ported from the Python looper's
+// Git-aware effect observation, ported from the Python predecessor's
 // GitSnapshotter (agent_workflows/adapters/git_snapshot.py) and the
 // worker-change-attribution semantics of RunLoop.assess_worker_state:
 // snapshot before, run the step, diff after, attribute the changed files,
@@ -37,7 +37,7 @@ function git(workdir: string, args: string[], env?: NodeJS.ProcessEnv): string {
  * the real index is never touched.
  */
 export function gitTreeSnapshot(workdir: string): string {
-  const scratch = mkdtempSync(join(tmpdir(), "looper-git-index-"))
+  const scratch = mkdtempSync(join(tmpdir(), "vernier-git-index-"))
   const env = { ...process.env, GIT_INDEX_FILE: join(scratch, "index") }
   try {
     git(workdir, ["add", "-A"], env)

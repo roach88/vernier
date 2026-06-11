@@ -25,7 +25,7 @@ import { planWorkReviewLoop } from "../src/pilot1/loop.js"
 const TASK = "Create the dry-run note. Do not edit any other file."
 
 function setup(ledgerRoot?: string) {
-  const root = mkdtempSync(join(tmpdir(), "looper-pilot1-"))
+  const root = mkdtempSync(join(tmpdir(), "vernier-pilot1-"))
   const workdir = join(root, "work")
   mkdirSync(workdir, { recursive: true })
   return {

@@ -1,7 +1,7 @@
-// Out-of-tree loop registration: looper.config.{ts,js,mjs,json}.
+// Out-of-tree loop registration: vernier.config.{ts,js,mjs,json}.
 //
 // A user defines a Loop (and any Executor) in their OWN repo and registers
-// it here — no fork of looper. The config contributes three things, merged
+// it here — no fork of vernier. The config contributes three things, merged
 // over the built-in registry at CLI startup:
 //
 //   loops      user loop modules (each default-exports a Loop or a
@@ -11,20 +11,20 @@
 //   bindings   executor bindings: stepId-or-executorId -> executorId,
 //              applied to every loop they match (see bindExecutors)
 //
-// Discovery: $LOOPER_CONFIG (explicit path, missing = error), else walk up
+// Discovery: $VERNIER_CONFIG (explicit path, missing = error), else walk up
 // from cwd until a directory containing a config file or `.git` (the repo
-// root) is found. JSON configs are validated by `looperConfigSchema`; TS/JS
+// root) is found. JSON configs are validated by `vernierConfigSchema`; TS/JS
 // configs default-export `defineConfig({...})`.
 //
 // ── TRUST BOUNDARY ─────────────────────────────────────────────────────────
 // Loading a config or a module it names EXECUTES that code with this
 // process's full privileges — exactly the trust you extend to any npm
 // script. v1 documents this honestly instead of pretending a sandbox:
-// do not point looper at a config you would not `node` yourself.
+// do not point vernier at a config you would not `node` yourself.
 // ───────────────────────────────────────────────────────────────────────────
 //
 // Loader note: .js/.mjs/.json work under plain node. .ts configs work today
-// because bin/looper.js registers the tsx loader; a compiled bin is coming,
+// because bin/vernier.js registers the tsx loader; a compiled bin is coming,
 // so a .ts import failure without a loader gets an actionable error instead
 // of a stack trace (see importModule).
 
@@ -44,9 +44,9 @@ export class ConfigError extends Error {}
 /**
  * The JSON form of the config: module paths only (relative paths resolve
  * against the config file's directory). The one source of truth for what a
- * looper.config.json may contain.
+ * vernier.config.json may contain.
  */
-export const looperConfigSchema = z
+export const vernierConfigSchema = z
   .object({
     /** Paths to loop modules; each default-exports a Loop or defineLoop({...}). */
     loops: z.array(z.string()).optional(),
@@ -66,11 +66,11 @@ export const looperConfigSchema = z
 export interface LoopRegistration {
   readonly loop: Loop
   readonly summary?: string
-  /** Human-readable `in -> out` for `looper loops` (zod schemas don't render themselves). */
+  /** Human-readable `in -> out` for `vernier loops` (zod schemas don't render themselves). */
   readonly signature?: string
-  /** True when the loop drives live LLM CLIs — `looper run` warns. */
+  /** True when the loop drives live LLM CLIs — `vernier run` warns. */
   readonly live?: boolean
-  /** Inputs used when `looper run` gets no --input. Omitted = inputs are required. */
+  /** Inputs used when `vernier run` gets no --input. Omitted = inputs are required. */
   readonly defaultInputs?: Record<string, unknown>
   /** Executors this loop's steps name, in addition to the built-in set. */
   readonly executors?: readonly Executor[]
@@ -85,21 +85,21 @@ export interface LoopRegistration {
 }
 
 /** The TS/JS form of the config: module paths AND in-place objects are both fine. */
-export interface LooperConfig {
+export interface VernierConfig {
   readonly loops?: ReadonlyArray<string | Loop | LoopRegistration>
   readonly executors?: ReadonlyArray<string | Executor>
   readonly bindings?: Readonly<Record<string, string>>
 }
 
 /** Typed identity helper for TS/JS configs: `export default defineConfig({...})`. */
-export const defineConfig = (config: LooperConfig): LooperConfig => config
+export const defineConfig = (config: VernierConfig): VernierConfig => config
 
 /** Typed identity helper for TS/JS loop modules: `export default defineLoop({ loop, ... })`. */
 export const defineLoop = (registration: LoopRegistration): LoopRegistration => registration
 
 // ---------------------------------------------------------------- discovery
 
-const CONFIG_NAMES = ["looper.config.ts", "looper.config.js", "looper.config.mjs", "looper.config.json"]
+const CONFIG_NAMES = ["vernier.config.ts", "vernier.config.js", "vernier.config.mjs", "vernier.config.json"]
 
 /** Walk up from cwd; stop at the first config found, or at the repo root (`.git`), or the fs root. */
 export function findConfigPath(cwd: string): string | undefined {
@@ -154,7 +154,7 @@ async function importModule(path: string): Promise<Record<string, unknown>> {
     if (path.endsWith(".ts") && (code === "ERR_UNKNOWN_FILE_EXTENSION" || message.includes("Unknown file extension"))) {
       throw new ConfigError(
         `Could not load \`${path}\`: this runtime has no TypeScript loader. ` +
-          `Use a .mjs/.js/.json config instead, or run looper through a TS-capable loader (e.g. install tsx and run \`tsx\`/the dev bin, which registers it).`,
+          `Use a .mjs/.js/.json config instead, or run vernier through a TS-capable loader (e.g. install tsx and run \`tsx\`/the dev bin, which registers it).`,
       )
     }
     throw new ConfigError(`Could not load \`${path}\`: ${message}`)
@@ -200,20 +200,20 @@ async function loadExecutorEntry(entry: string | Executor, configPath: string): 
 }
 
 /** Parse + schema-validate the JSON config form. */
-function parseJsonConfig(path: string): LooperConfig {
+function parseJsonConfig(path: string): VernierConfig {
   let parsed: unknown
   try {
     parsed = JSON.parse(readFileSync(path, "utf8"))
   } catch (error) {
     throw new ConfigError(`\`${path}\` is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
   }
-  const result = looperConfigSchema.safeParse(parsed)
+  const result = vernierConfigSchema.safeParse(parsed)
   if (!result.success) {
     const issues = result.error.issues.map((i) => `  ${i.path.join(".") || "<root>"}: ${i.message}`).join("\n")
-    throw new ConfigError(`\`${path}\` does not match the looper config schema:\n${issues}`)
+    throw new ConfigError(`\`${path}\` does not match the vernier config schema:\n${issues}`)
   }
   // exactOptionalPropertyTypes: zod's .optional() parses to `T | undefined`
-  // properties; LooperConfig keeps optional keys strictly ABSENT. Normalize
+  // properties; VernierConfig keeps optional keys strictly ABSENT. Normalize
   // here (drop undefined keys, repo-wide conditional-spread pattern) so the
   // public type stays strict instead of widening it.
   const { loops, executors, bindings } = result.data
@@ -231,17 +231,17 @@ function parseJsonConfig(path: string): LooperConfig {
  * the trust-boundary note at the top of this file).
  */
 export async function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env): Promise<LoadedConfig | undefined> {
-  const explicit = env.LOOPER_CONFIG?.trim()
+  const explicit = env.VERNIER_CONFIG?.trim()
   let path: string | undefined
   if (explicit) {
     path = resolve(cwd, explicit)
-    if (!existsSync(path)) throw new ConfigError(`$LOOPER_CONFIG points at \`${path}\`, which does not exist.`)
+    if (!existsSync(path)) throw new ConfigError(`$VERNIER_CONFIG points at \`${path}\`, which does not exist.`)
   } else {
     path = findConfigPath(cwd)
   }
   if (path === undefined) return undefined
 
-  let config: LooperConfig
+  let config: VernierConfig
   if (path.endsWith(".json")) {
     config = parseJsonConfig(path)
   } else {
@@ -250,7 +250,7 @@ export async function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = p
     if (!isRecord(raw)) {
       throw new ConfigError(`\`${path}\` must default-export the config object: \`export default defineConfig({ loops, executors, bindings })\`.`)
     }
-    config = raw as LooperConfig
+    config = raw as VernierConfig
   }
 
   const loops = []

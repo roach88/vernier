@@ -16,7 +16,7 @@
 // weaker on reads): opencode exposes NO enforceable sandbox at any level —
 // no OS confinement, and its app-level permission rules leave bash
 // unconfined — so the vendored worker refuses to pretend and accepts only
-// "danger-full-access". Looper therefore:
+// "danger-full-access". Vernier therefore:
 //   (a) FAILS CLOSED on write scopes: a step with a non-empty EffectScope
 //       refuses pre-spawn with an actionable error (worker never invoked);
 //   (b) runs effect-free steps with the worker's only accepted mode. Such a
@@ -27,7 +27,7 @@
 //       (SDK canUseTool gate), and cursor (provider read-only mode) — bind
 //       those providers to steps where read enforcement matters.
 //
-// The worker also rejects maxTurns and effort pre-spawn; looper never sets
+// The worker also rejects maxTurns and effort pre-spawn; vernier never sets
 // either, so those refusals are unreachable from here.
 
 import { mkdirSync, writeFileSync } from "node:fs"
@@ -76,7 +76,7 @@ export class OpencodeExecutor implements Executor {
 
     if (spec.effects.allow.length > 0) {
       const message =
-        `opencode has no enforceable sandbox (bash is unconfined), so looper refuses to hand it ` +
+        `opencode has no enforceable sandbox (bash is unconfined), so vernier refuses to hand it ` +
         `write scope(s): ${spec.effects.allow.join(", ")} — use noEffects() steps with opencode, ` +
         `or bind this step to codex/claude, which enforce scoped writes`
       const preflightPath = join(spec.runDir, `${prefix}opencode-preflight.json`)

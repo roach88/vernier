@@ -2,9 +2,9 @@
 //
 // Two read surfaces, one source of truth (the ledger):
 //   buildTimeline(entries)            one run  -> events with relative
-//     offsets, per-STEP usage attribution, totals      (`looper show`)
+//     offsets, per-STEP usage attribution, totals      (`vernier show`)
 //   runStatsRow / rollupByLoop        many runs -> usage/cost roll-ups
-//     per run and per loop id                          (`looper stats`)
+//     per run and per loop id                          (`vernier stats`)
 //
 // Everything here is a pure function of journal entries: no I/O, no state,
 // no ledger-format changes — the CLI loads journals (Ledger.load, torn-line

@@ -31,12 +31,12 @@ function spec(): StepSpec {
     inputs: { task: "write the note" },
     prompt: "Route this task.",
     effects: noEffects(),
-    runDir: mkdtempSync(join(tmpdir(), "looper-hermes-run-")),
+    runDir: mkdtempSync(join(tmpdir(), "vernier-hermes-run-")),
     timeoutMs: 60_000,
   }
 }
 
-const workdir = (): string => mkdtempSync(join(tmpdir(), "looper-hermes-work-"))
+const workdir = (): string => mkdtempSync(join(tmpdir(), "vernier-hermes-work-"))
 
 function runnerReturning(code: number, stdout: string, stderr = ""): { runner: HermesRunner; calls: unknown[][] } {
   const calls: unknown[][] = []

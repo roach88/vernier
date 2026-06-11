@@ -11,7 +11,7 @@ import { executorRegistry, scriptExecutor } from "../src/executors/script.js"
 import { Ledger } from "../src/ledger/ledger.js"
 
 function temp(): { workdir: string; ledgerRoot: string } {
-  const root = mkdtempSync(join(tmpdir(), "looper-tick-"))
+  const root = mkdtempSync(join(tmpdir(), "vernier-tick-"))
   const workdir = join(root, "work")
   mkdirSync(workdir, { recursive: true })
   return { workdir, ledgerRoot: join(root, "ledger") }

@@ -11,7 +11,7 @@
 // whose call sites have no stable identity. Under loop-as-data a step HAS
 // a stable identity, so the resume key collapses to hash(stepId + inputs).
 //
-// Added beyond omegacode's journal (the gap looper identified): contract
+// Added beyond omegacode's journal (the gap vernier identified): contract
 // results, policy decisions, and effect observations are first-class
 // ledger entries, not just agent results.
 
@@ -150,7 +150,7 @@ export type LedgerEntry =
 // ------------------------------------------------------------------ ledger
 
 export function resolveLedgerRoot(spec: LedgerSpec): string {
-  return spec.root ?? process.env.LOOPER_HOME ?? join(process.cwd(), ".looper")
+  return spec.root ?? process.env.VERNIER_HOME ?? join(process.cwd(), ".vernier")
 }
 
 export function journalPath(root: string, runId: string): string {

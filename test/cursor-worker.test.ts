@@ -72,7 +72,7 @@ function spec(overrides: Partial<AgentSpec> = {}): AgentSpec {
   return {
     prompt: "Tell me about this repo.",
     provider: "cursor-agent",
-    cwd: mkdtempSync(join(tmpdir(), "looper-cursor-worker-")),
+    cwd: mkdtempSync(join(tmpdir(), "vernier-cursor-worker-")),
     sandbox: "read-only",
     approval: "never",
     ...overrides,
@@ -171,7 +171,7 @@ describe("CursorWorker", () => {
 
   it("keeps binary selection explicit and builds a small env allowlist", async () => {
     const { spawnProcess, calls } = scriptedSpawn({ stdout: [{ type: "result", result: "ok", is_error: false }] })
-    const configDir = mkdtempSync(join(tmpdir(), "looper-cursor-config-"))
+    const configDir = mkdtempSync(join(tmpdir(), "vernier-cursor-config-"))
     const { ctx } = context()
     await new CursorWorker({
       spawnProcess,

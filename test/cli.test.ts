@@ -17,7 +17,7 @@ import { Ledger, journalPath, resumeKey } from "../src/ledger/ledger.js"
 import { controlPlaneSmokeLoop } from "../src/pilot0/loop.js"
 
 const execFileAsync = promisify(execFile)
-const BIN = join(import.meta.dirname, "..", "bin", "looper.js")
+const BIN = join(import.meta.dirname, "..", "bin", "vernier.js")
 
 interface CliResult {
   readonly code: number
@@ -28,7 +28,7 @@ interface CliResult {
 async function cli(home: string, ...args: string[]): Promise<CliResult> {
   try {
     const { stdout, stderr } = await execFileAsync(process.execPath, [BIN, ...args], {
-      env: { ...process.env, LOOPER_HOME: home },
+      env: { ...process.env, VERNIER_HOME: home },
       encoding: "utf8",
       timeout: 60_000,
     })
@@ -39,10 +39,10 @@ async function cli(home: string, ...args: string[]): Promise<CliResult> {
   }
 }
 
-const home = (): string => mkdtempSync(join(tmpdir(), "looper-cli-"))
+const home = (): string => mkdtempSync(join(tmpdir(), "vernier-cli-"))
 
 /**
- * A half-finished smoke run: meta journaled (as `looper run` would have
+ * A half-finished smoke run: meta journaled (as `vernier run` would have
  * written first), then the driver "crashed" before its first tick. Built
  * in-process so the crash point is exact and deterministic.
  */
@@ -67,7 +67,7 @@ const liveLease = (over: Partial<LeaseRecord> = {}): LeaseRecord => ({
   ...over,
 })
 
-describe("looper CLI", () => {
+describe("vernier CLI", () => {
   it("`loops --json` lists the four registered loops with id/version/signature/trust", async () => {
     const result = await cli(home(), "loops", "--json")
     expect(result.code).toBe(0)
@@ -209,7 +209,7 @@ describe("looper CLI", () => {
 
     const unknownRun = await cli(root, "tick", "no-such-run")
     expect(unknownRun.code).toBe(2)
-    expect(unknownRun.stderr).toContain("looper runs")
+    expect(unknownRun.stderr).toContain("vernier runs")
 
     const badJson = await cli(root, "run", "control-plane-smoke-test", "--input", "{oops")
     expect(badJson.code).toBe(2)
@@ -257,7 +257,7 @@ describe("looper CLI", () => {
     expect(parsed.timeline.steps).toEqual([expect.objectContaining({ stepId: "smoke", executions: 1, hasUsage: true })])
   })
 
-  /** A synthesized verified-answer iterate arc (fail -> iterate -> pass) with usage, journaled as `looper run` would have. */
+  /** A synthesized verified-answer iterate arc (fail -> iterate -> pass) with usage, journaled as `vernier run` would have. */
   function writeIterateArcJournal(root: string, runId: string): void {
     const T0 = Date.parse("2026-06-09T00:00:00.000Z") // older than any live smoke run in the same root
     const at = (s: number): string => new Date(T0 + s * 1000).toISOString()

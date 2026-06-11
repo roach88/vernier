@@ -23,7 +23,7 @@
 // the SDK, so it is imported DYNAMICALLY on first run(): constructing the
 // executor (registry listing, doctor) never touches the SDK; a run without
 // it fails as an actionable StepResult (code "sdk_missing"), and
-// `looper doctor` reports the same probe.
+// `vernier doctor` reports the same probe.
 
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -92,7 +92,7 @@ export class ClaudeExecutor implements Executor {
         if (code !== "ERR_MODULE_NOT_FOUND" || !message.includes(CLAUDE_SDK)) throw error
         const actionable =
           `executor \`claude\` needs ${CLAUDE_SDK}, an optional peer dependency this install does not carry. ` +
-          `Install it next to looper (\`npm install ${CLAUDE_SDK}\`) and re-run. \`looper doctor\` shows the same probe.`
+          `Install it next to vernier (\`npm install ${CLAUDE_SDK}\`) and re-run. \`vernier doctor\` shows the same probe.`
         const evidence = this.writeEvidence(spec, prefix, promptPath, [], actionable)
         return {
           status: "failed",

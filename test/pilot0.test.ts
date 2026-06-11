@@ -13,7 +13,7 @@ import { Ledger, replay } from "../src/ledger/ledger.js"
 import { controlPlaneSmokeExecutor, controlPlaneSmokeLoop } from "../src/pilot0/loop.js"
 
 function setup() {
-  const root = mkdtempSync(join(tmpdir(), "looper-pilot0-"))
+  const root = mkdtempSync(join(tmpdir(), "vernier-pilot0-"))
   const workdir = join(root, "work")
   mkdirSync(workdir, { recursive: true })
   const ledgerRoot = join(root, "ledger")

@@ -1,6 +1,6 @@
-// The library surface of @roach88/looper: what a LOOP AUTHOR needs, nothing
+// The library surface of vernier: what a LOOP AUTHOR needs, nothing
 // else. One deliberate root export — the five-slot kernel API plus the
-// config helpers an out-of-tree looper.config (and the loop/executor modules
+// config helpers an out-of-tree vernier.config (and the loop/executor modules
 // it names) genuinely uses. The engine, ledger, registry, and provider
 // executors stay internal: they are reachable through the CLI, and exposing
 // them would freeze internals v1 has no reason to freeze.
@@ -59,9 +59,9 @@ export {
 // The Contract seam: deterministic semantic validation of a step's output.
 export { type Contract, type ContractCheck, type ContractContext, type ContractResult } from "./kernel/contract.js"
 
-// Out-of-tree registration: what a looper.config.{ts,js,mjs} and the loop
+// Out-of-tree registration: what a vernier.config.{ts,js,mjs} and the loop
 // modules it names export.
-export { defineConfig, defineLoop, type LooperConfig, type LoopRegistration } from "./cli/config.js"
+export { defineConfig, defineLoop, type VernierConfig, type LoopRegistration } from "./cli/config.js"
 
 // The smallest custom executor: a plain function behind the Executor seam.
 export { scriptExecutor, type ScriptFn, type ScriptOutcome } from "./executors/script.js"

@@ -15,7 +15,7 @@ import type { AgentResult, AgentSpec } from "../src/executors/vendor/omegacode/t
 import { fsScope, noEffects, type StepSpec } from "../src/kernel/types.js"
 
 function spec(overrides: Partial<StepSpec> = {}): StepSpec {
-  const runDir = mkdtempSync(join(tmpdir(), "looper-codex-run-"))
+  const runDir = mkdtempSync(join(tmpdir(), "vernier-codex-run-"))
   return {
     runId: "run-1",
     traceId: "run-1",
@@ -33,7 +33,7 @@ function spec(overrides: Partial<StepSpec> = {}): StepSpec {
   }
 }
 
-const workdir = (): string => mkdtempSync(join(tmpdir(), "looper-codex-work-"))
+const workdir = (): string => mkdtempSync(join(tmpdir(), "vernier-codex-work-"))
 
 /** A stub worker that records the AgentSpec it received and returns a canned result. */
 function recordingWorker(result: AgentResult): { worker: Worker; seen: AgentSpec[] } {

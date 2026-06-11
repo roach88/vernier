@@ -15,7 +15,7 @@
 // contract are the whole role. Any structured-output-capable executor can
 // fill it (`structuredOutput: true` hands the executor a JSON Schema
 // derived from the step's zod output signature). The DEFAULT binding is
-// codex for both steps, so `looper run plan-work-review` needs only one
+// codex for both steps, so `vernier run plan-work-review` needs only one
 // authed CLI; rebind with `--executor route=hermes` (or config bindings)
 // to route on hermes — it is one binding among many, not a requirement.
 //

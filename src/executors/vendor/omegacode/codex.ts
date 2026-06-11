@@ -3,7 +3,7 @@
 // See LICENSE in this directory and the repository NOTICE file.
 // Local adaptations: imports of "../dsl/types.js" point at "./types.js"
 // (vendored subset); optional properties widened with `| undefined` because
-// looper compiles with exactOptionalPropertyTypes (omegacode does not).
+// vernier compiles with exactOptionalPropertyTypes (omegacode does not).
 
 // CodexWorker — drives the local `codex app-server` over newline-delimited
 // JSON-RPC 2.0 (stdio). The transport (child process, framing, pending-request

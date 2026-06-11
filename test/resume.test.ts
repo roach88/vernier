@@ -24,7 +24,7 @@ import { noEffects, sig, type Loop } from "../src/kernel/types.js"
 import { Ledger, journalPath } from "../src/ledger/ledger.js"
 
 function temp(): { workdir: string; ledgerRoot: string } {
-  const root = mkdtempSync(join(tmpdir(), "looper-resume-"))
+  const root = mkdtempSync(join(tmpdir(), "vernier-resume-"))
   const workdir = join(root, "work")
   mkdirSync(workdir, { recursive: true })
   return { workdir, ledgerRoot: join(root, "ledger") }

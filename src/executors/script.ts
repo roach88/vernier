@@ -1,4 +1,4 @@
-// The script executor: looper's `no-agent-script` capability as an Executor.
+// The script executor: the Python predecessor's `no-agent-script` capability as an Executor.
 // A plain function behind the same seam an LLM agent will sit behind —
 // that fungibility is the point. Real agent/provider executors (codex,
 // claude, judges — omegacode's src/worker/ adapters) come in a later step;

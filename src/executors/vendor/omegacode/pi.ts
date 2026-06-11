@@ -3,7 +3,7 @@
 // See LICENSE in this directory and the repository NOTICE file.
 // Local adaptations: imports of "../dsl/types.js" point at "./types.js"
 // (vendored subset); optional properties widened with `| undefined` because
-// looper compiles with exactOptionalPropertyTypes (omegacode does not).
+// vernier compiles with exactOptionalPropertyTypes (omegacode does not).
 
 // PiWorker — drives the pi coding agent one shot at a time: `pi --mode json --no-session`, prompt
 // on stdin, JSONL AgentEvents parsed off stdout (subprocess mechanics live in subprocess-jsonl).
