@@ -5,6 +5,8 @@ An agent-orchestration kernel. Not a framework.
 > The loop is data; the step is typed; the executor is fungible;
 > the policy is pure; the ledger is append-only.
 
+New here? Start with [docs/walkthrough.md](docs/walkthrough.md) — the guided tour, zero to mastery.
+
 Design doc: [docs/orchestration-direction.md](docs/orchestration-direction.md)
 (authoritative — this repo is its "smallest first step on the TS path").
 The Python `agent_workflows` repo remains the frozen executable spec until
