@@ -4,9 +4,9 @@
 // means. No LLM, no auth — the whole five-slot shape with nothing hidden.
 //
 // This module is written the way YOU would write one: plain .mjs, zod for
-// the signature schemas (the one bare specifier — an out-of-tree copy of
-// this directory needs its own `npm install zod`), a pure function for the
-// policy, and a default export of { loop, ...runtime facts } that
+// the signature schemas (the one bare specifier — your node_modules wins
+// when present, else the vernier CLI lends its own copy), a pure function
+// for the policy, and a default export of { loop, ...runtime facts } that
 // vernier.config.json points at.
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs"

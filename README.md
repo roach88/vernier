@@ -311,11 +311,17 @@ roles onto the wired agents — every user loop's runtime registers `codex`,
 read prompts), and the agent must be usable on this machine
 (`vernier doctor`).
 
-Rough edge, named honestly: a loop module's bare specifiers (`zod` above)
-resolve from the **config dir's own node_modules** — an out-of-tree config
-importing packages needs its own `npm install zod` (or run from a
-directory that can already resolve it). Once vernier is published, prefer
-importing the helpers — `sig`, `until`, `retryPolicy`, `decideNextStep`,
+Dependency lending, named honestly: a loop module's bare specifiers (`zod`
+above, and `"vernier"` itself in the scaffolded templates) resolve from
+the **config dir's own node_modules** when one exists — and when none does
+(a fresh `vernier init` scaffold in a bare directory), the CLI retries
+failed resolutions against its OWN dependency tree, so the scaffold runs
+with no install step. The project's node_modules always wins (the fallback
+fires only when default resolution fails); the flip side is that a
+bare-dir template runs against the `zod` version vernier bundles until you
+`npm install` your own. Mechanism: a `module.register()` resolve hook,
+`bin/lend-deps-hooks.mjs`. Once vernier is published, prefer importing the
+helpers — `sig`, `until`, `retryPolicy`, `decideNextStep`,
 `fsScope`/`noEffects`, `artifactsFromEffects`, `scriptExecutor`,
 `defineConfig`/`defineLoop`, and the types — from `"vernier"`;
 that root export is the library surface, and it is deliberately small.

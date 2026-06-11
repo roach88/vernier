@@ -17,9 +17,11 @@ append-only ledger — without an API key in sight.
 
 ## What it needs
 
-Nothing. No agent CLI, no auth, no network. (The module's one bare
-specifier, `zod`, resolves from your project's `node_modules` — installing
-`vernier` brings it in.)
+Nothing. No agent CLI, no auth, no network, no install step. (The module's
+one bare specifier, `zod`, resolves from your project's `node_modules`
+when you have one; in a bare directory the vernier CLI lends its own copy.
+Your project's copy always wins once installed — until then the loop runs
+against the zod version vernier bundles.)
 
 ## Run it
 

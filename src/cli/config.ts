@@ -26,7 +26,10 @@
 // Loader note: .js/.mjs/.json work under plain node. .ts configs work today
 // because bin/vernier.js registers the tsx loader; a compiled bin is coming,
 // so a .ts import failure without a loader gets an actionable error instead
-// of a stack trace (see importModule).
+// of a stack trace (see importModule). Bare specifiers a config module
+// imports that default resolution cannot serve (a bare-dir scaffold
+// importing `zod` or `"vernier"`) are retried against vernier's own
+// dependency tree — see bin/lend-deps-hooks.mjs, registered in cli/main.
 
 import { existsSync, readFileSync } from "node:fs"
 import { dirname, isAbsolute, join, resolve } from "node:path"

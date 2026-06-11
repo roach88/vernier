@@ -7,9 +7,10 @@
 // template.
 //
 // Every slot here is hand-rolled on purpose — plain objects, zod for the
-// signature schemas (the one bare specifier; installing vernier brings zod
-// into node_modules), a pure function for the policy — so nothing about the
-// five-slot shape is hidden behind a helper. The other templates show the
+// signature schemas (the one bare specifier; your project's node_modules
+// wins when present, else the vernier CLI lends its own copy), a pure
+// function for the policy — so nothing about the five-slot shape is hidden
+// behind a helper. The other templates show the
 // idiomatic path: importing `sig`, `fsScope`, `retryPolicy`, `until`, …
 // from "vernier".
 

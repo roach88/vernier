@@ -17,6 +17,7 @@
 // a run one step, and the engine, not the caller, knows what is next.
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs"
+import { register as registerModuleHooks } from "node:module"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { parseArgs } from "node:util"
@@ -30,6 +31,16 @@ import { buildTimeline, computedCostUsd, renderStats, renderTimeline, rollupByLo
 import { bindExecutors, ConfigError, loadConfig, type BindingLayer, type LoadedConfig } from "./config.js"
 import { diagnose, renderDoctor } from "./doctor.js"
 import { loopRegistry, type LoopRuntime, type RegisteredLoop } from "./registry.js"
+
+// Lend the CLI's own dependencies to config modules: scaffolded templates
+// import `zod` and `"vernier"` as bare specifiers, which a bare directory
+// (no node_modules ancestry) cannot resolve. The hook retries ONLY failed
+// resolutions against vernier's own tree — a project's node_modules always
+// wins when it exists. Registered here because this module is the one
+// entry point every mode shares (compiled bin, source-checkout bin,
+// `npm run vernier`), and it runs before any config module is imported.
+// Full rationale + trust note: bin/lend-deps-hooks.mjs.
+registerModuleHooks(new URL("../../bin/lend-deps-hooks.mjs", import.meta.url))
 
 const EXIT = { ok: 0, failed: 1, usage: 2, leaseHeld: 3 } as const
 

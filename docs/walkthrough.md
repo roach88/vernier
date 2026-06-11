@@ -115,11 +115,14 @@ Both are right; they answer different needs:
 - **Global (`npm link`, or `npm install -g` once published)** puts the
   `vernier` CLI on your PATH so you can run it from anywhere. This is all
   you need to *drive* loops.
-- **Per-project (`npm install vernier` in your repo)** is what you need the
-  moment your loop modules `import { sig, until, retryPolicy, … } from
-  "vernier"` — the library surface resolves from the project's own
-  `node_modules` (and brings `zod` with it). Pinning the version per
-  project is the usual dependency hygiene.
+- **Per-project (`npm install vernier` in your repo)** pins the library
+  surface your loop modules import — `import { sig, until, retryPolicy, … }
+  from "vernier"` resolves from the project's own `node_modules` (and
+  brings `zod` with it). Strictly speaking you can defer this: when a
+  project has no `node_modules`, the CLI lends its own copies of `vernier`
+  and its dependencies to config modules, so scaffolds run before any
+  install. Installing per-project is still the hygiene that pins YOUR
+  versions — and once present, they win over the lent ones.
 - **Either way, everything you DO with vernier is per-project.** Config
   discovery always starts at your current directory and walks up to the
   repo root (`vernier.config.{ts,js,mjs,json}`, or `$VERNIER_CONFIG`); the
@@ -191,7 +194,7 @@ vernier init smoke
 ```
 
 ```
-scaffolded template `smoke` into /private/tmp/quickstart-7s7WVg:
+scaffolded template `smoke` into /private/tmp/quickstart-baiAmP:
   README.md
   smoke-loop.mjs
   vernier.config.json
@@ -204,9 +207,11 @@ next steps:
 
 (`vernier init` with no argument lists all four starter templates — smoke,
 coding-review, verified-answer, self-improving — with what each requires.
-`init` never overwrites existing files. The scaffolded module's one bare
-specifier, `zod`, resolves from your project's `node_modules`; installing
-vernier brings it in.)
+`init` never overwrites existing files. The scaffolded modules' bare
+specifiers — `zod`, and `"vernier"` in the agent templates — resolve from
+your project's `node_modules` when you have one; in a bare directory the
+CLI lends its own copies, so the scaffold runs immediately. Your project's
+versions always win once installed.)
 
 The scaffold is three files: a `vernier.config.json` that registers the
 loop module, the loop module itself (the five slots from §1, plus the
@@ -219,7 +224,7 @@ vernier loops
 ```
 
 ```
-control-plane-smoke-test@0.2.0  trust=dry-run  source=/private/tmp/quickstart-7s7WVg/smoke-loop.mjs
+control-plane-smoke-test@0.2.0  trust=dry-run  source=/private/tmp/quickstart-baiAmP/smoke-loop.mjs
   jobName:string, upstreamChanged?:boolean -> ok:boolean, trace:path
   Deterministic no-agent control-plane smoke (gateway/job/no-op/trace/delivery).
 ```
@@ -232,17 +237,17 @@ vernier run control-plane-smoke-test
 
 ```
 loop      control-plane-smoke-test@0.2.0
-run       control-plane-smoke-test-20260611154444-6f26b0
+run       control-plane-smoke-test-20260611160811-9b03da
 status    done
 decision  stop / success — step `smoke` completed, its contract passed, and all changes stayed in scope; the loop is done.
-output    {"ok":true,"trace":"evidence/traces/control-plane-smoke-test/control-plane-smoke-test-20260611154444-6f26b0.md"}
-ledger    /private/tmp/quickstart-7s7WVg/.vernier/runs/control-plane-smoke-test-20260611154444-6f26b0/journal.jsonl
+output    {"ok":true,"trace":"evidence/traces/control-plane-smoke-test/control-plane-smoke-test-20260611160811-9b03da.md"}
+ledger    /private/tmp/quickstart-baiAmP/.vernier/runs/control-plane-smoke-test-20260611160811-9b03da/journal.jsonl
 --- ledger entries ---
   meta          control-plane-smoke-test@0.2.0 keys=loop-v2
   step_started  smoke iter=1 attempt=1
   step_result   smoke iter=1 attempt=1 status=completed
   contract      smoke iter=1 attempt=1 run-trace.v1 valid=true
-  effects       smoke iter=1 attempt=1 changed=[evidence/traces/control-plane-smoke-test/control-plane-smoke-test-20260611154444-6f26b0.md] allowed=true
+  effects       smoke iter=1 attempt=1 changed=[evidence/traces/control-plane-smoke-test/control-plane-smoke-test-20260611160811-9b03da.md] allowed=true
   decision      smoke iter=1 attempt=1 -> stop/success
 ```
 
@@ -250,17 +255,17 @@ Exit code 0. Add `--json` to any command for machine output on stdout,
 diagnostics on stderr. Now render the run as a timeline:
 
 ```sh
-vernier show control-plane-smoke-test-20260611154444-6f26b0
+vernier show control-plane-smoke-test-20260611160811-9b03da
 ```
 
 ```
-run       control-plane-smoke-test-20260611154444-6f26b0
+run       control-plane-smoke-test-20260611160811-9b03da
 loop      control-plane-smoke-test@0.2.0
 status    done
 last      smoke (iteration 1, attempt 1)
-started   2026-06-11T15:44:44.181Z
-workdir   /private/tmp/quickstart-7s7WVg/.vernier/work
-journal   /private/tmp/quickstart-7s7WVg/.vernier/runs/control-plane-smoke-test-20260611154444-6f26b0/journal.jsonl
+started   2026-06-11T16:08:11.048Z
+workdir   /private/tmp/quickstart-baiAmP/.vernier/work
+journal   /private/tmp/quickstart-baiAmP/.vernier/runs/control-plane-smoke-test-20260611160811-9b03da/journal.jsonl
 --- timeline (6 events) ---
 +0.00s  ◷ run start — control-plane-smoke-test@0.2.0 (trust=dry-run, keys=loop-v2)
 +0.00s  ▶ smoke#1.1 started (script:control-plane-smoke)
@@ -305,7 +310,7 @@ vernier runs
 ```
 
 ```
-control-plane-smoke-test-20260611154444-6f26b0  control-plane-smoke-test@0.2.0  done  last=smoke (iteration 1, attempt 1)  started=2026-06-11T15:44:44.181Z
+control-plane-smoke-test-20260611160811-9b03da  control-plane-smoke-test@0.2.0  done  last=smoke (iteration 1, attempt 1)  started=2026-06-11T16:08:11.048Z
 ```
 
 You have now seen a complete loop lifecycle — scaffold, run, journal,
@@ -313,15 +318,15 @@ timeline, listing — without an API key in sight. The artifact itself is
 real too:
 
 ```sh
-head -12 .vernier/work/evidence/traces/control-plane-smoke-test/control-plane-smoke-test-20260611154444-6f26b0.md
+head -12 .vernier/work/evidence/traces/control-plane-smoke-test/control-plane-smoke-test-20260611160811-9b03da.md
 ```
 
 ```
-# Trace: control-plane-smoke-test-20260611154444-6f26b0
+# Trace: control-plane-smoke-test-20260611160811-9b03da
 
 | Field | Value |
 |---|---|
-| `trace_id` | `control-plane-smoke-test-20260611154444-6f26b0` |
+| `trace_id` | `control-plane-smoke-test-20260611160811-9b03da` |
 | `loop_id` | `control-plane-smoke-test` |
 | `loop_version` | `0.2.0` |
 | `orchestrator` | vernier engine |
@@ -329,8 +334,9 @@ head -12 .vernier/work/evidence/traces/control-plane-smoke-test/control-plane-sm
 | `model_or_provider` | None |
 ```
 
-This run was made in a scratch project (`/private/tmp/quickstart-7s7WVg`)
-with the compiled bin — exactly the scaffolded experience, nothing staged.
+This run was made in a truly bare scratch dir (`/private/tmp/quickstart-baiAmP`
+— no `node_modules` anywhere up its path, no install step) with the compiled
+bin — exactly the scaffolded experience, nothing staged.
 
 ---
 
@@ -950,13 +956,14 @@ export default {
 }
 ```
 
-One rough edge, named honestly: this module's bare specifier (`zod`)
-resolves from the config directory's own `node_modules`. Inside this repo
-that resolution walks up and finds vernier's zod; a copy of this directory
-elsewhere needs its own `npm install zod`. Once vernier is published,
-prefer importing the helpers (`sig`, `fsScope`, `retryPolicy`, `until`,
-`defineConfig`, `defineLoop`, …) from `"vernier"` instead of hand-rolling
-the literal shapes as this example deliberately does.
+Dependency note: this module's bare specifier (`zod`) resolves from the
+config directory's own `node_modules` when one exists; when none does, the
+CLI lends its own copy (see §3), so a copy of this directory runs anywhere
+— against vernier's bundled zod version until you `npm install` your own.
+Once vernier is published, prefer importing the helpers (`sig`, `fsScope`,
+`retryPolicy`, `until`, `defineConfig`, `defineLoop`, …) from `"vernier"`
+instead of hand-rolling the literal shapes as this example deliberately
+does.
 
 ### 8.4 Run it
 
@@ -1330,8 +1337,10 @@ The real gotchas, in the order you will hit them:
   compiled bin. Older node 22 gets an actionable ConfigError; use a
   `.mjs`/`.js`/`.json` config instead, or run through the tsx dev path.
 - **Bare specifiers in out-of-tree loop modules** resolve from the config
-  directory's own `node_modules`. `Could not load …: Cannot find package
-  'zod'` means your loop repo needs its own `npm install zod`.
+  directory's own `node_modules` first, then fall back to the CLI's own
+  dependency tree (so bare-dir scaffolds run). `Could not load …: Cannot
+  find package 'X'` therefore means X resolves from NEITHER — your loop
+  repo needs its own `npm install X`.
 - **opencode/pi sandbox posture, honestly:** neither provider exposes an
   enforceable sandbox, so vernier fails CLOSED on write-scoped steps (they
   refuse to run at all) and runs effect-free steps on the providers' only

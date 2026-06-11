@@ -1,17 +1,22 @@
 // Rot guard for docs/walkthrough.md §3 and §8–9.
 //
 // §3 (first run): the REAL `vernier init smoke` copy path, end-to-end in a
-// bare scratch dir — init -> loops -> run -> done — exactly the walkthrough's
-// first-run sequence. §8–9: drives examples/getting-started/ through the CLI
-// surface exactly as the walkthrough does — config loaded, loop listed, run
-// green, rebinding honored (both the passing and the contract-failing
-// alternate), crash -> resume. If this file goes red, the walkthrough's
-// centerpiece is lying; fix the example/template or the doc, not the test.
+// TRULY bare scratch dir — no node_modules anywhere up the walk-up path
+// (asserted, not assumed: an earlier version of this guard symlinked the
+// repo's zod into the scratch dir and so never tested the bare-dir promise
+// it claimed to) — init -> loops -> run -> done, exactly the walkthrough's
+// first-run sequence. Bare-dir resolution works because the CLI lends its
+// own dependencies to config modules (bin/lend-deps-hooks.mjs). §8–9:
+// drives examples/getting-started/ through the CLI surface exactly as the
+// walkthrough does — config loaded, loop listed, run green, rebinding
+// honored (both the passing and the contract-failing alternate), crash ->
+// resume. If this file goes red, the walkthrough's centerpiece is lying;
+// fix the example/template or the doc, not the test.
 
 import { execFile } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync } from "node:fs"
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 import { describe, expect, it } from "vitest"
 import { Ledger, journalPath } from "../src/ledger/ledger.js"
@@ -45,6 +50,18 @@ async function cli(home: string, args: readonly string[], extraEnv: Record<strin
 
 const tmp = (label: string): string => mkdtempSync(join(tmpdir(), `vernier-walkthrough-${label}-`))
 
+/**
+ * A TRUE bare dir: no node_modules in `dir` or ANY ancestor, so default
+ * ESM resolution cannot find `zod` or `vernier` — the templates load only
+ * if the CLI's dependency-lending fallback works. Asserted, not assumed.
+ */
+function assertTrulyBare(dir: string): void {
+  for (let d = dir; ; d = dirname(d)) {
+    expect(existsSync(join(d, "node_modules")), `expected no node_modules at ${d} — the scratch dir is not bare`).toBe(false)
+    if (dirname(d) === d) break
+  }
+}
+
 describe("walkthrough §3: first run via the REAL `vernier init smoke` copy path", () => {
   /** Run the bin in `dir` with NO config env: discovery finds the scaffolded config. */
   async function cliIn(dir: string, ...args: string[]): Promise<CliResult> {
@@ -60,13 +77,9 @@ describe("walkthrough §3: first run via the REAL `vernier init smoke` copy path
     }
   }
 
-  it("init -> loops -> run -> done, in a bare scratch dir", async () => {
+  it("init -> loops -> run -> done, in a TRULY bare scratch dir (zod lent by the CLI)", async () => {
     const dir = tmp("init")
-    // A consumer project resolves the template's one bare specifier (zod)
-    // from its own node_modules (installing vernier brings zod in); the
-    // scratch dir simulates that with a symlink to this repo's copy.
-    mkdirSync(join(dir, "node_modules"))
-    symlinkSync(join(import.meta.dirname, "..", "node_modules", "zod"), join(dir, "node_modules", "zod"))
+    assertTrulyBare(dir)
 
     // init: the real copy path.
     const init = await cliIn(dir, "init", "smoke")
@@ -91,6 +104,45 @@ describe("walkthrough §3: first run via the REAL `vernier init smoke` copy path
     expect((outcome.output as Record<string, unknown>).ok).toBe(true)
     const trace = String((outcome.output as Record<string, unknown>).trace)
     expect(existsSync(join(dir, ".vernier", "work", trace))).toBe(true) // the artifact is real, inside the declared scope
+  })
+
+  it("an AGENT template's module loads in a truly bare dir: `vernier` and `zod` lent by the CLI", async () => {
+    const dir = tmp("agent")
+    assertTrulyBare(dir)
+
+    const init = await cliIn(dir, "init", "verified-answer")
+    expect(init.code).toBe(0)
+
+    // `loops` IMPORTS verified-answer-loop.mjs (which imports "vernier" and
+    // "zod") — listing it proves the module loaded. No live run.
+    const loops = await cliIn(dir, "loops", "--json")
+    expect(loops.stderr).not.toContain("config error")
+    expect(loops.code).toBe(0)
+    const listed = JSON.parse(loops.stdout) as Array<Record<string, unknown>>
+    expect(listed.map((l) => l.id)).toEqual(["verified-answer"])
+
+    // doctor resolves the steps through the shipped bindings. The exit code
+    // reflects binary presence on THIS machine (0 or 1) — never a config
+    // error (2): the module itself must load either way.
+    const doctor = await cliIn(dir, "doctor", "--json")
+    expect([0, 1]).toContain(doctor.code)
+    const report = JSON.parse(doctor.stdout) as { loops: Array<{ loopId: string; steps: Array<{ stepId: string; declared: string; resolved: string }> }> }
+    const loop = report.loops.find((l) => l.loopId === "verified-answer")
+    expect(loop).toBeDefined()
+    expect(loop!.steps.map((s) => `${s.stepId}: ${s.declared} -> ${s.resolved}`)).toEqual(["answer: agent -> codex", "grade: judge -> judge"])
+  })
+
+  it("a config module that resolves NOWHERE is a config error: exit 2 from loops/run/doctor", async () => {
+    const dir = tmp("broken")
+    writeFileSync(join(dir, "vernier.config.json"), JSON.stringify({ loops: ["./broken-loop.mjs"] }))
+    writeFileSync(join(dir, "broken-loop.mjs"), 'import "this-package-exists-nowhere-xyz"\nexport default {}\n')
+    for (const args of [["loops"], ["run", "anything"], ["doctor"]]) {
+      const result = await cliIn(dir, ...args)
+      expect(result.code, `\`vernier ${args.join(" ")}\` should exit 2`).toBe(2)
+      expect(result.stderr).toContain("config error")
+      expect(result.stderr).toContain("this-package-exists-nowhere-xyz") // the lending fallback rethrows the ORIGINAL error
+      expect(result.stdout).toBe("") // nothing parseable was emitted as success
+    }
   })
 })
 

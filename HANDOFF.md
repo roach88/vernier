@@ -134,7 +134,11 @@ npm test                                   # auth-free suite
   Older node 22 gets the actionable ConfigError (use .mjs/.js/.json, or the
   tsx dev bin). Verified both ways via `--no-experimental-strip-types`.
 - **Bare specifiers in out-of-tree loop modules** resolve from the config
-  dir's node_modules — user repos need their own `npm install zod`.
+  dir's node_modules when present; when default resolution fails the CLI
+  lends its own dependency tree (`bin/lend-deps-hooks.mjs`, registered in
+  `cli/main` via `module.register()`) — so bare-dir scaffolds run with no
+  install, the project's own copies win once installed, and a bare-dir
+  template runs against vernier's bundled zod version until then.
 - **Resume / torn-effects window:** a crash between `step_result` and
   `effects` journal entries replays with an assumed-clean scope (the
   before-snapshot is gone). Documented in `replayTick`.
