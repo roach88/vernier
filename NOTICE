@@ -1,4 +1,4 @@
-looper — third-party notices
+vernier — third-party notices
 
 Portions of this software are derived from omegacode
 (https://github.com/SawyerHood/omegacode), MIT License,
@@ -25,12 +25,12 @@ a copy of the omegacode LICENSE sits alongside the files):
       claude.ts           vendored for adapter-family completeness but
                           EXCLUDED from compilation (tsconfig "exclude") —
                           it requires @anthropic-ai/claude-agent-sdk, which
-                          looper does not carry yet
+                          vernier does not carry yet
       opencode.ts, pi.ts  vendored, compiled, not yet wired (notImplemented)
 
       Local adaptations across these files: import paths from "../dsl/types.js"
       to "./types.js"; optional properties widened with `| undefined` for
-      looper's exactOptionalPropertyTypes; nothing semantic changed.
+      vernier's exactOptionalPropertyTypes; nothing semantic changed.
 
       Deliberately left behind from omegacode: src/runtime/ (the node:vm
       sandbox trunk, primitives, v3 chained call-tree resume keys, the
@@ -56,7 +56,7 @@ Derived material (adapted, not copied verbatim):
   - src/executors/codex.ts
       Wraps the vendored CodexWorker behind the Executor seam; the
       AgentResult -> StepResult mapping and EffectScope -> sandbox
-      derivation are looper's.
+      derivation are vernier's.
 
 The full MIT license text of omegacode follows:
 

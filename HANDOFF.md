@@ -1,6 +1,6 @@
 # vernier — Handoff (post-v1)
 
-_Last updated: 2026-06-11 · remote: `roach88/looper` (private; GitHub repo rename to `vernier` pending)_
+_Last updated: 2026-06-11 · remote: `roach88/vernier` (private)_
 
 Working handoff for the next person/agent: where the project is after the
 two v1 units, the conventions that have held, and what is deliberately
@@ -85,7 +85,7 @@ npm test                                   # auth-free suite
 
 1. **One commit per step/unit**, conventional message, ending with the Fable
    co-author trailer. Verify (`tsc` + auth-free `npm test` + a smoke) **before** committing.
-2. **Push policy:** auto-push to `roach88/looper` (GitHub rename to `vernier` pending) after verify + commit
+2. **Push policy:** auto-push to `roach88/vernier` (GitHub rename to `vernier` pending) after verify + commit
    *when pushing is in scope for the session*.
    - ⚠️ **Auth gotcha:** two gh accounts (`roach88` + `tbarstow-tw`); if a push 404s,
      `gh auth switch --user roach88`, then
