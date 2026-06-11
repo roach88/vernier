@@ -127,7 +127,7 @@ describe("pilot 3: compounding across two runs sharing one memory store", () => 
       "remember@2",
     ])
     // The rule landed in the store, filed under goal A's topic, evidence = the verified answer.
-    const stored = memory.recall(topicFrom(GOAL_A))
+    const stored = await memory.recall(topicFrom(GOAL_A))
     expect(stored.map((r) => r.rule)).toEqual([RULE])
     expect(stored[0]).toMatchObject({ evidence: COMPLIANT_ANSWER, sourceRunId: run1.state.runId, loopId: loop.id })
 
@@ -178,7 +178,7 @@ describe("pilot 3: compounding across two runs sharing one memory store", () => 
     const outcome = await runLoop(loop, { goal: GOAL_A, rubric: RUBRIC }, depsNeverPass)
     expect(outcome.state.status).toBe("needs_human") // escalated at the iteration ceiling
     expect(existsSync(memory.path)).toBe(false) // nothing was EVER appended
-    expect(memory.recall(topicFrom(GOAL_A))).toEqual([]) // no path to the store without a passing grade
+    expect(await memory.recall(topicFrom(GOAL_A))).toEqual([]) // no path to the store without a passing grade
   })
 
   it("derives distill's outputSchema from its zod signature — same one-source-of-truth as the judge", async () => {

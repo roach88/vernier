@@ -61,7 +61,9 @@ npm link          # optional: a global `looper` on PATH
 
 The claude executor needs `@anthropic-ai/claude-agent-sdk`, an **optional**
 peer dependency — the base install stays light. Add it next to looper when
-you want claude (`looper doctor` tells you whether it is missing).
+you want claude (`looper doctor` tells you whether it is missing). The
+embedding memory retriever (`LOOPER_RETRIEVER=embedding`) needs
+`@huggingface/transformers`, the same way — see "Memory & recall".
 
 ## Quickstart
 
@@ -285,6 +287,58 @@ Effect scopes bound what a STEP may touch (observed, and for codex
 OS-sandboxed; for claude gate-enforced; cursor, opencode, and pi fail
 closed on write scopes); they do not sandbox the config itself. Do not point looper at a config you would not `node` yourself.
 
+## Memory & recall
+
+Self-improving loops compound through a durable rule store
+([src/memory/memory.ts](src/memory/memory.ts)): an append-only
+`rules.jsonl` of distilled, VERIFIED rules — Pilot 3's `remember` step is
+only reachable after a passing grade, by loop shape. From the loop's
+perspective `recall`/`remember` stay deterministic store operations; HOW
+recall ranks the store is pluggable — the **Retriever** seam on `Memory`,
+three tiers:
+
+- **lexical (the default)** — BM25 over each record's topic + rule +
+  evidence text ([src/memory/retriever.ts](src/memory/retriever.ts)).
+  Deterministic, auth-free, dependency-free, results ranked best-first.
+  The relevance gate is the same as the old keyword overlap (a record is
+  recalled iff it shares ≥ 1 query keyword), and the +1 idf variant keeps
+  tiny stores recalling — a 1-rule store still surfaces its rule on a
+  related goal instead of being score-filtered to nothing.
+- **embedding (optional)** — cosine similarity over vectors computed at
+  REMEMBER time and stored on the JSONL record, versioned with the model
+  id ([src/memory/embedding.ts](src/memory/embedding.ts)). Select it with
+  `LOOPER_RETRIEVER=embedding` (read where the registry constructs
+  Memory). Needs `@huggingface/transformers`, an optional peer exactly
+  like the claude SDK — `npm install @huggingface/transformers`, and
+  `looper doctor` probes it. After the one-time model download every
+  embed is local: no network at query time. Records without a comparable
+  embedding (every pre-embedding store, or vectors from a different
+  model) stay retrievable through the lexical tier — hybrid fallback,
+  never a hard cutover.
+- **yours** — implement `Retriever` (exported from the root) and construct
+  the store with it in a `defineLoop` runtime:
+
+  ```ts
+  import { Memory, rulesPath, type Retriever } from "@roach88/looper"
+
+  const recencyFirst: Retriever = {
+    id: "recency",
+    retrieve: (_topic, records) => [...records].reverse(),
+  }
+  const memory = new Memory(rulesPath(".looper"), recencyFirst)
+  // defineLoop({ loop, runtime: (workdir) => ({ deps: { ..., memory }, shutdown: async () => {} }) })
+  ```
+
+  Config-level retriever registration (a `retriever` key in
+  `looper.config`) is deferred; the constructor seam is the supported path.
+
+Determinism, stated honestly: an embedding lookup is deterministic given
+the store contents and the **model version** — a different model version is
+a different vector space. That is why the model id is stored on each
+record, and a mismatch demotes the record to lexical retrieval instead of
+comparing incomparable vectors; re-remembering a rule under the new model
+re-embeds it (same content-derived id, last record wins).
+
 ## Providers
 
 | executor | status | needs |
@@ -355,6 +409,7 @@ mini-language parser needed (the design doc's §7 Python risk dissolves here).
   clean scope (the before-snapshot is gone). Honest, narrow, documented in
   `replayTick`.
 - Observability beyond `show`/`doctor` (run timelines, usage roll-ups);
-  semantic/embedding memory recall (today: keyword/topic overlap).
+  config-level retriever registration (semantic recall itself shipped —
+  see "Memory & recall"; only the `looper.config` plumbing is deferred).
 - Loop cards generated from the Loop object; deleting the Python repo
   (Tyler's call, after reviewing the trace comparison).

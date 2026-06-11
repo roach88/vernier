@@ -32,6 +32,7 @@ export {
   type OutputProjection,
   type MemoryStore,
   type RuleRecord,
+  type RuleEmbedding,
 } from "./kernel/types.js"
 
 // The Policy slot: the default decision procedure and its combinators.
@@ -64,3 +65,17 @@ export { defineConfig, defineLoop, type LooperConfig, type LoopRegistration } fr
 
 // The smallest custom executor: a plain function behind the Executor seam.
 export { scriptExecutor, type ScriptFn, type ScriptOutcome } from "./executors/script.js"
+
+// The Memory seam: the durable rule store and its pluggable Retriever.
+// Semantic recall is a retriever choice, never a loop change — construct
+// Memory with the tier you want (lexical BM25 default, the optional
+// embedding tier, or your own implementation of Retriever).
+export { Memory, resolveMemoryRoot, retrieverFromEnv, rulesPath, type MemorySpec } from "./memory/memory.js"
+export { LexicalRetriever, lexicalRetriever, topicTokens, type Retriever } from "./memory/retriever.js"
+export {
+  DEFAULT_EMBEDDING_MODEL,
+  EMBEDDING_PACKAGE,
+  EmbeddingRetriever,
+  type Embedder,
+  type EmbeddingRetrieverOpts,
+} from "./memory/embedding.js"

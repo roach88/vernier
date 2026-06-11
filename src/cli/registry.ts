@@ -32,7 +32,7 @@ import { ContractRegistry, defaultContractRegistry } from "../kernel/contract.js
 import { gitObserver } from "../kernel/git-effects.js"
 import type { Executor, Loop } from "../kernel/types.js"
 import { resolveLedgerRoot } from "../ledger/ledger.js"
-import { Memory, resolveMemoryRoot, rulesPath } from "../memory/memory.js"
+import { Memory, resolveMemoryRoot, retrieverFromEnv, rulesPath } from "../memory/memory.js"
 import { controlPlaneSmokeExecutor, controlPlaneSmokeLoop } from "../pilot0/loop.js"
 import { dryRunNoteV1, routeDecisionV1 } from "../pilot1/contracts.js"
 import { planWorkReviewLoop } from "../pilot1/loop.js"
@@ -191,8 +191,10 @@ function compoundingAnswerEntry(): RegisteredLoop {
       const distiller = new JudgeExecutor({ id: "distill" })
       // ONE durable store under the looper root — sharing it across CLI
       // invocations is the compounding seam (pilot3/run.ts shares it across
-      // two in-process runs; the CLI shares it across processes).
-      const memory = new Memory(rulesPath(resolveMemoryRoot({})))
+      // two in-process runs; the CLI shares it across processes). The
+      // retriever tier (lexical default / LOOPER_RETRIEVER=embedding) is
+      // selected here, where Memory is constructed — never in the loop.
+      const memory = new Memory(rulesPath(resolveMemoryRoot({})), retrieverFromEnv())
       return {
         deps: {
           executors: executorRegistry(...providers.executors, judge, distiller, recallExecutor, rememberExecutor),
@@ -244,7 +246,7 @@ function userEntry(reg: LoopRegistration, source: string): RegisteredLoop {
           contracts,
           workdir,
           ...(reg.observer === "git" ? { observer: gitObserver } : {}),
-          memory: new Memory(rulesPath(resolveMemoryRoot({}))),
+          memory: new Memory(rulesPath(resolveMemoryRoot({})), retrieverFromEnv()),
         },
         shutdown: async () => {
           await providers.shutdown()

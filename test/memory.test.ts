@@ -1,6 +1,9 @@
 // The memory store (append-only, topic-queryable rules.jsonl) and the
 // recall/remember executors (Ax's memory primitives as deterministic store
-// ops behind the Executor seam).
+// ops behind the Executor seam). Recall ranks through the store's retriever
+// (lexical BM25 default — ranking proofs live in test/retriever.test.ts);
+// this suite owns persistence, identity, and the executor seam. Store ops
+// are awaited everywhere: the seam is possibly-async (embedding tiers).
 
 import { mkdtempSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -23,38 +26,38 @@ const record = (rule: string, topic: string) => ({
 })
 
 describe("memory store", () => {
-  it("appends rules and recalls them by topic keyword overlap", () => {
+  it("appends rules and recalls them by topic keyword overlap", async () => {
     const memory = freshStore()
-    memory.remember(record("End with a question.", "write short note apollo mission"))
-    const rules = memory.recall("write short note hubble telescope")
+    await memory.remember(record("End with a question.", "write short note apollo mission"))
+    const rules = await memory.recall("write short note hubble telescope")
     expect(rules.map((r) => r.rule)).toEqual(["End with a question."]) // "write"/"short"/"note" overlap
     expect(rules[0]).toMatchObject({ sourceRunId: "run-001", loopId: "compounding-answer" })
   })
 
-  it("isolates topics: recall on an unrelated topic returns nothing", () => {
+  it("isolates topics: recall on an unrelated topic returns nothing", async () => {
     const memory = freshStore()
-    memory.remember(record("Use SI units.", "physics homework conversions"))
-    memory.remember(record("Cite a primary source.", "history essay citations"))
-    expect(memory.recall("physics units").map((r) => r.rule)).toEqual(["Use SI units."])
-    expect(memory.recall("gardening tomatoes").map((r) => r.rule)).toEqual([])
+    await memory.remember(record("Use SI units.", "physics homework conversions"))
+    await memory.remember(record("Cite a primary source.", "history essay citations"))
+    expect((await memory.recall("physics units")).map((r) => r.rule)).toEqual(["Use SI units."])
+    expect((await memory.recall("gardening tomatoes")).map((r) => r.rule)).toEqual([])
   })
 
-  it("persists across two loads of the same root — the file is the store", () => {
+  it("persists across two loads of the same root — the file is the store", async () => {
     const root = mkdtempSync(join(tmpdir(), "looper-memory-"))
-    new Memory(rulesPath(root)).remember(record("Always name the year.", "apollo mission note"))
+    await new Memory(rulesPath(root)).remember(record("Always name the year.", "apollo mission note"))
     const reopened = new Memory(rulesPath(root)) // a second process / a later run
-    expect(reopened.recall("apollo note").map((r) => r.rule)).toEqual(["Always name the year."])
+    expect((await reopened.recall("apollo note")).map((r) => r.rule)).toEqual(["Always name the year."])
   })
 
-  it("is append-only with content-derived ids: re-remembering the same rule keeps one identity", () => {
+  it("is append-only with content-derived ids: re-remembering the same rule keeps one identity", async () => {
     const memory = freshStore()
-    const first = memory.remember(record("Be concise.", "shared topic words"))
-    const second = memory.remember(record("Be concise.", "shared topic words"))
+    const first = await memory.remember(record("Be concise.", "shared topic words"))
+    const second = await memory.remember(record("Be concise.", "shared topic words"))
     expect(second.id).toBe(first.id)
     // Two appended lines (nothing is ever rewritten)…
     expect(readFileSync(memory.path, "utf8").trim().split("\n")).toHaveLength(2)
     // …but recall dedupes by id, last record wins.
-    expect(memory.recall("shared topic")).toHaveLength(1)
+    expect(await memory.recall("shared topic")).toHaveLength(1)
   })
 
   it("refuses an empty rule — the store holds rules, not blanks", () => {
@@ -107,7 +110,7 @@ describe("recall/remember executors", () => {
     expect(recalled.status).toBe("completed")
     expect(recalled.output.rules).toEqual(["End with the exact closing sentence."])
     // Provenance landed on the record: the run that learned it is named.
-    expect(memory.recall("short note")[0]).toMatchObject({ sourceRunId: "run-xyz", loopId: "compounding-answer" })
+    expect((await memory.recall("short note"))[0]).toMatchObject({ sourceRunId: "run-xyz", loopId: "compounding-answer" })
   })
 
   it("fails loudly without an injected memory store — the handle is required, not optional magic", async () => {

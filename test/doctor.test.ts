@@ -13,9 +13,10 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 import { z } from "zod"
 import { CLAUDE_SDK } from "../src/executors/claude.js"
+import { EMBEDDING_PACKAGE } from "../src/memory/embedding.js"
 import { diagnose, type DoctorProbes, type DoctorReport } from "../src/cli/doctor.js"
 import type { LoadedConfig } from "../src/cli/config.js"
 import { loopRegistry, type RegisteredLoop } from "../src/cli/registry.js"
@@ -98,6 +99,38 @@ describe("diagnose()", () => {
     expect(step).toMatchObject({ resolved: "nope", ok: false })
     expect(step.why).toContain("not registered")
     expect(step.why).toContain("script:control-plane-smoke")
+  })
+
+  describe("memory retriever probe", () => {
+    afterEach(() => {
+      delete process.env.LOOPER_RETRIEVER
+    })
+
+    it("the lexical default needs nothing: probed in-process, memory loops unaffected", async () => {
+      const report = await diagnose(loopRegistry(), undefined, allFound())
+      expect(executorById(report, "memory:lexical")).toMatchObject({ ok: true, requires: null })
+      expect(loopById(report, "compounding-answer")?.runnable).toBe(true)
+    })
+
+    it("LOOPER_RETRIEVER=embedding without the package blocks exactly the store-op steps, actionably", async () => {
+      process.env.LOOPER_RETRIEVER = "embedding"
+      const report = await diagnose(loopRegistry(), undefined, allFound({ resolvable: (s) => s !== EMBEDDING_PACKAGE }))
+      expect(executorById(report, "memory:embedding")).toMatchObject({ ok: false, requires: EMBEDDING_PACKAGE })
+      expect(executorById(report, "memory:embedding")?.detail).toContain(`npm install ${EMBEDDING_PACKAGE}`)
+      const loop = loopById(report, "compounding-answer")!
+      expect(loop.runnable).toBe(false)
+      expect(loop.steps.find((s) => s.stepId === "recall")).toMatchObject({ ok: false })
+      expect(loop.steps.find((s) => s.stepId === "remember")?.why).toContain(EMBEDDING_PACKAGE)
+      expect(loop.steps.find((s) => s.stepId === "answer")?.ok).toBe(true) // only the store ops are blocked
+      expect(report.ok).toBe(false)
+    })
+
+    it("LOOPER_RETRIEVER=embedding with the package resolvable keeps memory loops runnable", async () => {
+      process.env.LOOPER_RETRIEVER = "embedding"
+      const report = await diagnose(loopRegistry(), undefined, allFound())
+      expect(executorById(report, "memory:embedding")).toMatchObject({ ok: true, requires: EMBEDDING_PACKAGE })
+      expect(loopById(report, "compounding-answer")?.runnable).toBe(true)
+    })
   })
 
   it("a runtime factory that throws is contained as a non-runnable loop, not a doctor crash", async () => {

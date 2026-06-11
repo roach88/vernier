@@ -31,11 +31,12 @@ import { recallExecutor, rememberExecutor } from "../executors/memory.js"
 import { executorRegistry } from "../executors/script.js"
 import { ContractRegistry } from "../kernel/contract.js"
 import { Ledger, journalPath, resolveLedgerRoot } from "../ledger/ledger.js"
-import { Memory, rulesPath } from "../memory/memory.js"
+import { Memory, retrieverFromEnv, rulesPath } from "../memory/memory.js"
 import { compoundingAnswerLoop, topicFrom } from "./loop.js"
 
 const memoryRoot = process.argv[2] ? resolve(process.argv[2]) : mkdtempSync("/tmp/looper-pilot3-memory-")
-const memory = new Memory(rulesPath(memoryRoot))
+const memory = new Memory(rulesPath(memoryRoot), retrieverFromEnv()) // LOOPER_RETRIEVER selects the tier
+
 
 const rubric = `PASS only if ALL of the following hold:
 1. Mentions at least one specific year.

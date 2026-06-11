@@ -7,13 +7,19 @@
 //              the ONE thing it needs: CLI-backed executors a binary on
 //              PATH, the claude executor its SDK (an optional peer),
 //              in-process executors nothing (loading the module that
-//              declared them already proved them).
+//              declared them already proved them). The memory RETRIEVER is
+//              probed here too (one `memory:<tier>` row per selected tier):
+//              the embedding tier needs its optional package, exactly like
+//              claude needs its SDK; the lexical default needs nothing.
 //   loops      per registered loop, every step's executor binding resolved
 //              through the same chain a run would use (config bindings >
 //              the step's declared default — doctor reports the at-rest
 //              state, so CLI --executor overrides do not apply), and judged
 //              runnable iff the resolved executor is registered AND its
-//              probe passed.
+//              probe passed. A step on the builtin recall/remember
+//              executors is additionally blocked when the runtime's memory
+//              retriever probe failed (a custom memory executor makes no
+//              such claim — same caveat as the judge probe).
 //
 // Truth over declaration: doctor enumerates executors by building each
 // entry's REAL runtime in a throwaway scratch dir (construction is lazy —
@@ -31,9 +37,13 @@ import { CodexExecutor } from "../executors/codex.js"
 import { CursorExecutor } from "../executors/cursor.js"
 import { HermesExecutor } from "../executors/hermes.js"
 import { JudgeExecutor } from "../executors/judge.js"
+import { recallExecutor, rememberExecutor } from "../executors/memory.js"
 import { OpencodeExecutor } from "../executors/opencode.js"
 import { PiExecutor } from "../executors/pi.js"
 import type { Executor } from "../kernel/types.js"
+import { EMBEDDING_PACKAGE, EmbeddingRetriever } from "../memory/embedding.js"
+import { Memory } from "../memory/memory.js"
+import type { Retriever } from "../memory/retriever.js"
 import { resolveExecutorId, type BindingLayer, type LoadedConfig } from "./config.js"
 import type { RegisteredLoop } from "./registry.js"
 
@@ -156,6 +166,27 @@ function checkExecutor(executor: Executor, fromConfig: boolean, probes: DoctorPr
 }
 
 /**
+ * Probe the memory retriever for the one thing it needs — the embedding
+ * tier its optional package (the claude-SDK probe, mirrored); every other
+ * tier is in-process. Classification is by implementation, not id string.
+ */
+function checkRetriever(retriever: Retriever, probes: DoctorProbes): ExecutorReport {
+  const id = `memory:${retriever.id}`
+  if (retriever instanceof EmbeddingRetriever) {
+    const ok = probes.resolvable(EMBEDDING_PACKAGE)
+    return {
+      id,
+      ok,
+      requires: EMBEDDING_PACKAGE,
+      detail: ok
+        ? `${EMBEDDING_PACKAGE} resolvable`
+        : `${EMBEDDING_PACKAGE} not installed (optional peer) — npm install ${EMBEDDING_PACKAGE}`,
+    }
+  }
+  return { id, ok: true, requires: null, detail: "in-process retriever (no external dependency)" }
+}
+
+/**
  * Build the full report. Each entry's runtime is constructed in a fresh
  * scratch dir and shut down immediately — executor construction is lazy
  * everywhere in this repo, so nothing spawns.
@@ -198,6 +229,15 @@ export async function diagnose(
       for (const executor of config?.executors ?? []) executors.set(executor.id, executor)
       for (const executor of executors.values()) check(executor)
 
+      // The runtime's memory retriever, probed like any executor (the
+      // builtin Memory only — a user's own MemoryStore makes no claim).
+      const memory = runtime.deps.memory
+      let retrieverReport: ExecutorReport | undefined
+      if (memory instanceof Memory) {
+        retrieverReport = checked.get(`memory:${memory.retriever.id}`) ?? checkRetriever(memory.retriever, probes)
+        checked.set(retrieverReport.id, retrieverReport)
+      }
+
       const steps: StepReport[] = entry.loop.steps.map((step) => {
         const resolved = resolveExecutorId(step, bindings)
         const registered = executors.get(resolved)
@@ -211,7 +251,13 @@ export async function diagnose(
           }
         }
         const report = check(registered)
-        return { stepId: step.id, declared: step.executor, resolved, ok: report.ok, why: report.ok ? "ok" : report.detail }
+        // A store op is only as usable as the store's retriever: recall and
+        // remember run THROUGH it, so a failed retriever probe blocks them.
+        const memoryBlocked =
+          retrieverReport !== undefined && !retrieverReport.ok && (registered === recallExecutor || registered === rememberExecutor)
+        const ok = report.ok && !memoryBlocked
+        const why = !report.ok ? report.detail : memoryBlocked ? retrieverReport!.detail : "ok"
+        return { stepId: step.id, declared: step.executor, resolved, ok, why }
       })
       loops.push({ loopId: entry.loop.id, source: entry.source, runnable: steps.every((s) => s.ok), steps })
     } finally {

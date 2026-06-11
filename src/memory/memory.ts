@@ -9,16 +9,23 @@
 // loop shape, not by trusting callers: the only path to `remember` runs
 // through a passing grade (pilot3/loop.ts).
 //
-// Retrieval is deliberately simple and honest: case-insensitive keyword
-// overlap between the query topic and each record's topic. Semantic /
-// embedding retrieval is a noted future improvement — not built here,
-// because a clever index on top of a three-record store proves nothing.
+// HOW the store is ranked at recall time is pluggable (the Retriever seam,
+// memory/retriever.ts): the default is the deterministic, dependency-free
+// BM25 lexical ranker; an embedding tier (memory/embedding.ts) is selected
+// with LOOPER_RETRIEVER=embedding where registry runtimes construct Memory;
+// a custom retriever is constructed in directly. Persistence is none of the
+// retriever's business — append, dedupe-by-id, and torn-line tolerance all
+// live here, identically for every tier.
 
 import { createHash } from "node:crypto"
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import type { MemoryStore, RuleRecord } from "../kernel/types.js"
 import { canonical } from "../ledger/ledger.js"
+import { EmbeddingRetriever } from "./embedding.js"
+import { lexicalRetriever, type Retriever } from "./retriever.js"
+
+export { topicTokens } from "./retriever.js"
 
 /** Where the rule store lives. Resolved at construction; see resolveMemoryRoot. */
 export interface MemorySpec {
@@ -34,47 +41,63 @@ export function rulesPath(root: string): string {
   return join(root, "memory", "rules.jsonl")
 }
 
-/** Keyword retrieval's tokenizer: lowercase words of >= 4 chars. Not semantics — overlap. */
-export function topicTokens(topic: string): Set<string> {
-  return new Set(
-    topic
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((t) => t.length >= 4),
-  )
+/**
+ * The retriever-selection knob for registry-built runtimes:
+ * LOOPER_RETRIEVER=lexical (the default) or embedding. Construction is
+ * cheap either way — the embedding tier never touches its optional package
+ * until a recall/remember actually needs vectors.
+ */
+export function retrieverFromEnv(env: NodeJS.ProcessEnv = process.env): Retriever {
+  const choice = env.LOOPER_RETRIEVER?.trim() ?? ""
+  if (choice === "" || choice === "lexical") return lexicalRetriever()
+  if (choice === "embedding") return new EmbeddingRetriever()
+  throw new Error(`Unknown LOOPER_RETRIEVER \`${choice}\`; valid values: lexical (default), embedding.`)
 }
 
 export class Memory implements MemoryStore {
-  constructor(readonly path: string) {
+  readonly retriever: Retriever
+
+  constructor(
+    readonly path: string,
+    retriever: Retriever = lexicalRetriever(),
+  ) {
+    this.retriever = retriever
     mkdirSync(dirname(path), { recursive: true })
   }
 
   /**
    * Append one verified rule. The id is content-derived (hash of
    * topic + rule), so re-remembering the same rule appends a new record but
-   * keeps one identity — recall dedupes by id, last record wins.
+   * keeps one identity — recall dedupes by id, last record wins. A
+   * retriever with an `onRemember` hook (the embedding tier) enriches the
+   * record before it lands — which is why the return may be a promise.
    */
-  remember(record: Omit<RuleRecord, "id" | "at">): RuleRecord {
+  remember(record: Omit<RuleRecord, "id" | "at" | "embedding">): RuleRecord | Promise<RuleRecord> {
     if (!record.rule.trim()) throw new Error("Memory.remember: refusing to store an empty rule.")
     const id = createHash("sha256").update(canonical({ topic: record.topic, rule: record.rule })).digest("hex").slice(0, 16)
     const full: RuleRecord = { ...record, id, at: new Date().toISOString() }
-    appendFileSync(this.path, JSON.stringify(full) + "\n", "utf8")
-    return full
+    if (this.retriever.onRemember === undefined) return this.append(full)
+    return Promise.resolve(this.retriever.onRemember(full)).then((enriched) => this.append(enriched))
   }
 
   /**
-   * Every rule whose topic shares a keyword with the query topic, deduped
-   * by id (last wins). Reads the file fresh on every call — no cache — so
-   * two runs (or two processes) sharing one path always see each other's
-   * appends.
+   * The live store (deduped by id, last record wins), ranked by the
+   * retriever — best first. Reads the file fresh on every call — no cache —
+   * so two runs (or two processes) sharing one path always see each other's
+   * appends. May be a promise: an embedding retriever embeds the query.
    */
-  recall(topic: string): RuleRecord[] {
-    const query = topicTokens(topic)
-    if (query.size === 0) return []
+  recall(topic: string): readonly RuleRecord[] | Promise<readonly RuleRecord[]> {
+    return this.retriever.retrieve(topic, this.liveRecords())
+  }
+
+  private append(record: RuleRecord): RuleRecord {
+    appendFileSync(this.path, JSON.stringify(record) + "\n", "utf8")
+    return record
+  }
+
+  private liveRecords(): RuleRecord[] {
     const byId = new Map<string, RuleRecord>()
-    for (const record of this.loadAll()) {
-      if ([...topicTokens(record.topic)].some((t) => query.has(t))) byId.set(record.id, record)
-    }
+    for (const record of this.loadAll()) byId.set(record.id, record)
     return [...byId.values()]
   }
 

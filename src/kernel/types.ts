@@ -182,23 +182,44 @@ export interface RuleRecord {
   readonly rule: string
   /** Why the rule is believed: the verified answer/artifact that passed the grade. */
   readonly evidence: string
-  /** Recall key. Retrieval is keyword overlap on this field (see memory/memory.ts). */
+  /** Recall key. Retrieval ranks against this (and the rule/evidence text); see memory/retriever.ts. */
   readonly topic: string
   readonly sourceRunId: string
   readonly loopId: string
   readonly at: string
+  /**
+   * Attached at REMEMBER time by an embedding retriever (memory/embedding.ts);
+   * absent on lexical stores and on every pre-embedding store — such records
+   * stay readable and retrievable through the lexical tier.
+   */
+  readonly embedding?: RuleEmbedding
+}
+
+/**
+ * A rule's stored embedding, versioned twice over: `v` guards this record
+ * shape; `model` names the embedder (package:model) that produced the
+ * vector — vectors from different models live in different spaces and are
+ * NEVER compared (a mismatched record falls back to lexical retrieval).
+ */
+export interface RuleEmbedding {
+  readonly v: 1
+  readonly model: string
+  readonly vector: readonly number[]
 }
 
 /**
  * The memory seam (Ax's primitives): deterministic store ops, no LLM.
  * `recall(topic) -> rules[]` is a read; `remember(rule, evidence)` is an
- * append. The JSONL implementation lives in memory/memory.ts; executors
- * reach it through RunContext.memory, injected via EngineDeps exactly as
- * contracts and executors are.
+ * append. Either may be async — an embedding retriever embeds the query
+ * topic at recall time and the rule at remember time — but both stay
+ * DETERMINISTIC given the store contents and the embedding model version.
+ * The JSONL implementation lives in memory/memory.ts; executors reach it
+ * through RunContext.memory, injected via EngineDeps exactly as contracts
+ * and executors are.
  */
 export interface MemoryStore {
-  recall(topic: string): readonly RuleRecord[]
-  remember(record: Omit<RuleRecord, "id" | "at">): RuleRecord
+  recall(topic: string): readonly RuleRecord[] | Promise<readonly RuleRecord[]>
+  remember(record: Omit<RuleRecord, "id" | "at" | "embedding">): RuleRecord | Promise<RuleRecord>
 }
 
 // ----------------------------------------------------------------- Executor

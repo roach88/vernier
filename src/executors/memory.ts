@@ -10,6 +10,9 @@
 // EngineDeps.memory exactly as contracts and executors are injected.
 // `remember` stores VERIFIED rules only — enforced not here but by loop
 // shape: it is only reachable after a passing grade (pilot3/loop.ts).
+// Both ops are awaited: a store with an embedding retriever embeds at the
+// seam, which is async but still deterministic given store + model version
+// — retrieval quality is a Memory concern, never a loop concern.
 
 import type { Executor, MemoryStore, RunContext, StepSpec } from "../kernel/types.js"
 import { scriptExecutor } from "./script.js"
@@ -23,17 +26,18 @@ function requireMemory(ctx: RunContext, spec: StepSpec, executorId: string): Mem
   return ctx.memory
 }
 
-/** Deterministic store read: recall(topic) -> rules[]. */
-export const recallExecutor: Executor = scriptExecutor("recall", (spec, ctx) => {
+/** Deterministic store read: recall(topic) -> rules[], ranked best-first by the store's retriever. */
+export const recallExecutor: Executor = scriptExecutor("recall", async (spec, ctx) => {
   const memory = requireMemory(ctx, spec, "recall")
   const topic = String(spec.inputs.topic ?? "")
-  return { output: { rules: memory.recall(topic).map((r) => r.rule) } }
+  const records = await memory.recall(topic)
+  return { output: { rules: records.map((r) => r.rule) } }
 })
 
 /** Deterministic store write: remember(rule, evidence) -> {stored, id}. */
-export const rememberExecutor: Executor = scriptExecutor("remember", (spec, ctx) => {
+export const rememberExecutor: Executor = scriptExecutor("remember", async (spec, ctx) => {
   const memory = requireMemory(ctx, spec, "remember")
-  const record = memory.remember({
+  const record = await memory.remember({
     rule: String(spec.inputs.rule ?? ""),
     evidence: String(spec.inputs.evidence ?? ""),
     topic: String(spec.inputs.topic ?? ""),

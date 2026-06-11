@@ -46,9 +46,10 @@ special-casing**. That generality is the whole point; protect it.
 |---|---|---|
 | 1 | `a7fb042` | Out-of-tree loops (`looper.config.{ts,js,mjs,json}`, discovery + `$LOOPER_CONFIG`), any-agent-any-role executor bindings (`--executor` > config `bindings` > loop default), multi-file artifacts (`artifactsFromEffects`) |
 | 2 | `9f6f1b1` | Shippability: build pipeline (tsc → `dist/`, compiled bin under plain node), `@roach88/looper` package surface (root export + types, files/exports), MIT LICENSE, `looper doctor`, claude executor wired (lazy optional-peer SDK), README tutorial |
-| 3 | this commit | Breadth: opencode + pi executors wired (write scopes fail closed — the providers expose no enforceable sandbox; effect-free steps run on their only mode), vendored factory flipped to the real workers, doctor probes both binaries |
+| 3 | `26f4c9d` | Breadth: opencode + pi executors wired (write scopes fail closed — the providers expose no enforceable sandbox; effect-free steps run on their only mode), vendored factory flipped to the real workers, doctor probes both binaries |
+| B | this commit | Semantic recall: pluggable `Retriever` seam on Memory — BM25 lexical default (ranked, tiny-store-safe), optional embedding tier (`LOOPER_RETRIEVER=embedding`, `@huggingface/transformers` as a lazy optional peer, remember-time vectors versioned on the JSONL record, lexical fallback for un-embedded records), custom retrievers via the exported interface + Memory constructor; doctor probes the selected tier |
 
-**Health:** `npx tsc --noEmit` clean · `npm test` → 210 passed / 7 gated-live
+**Health:** `npx tsc --noEmit` clean · `npm test` → 227 passed / 8 gated-live
 skipped (auth-free) · `npm run build` green · `npm pack` installs and runs in
 a fresh consumer project without tsx or the claude SDK.
 
@@ -56,13 +57,13 @@ a fresh consumer project without tsx or the claude SDK.
 - `src/kernel/` — `types.ts` (the five-slot model), `policy.ts` (`decideNextStep`, `retryPolicy`, `until`), `contract.ts`, `effects.ts` (hash observer + `artifactsFromEffects`), `git-effects.ts`
 - `src/engine/` — `tick.ts` (the interpreter + replay-by-key), `resume.ts` (decision-fold reconstruction), `lease.ts` (file-based run lease)
 - `src/ledger/ledger.ts` — append-only `journal.jsonl`; resume key `loop-v2`
-- `src/memory/memory.ts` — append-only rule store; keyword/topic recall
+- `src/memory/` — `memory.ts` (append-only rule store; retriever-ranked recall), `retriever.ts` (the pluggable Retriever seam + BM25 lexical default), `embedding.ts` (optional embedding tier behind the lazy-optional-peer pattern)
 - `src/executors/` — `script`, `codex`, `cursor` (read-only steps), `claude` (lazy SDK), `opencode` / `pi` (effect-free steps only; writes fail closed), `hermes`, `judge`, `memory`, `evidence`; `vendor/omegacode/` (MIT — see `NOTICE`)
 - `src/cli/` — `main.ts` (commands), `registry.ts` (builtin pilots + user entries; `wiredProviders()` registers codex/cursor/claude/opencode/pi in every agent-driven runtime), `config.ts` (out-of-tree registration + binding resolution), `doctor.ts` (probes + per-loop runnability)
 - `src/index.ts` — the library surface (`@roach88/looper` root export, deliberately small)
 - `bin/looper.js` — prefers `dist/` (plain node); falls back to tsx for unbuilt checkouts
 - `src/pilot0..3/` — the four loops as data + standalone runners
-- `test/` — deterministic suites; `*.live.test.ts` gated behind `LOOPER_LIVE=1` (claude/opencode/pi additionally behind `LOOPER_LIVE_CLAUDE=1` / `LOOPER_LIVE_OPENCODE=1` / `LOOPER_LIVE_PI=1`)
+- `test/` — deterministic suites; `*.live.test.ts` gated behind `LOOPER_LIVE=1` (claude/opencode/pi/embedding additionally behind `LOOPER_LIVE_CLAUDE=1` / `LOOPER_LIVE_OPENCODE=1` / `LOOPER_LIVE_PI=1` / `LOOPER_LIVE_EMBEDDING=1` — the embedding one downloads a model on first run)
 
 ### Run it
 ```bash
@@ -107,8 +108,12 @@ npm test                                   # auth-free suite
   surface is already verified via `npm pack` + consumer-install smoke.
 - **Observability** — beyond `show`/`doctor`: run timelines, usage/cost
   roll-ups from the ledger.
-- **Semantic recall** — memory retrieval is keyword/topic overlap;
-  embeddings deferred until a store big enough to prove anything exists.
+- **Config-level retriever registration** — semantic recall itself SHIPPED
+  (Retriever seam, BM25 default, optional embedding tier; see README
+  "Memory & recall"); what remains deferred is a `retriever` key in
+  `looper.config` — today the tiers are selected by `LOOPER_RETRIEVER`
+  (or a custom retriever via the Memory constructor in a `runtime`
+  factory), which covers every current use without new config plumbing.
 
 ---
 
@@ -147,7 +152,18 @@ npm test                                   # auth-free suite
   timeout; no caller passes a signal yet).
 - **doctor's judge probe assumes the default worker:** `judge`/`distill`
   report against the `codex` binary; an injected non-codex worker would be
-  misreported (nothing injects one outside tests today).
+  misreported (nothing injects one outside tests today). Same caveat shape
+  for memory: the retriever probe covers the builtin `Memory` +
+  recall/remember executors only — a custom MemoryStore or custom store
+  executors make no doctor claim.
+- **Embedding recall is model-version sensitive:** vectors are compared
+  only within one model id (stored per record); switching models silently
+  demotes old records to the lexical tier until they are re-remembered.
+  And the tier's default is rank-don't-filter (`minSimilarity: 0`,
+  `topK: 5`) — right for today's tiny stores, but once a store grows past
+  topK the floor needs raising, and no one has measured real-model cosine
+  floors yet (BGE/MiniLM similarity scores run high and clustered; 0.6 on
+  one model is not 0.6 on another).
 
 ---
 
