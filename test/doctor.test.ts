@@ -1,6 +1,6 @@
 // `vernier doctor`, deterministic at two layers:
 //   - in-process diagnose() with INJECTED probes (never the machine's PATH,
-//     never a real SDK probe) — semantics: probe classification, binding
+//     never a real package probe) — semantics: probe classification, binding
 //     resolution, "unused unusable executor does not fail the doctor",
 //     runtime-factory failure containment;
 //   - the spawned CLI with a MANIPULATED PATH (a shim dir + /usr/bin:/bin
@@ -15,7 +15,8 @@ import { join } from "node:path"
 import { promisify } from "node:util"
 import { afterEach, describe, expect, it } from "vitest"
 import { z } from "zod"
-import { CLAUDE_SDK } from "../src/executors/claude.js"
+import { JudgeExecutor } from "../src/executors/judge.js"
+import { defaultContractRegistry } from "../src/kernel/contract.js"
 import { EMBEDDING_PACKAGE } from "../src/memory/embedding.js"
 import { diagnose, type DoctorProbes, type DoctorReport } from "../src/cli/doctor.js"
 import type { LoadedConfig } from "../src/cli/config.js"
@@ -57,8 +58,9 @@ describe("diagnose()", () => {
     expect(executorById(report, "cursor-agent")).toMatchObject({ ok: false, requires: "cursor-agent" })
     expect(executorById(report, "opencode")).toMatchObject({ ok: false, requires: "opencode" })
     expect(executorById(report, "pi")).toMatchObject({ ok: false, requires: "pi" })
-    expect(executorById(report, "claude")).toMatchObject({ ok: false, requires: CLAUDE_SDK })
-    expect(executorById(report, "claude")?.detail).toContain(`npm install ${CLAUDE_SDK}`)
+    // claude is a CLI provider like every other: probed as a binary on PATH, never an SDK.
+    expect(executorById(report, "claude")).toMatchObject({ ok: false, requires: "claude" })
+    expect(executorById(report, "claude")?.detail).toContain("not found on PATH")
     expect(executorById(report, "judge")).toMatchObject({ ok: false, requires: "codex" })
     expect(executorById(report, "recall")).toMatchObject({ ok: true, requires: null })
     expect(executorById(report, "script:control-plane-smoke")).toMatchObject({ ok: true })
@@ -73,7 +75,7 @@ describe("diagnose()", () => {
   })
 
   it("an unusable executor that no step resolves to is reported but does not fail the doctor", async () => {
-    const report = await diagnose(loopRegistry(), undefined, allFound({ resolvable: () => false }))
+    const report = await diagnose(loopRegistry(), undefined, allFound({ which: (bin) => (bin === "claude" ? undefined : `/fake/bin/${bin}`) }))
     expect(executorById(report, "claude")?.ok).toBe(false)
     expect(report.loops.every((l) => l.runnable)).toBe(true)
     expect(report.ok).toBe(true) // nothing binds onto claude by default
@@ -83,14 +85,47 @@ describe("diagnose()", () => {
     const report = await diagnose(
       loopRegistry(),
       config({ bindings: new Map([["implement", "claude"]]) }),
-      allFound({ resolvable: () => false }),
+      allFound({ which: (bin) => (bin === "claude" ? undefined : `/fake/bin/${bin}`) }),
     )
     const loop = loopById(report, "plan-work-review")!
     const step = loop.steps.find((s) => s.stepId === "implement")!
     expect(step).toMatchObject({ declared: "codex", resolved: "claude", ok: false })
-    expect(step.why).toContain(CLAUDE_SDK)
+    expect(step.why).toContain("`claude` not found on PATH")
     expect(loop.runnable).toBe(false)
     expect(report.ok).toBe(false)
+  })
+
+  it("probes judge/distill against the binary of whichever provider actually backs them", async () => {
+    const onlyClaude = probes({ which: (bin) => (bin === "claude" ? "/fake/bin/claude" : undefined) })
+    const loop = {
+      id: "judged",
+      version: "0.0.1",
+      signature: { input: z.object({}), output: z.object({}) },
+      steps: [{ id: "grade", signature: { input: z.object({}), output: z.object({}) }, executor: "judge", effects: { allow: [] } }],
+      policy: () => ({ kind: "stop", classification: "success", summary: "", notes: [], improvement: "" }),
+      trust: "dry-run",
+      ledger: {},
+    }
+    const entry: RegisteredLoop = {
+      loop: loop as RegisteredLoop["loop"],
+      signature: "{} -> {}",
+      summary: "fixture",
+      source: "test",
+      live: false,
+      defaultWorkdir: () => mkdtempSync(join(tmpdir(), "vernier-doctor-judged-")),
+      runtime: () => ({
+        deps: {
+          executors: new Map([["judge", new JudgeExecutor({ provider: "claude-code" })]]),
+          contracts: defaultContractRegistry(),
+          workdir: mkdtempSync(join(tmpdir(), "vernier-doctor-judged-wd-")),
+        },
+        shutdown: async () => {},
+      }),
+    }
+    const report = await diagnose(new Map([["judged", entry]]), undefined, onlyClaude)
+    // The judge is claude-backed here, so doctor wants `claude`, not `codex`.
+    expect(executorById(report, "judge")).toMatchObject({ ok: true, requires: "claude" })
+    expect(report.ok).toBe(true)
   })
 
   it("a binding onto an executor nobody registered names the registered set", async () => {
@@ -212,17 +247,18 @@ describe("vernier doctor (CLI)", () => {
     expect(report.loops).toHaveLength(4)
     expect(report.loops.every((l) => l.runnable)).toBe(true)
     expect(executorById(report, "codex")).toMatchObject({ ok: true, detail: expect.stringContaining(shims) })
-    expect(executorById(report, "claude")?.ok).toBe(true) // the devDependency SDK is resolvable in this repo
+    expect(executorById(report, "claude")?.ok).toBe(false) // a CLI like the rest: not on this manipulated PATH
     expect(executorById(report, "cursor-agent")?.ok).toBe(false) // reported, but no step resolves to it
     expect(executorById(report, "opencode")?.ok).toBe(false) // reported, but no step resolves to it
     expect(executorById(report, "pi")?.ok).toBe(false) // reported, but no step resolves to it
   })
 
-  it("probes the opencode and pi binaries by PATH lookup only (shims found, never executed)", async () => {
-    const shims = shimDir("codex", "opencode", "pi")
+  it("probes the claude, opencode, and pi binaries by PATH lookup only (shims found, never executed)", async () => {
+    const shims = shimDir("codex", "claude", "opencode", "pi")
     const result = await cli({ home: home(), path: basePath(shims) }, "doctor", "--json")
     expect(result.code).toBe(0)
     const report = JSON.parse(result.stdout) as DoctorReport
+    expect(executorById(report, "claude")).toMatchObject({ ok: true, requires: "claude", detail: expect.stringContaining(shims) })
     expect(executorById(report, "opencode")).toMatchObject({ ok: true, requires: "opencode", detail: expect.stringContaining(shims) })
     expect(executorById(report, "pi")).toMatchObject({ ok: true, requires: "pi", detail: expect.stringContaining(shims) })
   })

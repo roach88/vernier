@@ -1,5 +1,5 @@
 // EmbeddingRetriever: cosine-similarity recall over rule embeddings, behind
-// the same LAZY OPTIONAL DEPENDENCY pattern as the claude executor — the
+// a LAZY OPTIONAL DEPENDENCY pattern (vernier's one optional peer) — the
 // embedding package is an optional peer, so this module must import cleanly
 // without it. Nothing touches the package until a retrieval/remember
 // actually needs vectors: constructing the retriever (registry listing,
@@ -94,7 +94,7 @@ export class EmbeddingRetriever implements Retriever {
     } catch (error) {
       // The one failure this retriever owns: the optional peer is absent.
       // Anything else (a broken install, a bad model id) propagates as the
-      // crash it is — same posture as the claude executor's lazy SDK load.
+      // crash it is.
       const code = (error as { code?: string }).code
       const message = error instanceof Error ? error.message : String(error)
       if (code !== "ERR_MODULE_NOT_FOUND" || !message.includes(EMBEDDING_PACKAGE)) throw error

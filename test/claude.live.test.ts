@@ -1,18 +1,18 @@
 // LIVE claude proof, double-gated like provider-live.test.ts: it costs
-// tokens and needs an authed Claude Code install, so it never runs in the
-// auth-free suite. Run it deliberately:
+// tokens and needs an authed Claude Code CLI on PATH, so it never runs in
+// the auth-free suite. Run it deliberately:
 //
 //   VERNIER_LIVE=1 VERNIER_LIVE_CLAUDE=1 npm test -- claude.live
 
-import { mkdtempSync } from "node:fs"
+import { accessSync, constants, mkdtempSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { delimiter, join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { ClaudeExecutor, CLAUDE_SDK } from "../src/executors/claude.js"
+import { ClaudeExecutor } from "../src/executors/claude.js"
 import { noEffects, type StepSpec } from "../src/kernel/types.js"
 
 const LIVE_CLAUDE_REQUESTED = process.env.VERNIER_LIVE === "1" && process.env.VERNIER_LIVE_CLAUDE === "1"
-const CLAUDE_AVAILABLE = LIVE_CLAUDE_REQUESTED && sdkResolvable()
+const CLAUDE_AVAILABLE = LIVE_CLAUDE_REQUESTED && claudeOnPath()
 
 function spec(): StepSpec {
   return {
@@ -45,11 +45,17 @@ describe("claude live proof", () => {
   )
 })
 
-function sdkResolvable(): boolean {
-  try {
-    import.meta.resolve(CLAUDE_SDK)
-    return true
-  } catch {
-    return false
+/** PATH lookup only — the gate must never execute the binary. */
+function claudeOnPath(): boolean {
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (!dir) continue
+    try {
+      const candidate = join(dir, "claude")
+      accessSync(candidate, constants.X_OK)
+      if (statSync(candidate).isFile()) return true
+    } catch {
+      // keep scanning
+    }
   }
+  return false
 }

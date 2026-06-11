@@ -2,12 +2,11 @@
 // https://github.com/SawyerHood/omegacode — MIT License, Copyright (c) 2026 Sawyer Hood.
 // See LICENSE in this directory and the repository NOTICE file.
 // Local adaptations: imports of "../dsl/types.js" point at "./types.js"; the
-// claude-code branch returns notImplemented() instead of constructing its
-// worker — claude.ts statically imports @anthropic-ai/claude-agent-sdk (an
-// OPTIONAL peer), so constructing it here would force the SDK onto every
-// factory importer; vernier wires claude at the executor layer instead
-// (src/executors/claude.ts, lazy dynamic import). codex / cursor-agent /
-// opencode / pi construct their real workers.
+// claude-code branch returns notImplemented() — vernier drives Claude Code
+// through the CLI with its own non-vendored worker at the executor layer
+// (src/executors/claude.ts, ClaudeCliWorker), so omegacode's SDK-based
+// worker is not vendored (see NOTICE). codex / cursor-agent / opencode / pi
+// construct their real workers.
 
 import type { ProviderId } from "./types.js"
 import { type Worker, type WorkerFactory } from "./index.js"
@@ -73,8 +72,8 @@ export class DefaultWorkerFactory implements WorkerFactory {
           ...(this.opts.piStallTimeoutMs !== undefined ? { stallTimeoutMs: this.opts.piStallTimeoutMs } : {}),
         })
       case "claude-code":
-        // Wired at vernier's executor layer instead (lazy optional-peer SDK);
-        // constructing ClaudeWorker here would statically drag the SDK in.
+        // Wired at vernier's executor layer instead (ClaudeCliWorker in
+        // src/executors/claude.ts — the CLI on PATH, no SDK).
         return notImplemented(id)
     }
   }

@@ -75,9 +75,8 @@ function scratchDir(label: string): string {
  * The wired provider executors (codex / cursor-agent / claude / opencode /
  * pi), constructed lazily as a set: every agent-driven entry registers ALL
  * of them so any role can be rebound onto any agent (`--executor
- * <step>=claude`) without a custom runtime. Nothing spawns or imports an
- * SDK until a step actually runs on one of them, so registering the full
- * set costs nothing.
+ * <step>=claude`) without a custom runtime. Nothing spawns until a step
+ * actually runs on one of them, so registering the full set costs nothing.
  */
 function wiredProviders(): { readonly executors: readonly Executor[]; shutdown(): Promise<void> } {
   const executors = [

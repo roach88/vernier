@@ -68,6 +68,39 @@ describe("JudgeExecutor", () => {
     expect(result.usage.inputTokens).toBe(10)
   })
 
+  it("defaults the backing provider to codex — a default, not a privilege", async () => {
+    const { worker, seen } = recordingWorker(canned)
+    const judge = new JudgeExecutor({ worker })
+    expect(judge.provider).toBe("codex")
+    await judge.run(spec(), { workdir: workdir() })
+    expect(seen[0]!.provider).toBe("codex")
+  })
+
+  it("the backing provider is a constructor binding: any worker fills the judge role", async () => {
+    // A fake claude-backed worker — the seam the fungibility rule rides on.
+    const seen: AgentSpec[] = []
+    const claudeBacked: Worker = {
+      id: "claude-code",
+      async runAgent(s: AgentSpec, _ctx: WorkerContext) {
+        seen.push(s)
+        return canned
+      },
+      async shutdown() {},
+    }
+    const judge = new JudgeExecutor({ worker: claudeBacked })
+    // The injected worker's identity wins; doctor probes THIS provider's binary.
+    expect(judge.provider).toBe("claude-code")
+    const result = await judge.run(spec(), { workdir: workdir() })
+    expect(result.output).toEqual(verdict)
+    expect(seen[0]).toMatchObject({ provider: "claude-code", sandbox: "read-only", approval: "never" })
+  })
+
+  it("constructs a claude-backed default worker from the provider id alone (construction never spawns)", () => {
+    const judge = new JudgeExecutor({ id: "distill", provider: "claude-code" })
+    expect(judge.id).toBe("distill")
+    expect(judge.provider).toBe("claude-code")
+  })
+
   it("pins the sandbox to read-only regardless of the step's effect scope — a judge never writes", async () => {
     const { worker, seen } = recordingWorker(canned)
     await new JudgeExecutor({ worker }).run(spec({ effects: fsScope("anything/**") }), { workdir: workdir() })

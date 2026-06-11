@@ -13,6 +13,19 @@
 // executor — independent, structured-output, read-only — registered as a
 // second instance under its own id: new JudgeExecutor({ id: "distill" }).
 //
+// THE BACKING PROVIDER IS A BINDING, NOT A PRIVILEGE. codex is only the
+// default; any agent that honors a pinned read-only sandbox can fill the
+// judge role: `provider` selects a constructible backend ("codex" |
+// "claude-code"), and `worker` injects anything else (tests inject fakes;
+// a custom runtime can hand in any Worker). The chosen provider travels on
+// the AgentSpec and is exposed as `this.provider` so `vernier doctor`
+// reports which binary actually backs judge/distill. opencode/pi are not
+// constructible defaults because their workers refuse a read-only sandbox
+// (nothing enforceable behind it — a judge that can write is not a judge);
+// cursor needs per-run config plumbing. Both remain reachable via `worker`.
+// Config-level judge binding (a `judgeProvider` key in vernier.config) is
+// deferred; the constructor seam is the supported path today.
+//
 // The verdict is model-emitted STRUCTURED output — the first real use of the
 // StepSpec.outputSchema escape hatch. The engine derives that schema from
 // the step's zod output signature (kernel/types.ts derivedOutputSchema);
@@ -32,16 +45,32 @@ import type { ArtifactRef, Executor, RunContext, StepResult, StepSpec } from "..
 import { evidencePrefix } from "./evidence.js"
 import { AgentError, AgentInterrupted, type Worker, type WorkerProgress } from "./vendor/omegacode/index.js"
 import { CodexWorker } from "./vendor/omegacode/codex.js"
-import type { AgentResult, AgentSpec } from "./vendor/omegacode/types.js"
+import type { AgentResult, AgentSpec, ProviderId } from "./vendor/omegacode/types.js"
+import { ClaudeCliWorker } from "./claude.js"
+
+/** Providers this executor can construct a default worker for. Both honor a
+ *  pinned read-only sandbox. Any other backend: inject `worker`. */
+export type JudgeProvider = "codex" | "claude-code"
 
 export interface JudgeExecutorOpts {
   /** Executor id steps resolve against. Default "judge"; Pilot 3 registers a second instance as "distill". */
   readonly id?: string
-  /** Injectable worker (tests pass scripted workers). Default: a fresh CodexWorker. */
+  /** Which provider backs the verdict turn. Default "codex" — a default, not a privilege. */
+  readonly provider?: JudgeProvider
+  /** Injectable worker (tests pass scripted workers; any Worker fills the role). Overrides `provider` construction. */
   readonly worker?: Worker
-  /** Codex binary when constructing the default worker. */
+  /** Binary for the chosen provider's default worker (codex or claude). */
   readonly bin?: string
   readonly model?: string
+}
+
+function defaultJudgeWorker(provider: JudgeProvider, bin: string | undefined): Worker {
+  switch (provider) {
+    case "codex":
+      return new CodexWorker({ bin })
+    case "claude-code":
+      return new ClaudeCliWorker(bin !== undefined ? { bin } : {})
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -50,12 +79,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export class JudgeExecutor implements Executor {
   readonly id: string
+  /** The provider id the verdict turn runs on — `vernier doctor` probes THIS
+   *  binary, so the report names what actually backs judge/distill. */
+  readonly provider: ProviderId
   private readonly worker: Worker
   private readonly model: string | undefined
 
   constructor(opts: JudgeExecutorOpts = {}) {
     this.id = opts.id ?? "judge"
-    this.worker = opts.worker ?? new CodexWorker({ bin: opts.bin })
+    // An injected worker carries its own provider identity; otherwise the
+    // chosen (or default) provider names the constructed backend.
+    this.provider = opts.worker?.id ?? opts.provider ?? "codex"
+    this.worker = opts.worker ?? defaultJudgeWorker(opts.provider ?? "codex", opts.bin)
     this.model = opts.model
   }
 
@@ -71,7 +106,7 @@ export class JudgeExecutor implements Executor {
     }
     const agentSpec: AgentSpec = {
       prompt: spec.prompt,
-      provider: "codex",
+      provider: this.provider,
       cwd: ctx.workdir,
       sandbox: "read-only", // pinned: judges read, never write
       approval: "never",

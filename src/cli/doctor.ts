@@ -5,12 +5,14 @@
 //   executors  every executor the registered loops' runtimes register
 //              (builtin) plus the config-registered ones, each probed for
 //              the ONE thing it needs: CLI-backed executors a binary on
-//              PATH, the claude executor its SDK (an optional peer),
-//              in-process executors nothing (loading the module that
-//              declared them already proved them). The memory RETRIEVER is
-//              probed here too (one `memory:<tier>` row per selected tier):
-//              the embedding tier needs its optional package, exactly like
-//              claude needs its SDK; the lexical default needs nothing.
+//              PATH (claude included — the Claude Code CLI, like every
+//              other provider; judge/distill the binary of whichever
+//              provider actually backs them), in-process executors nothing
+//              (loading the module that declared them already proved
+//              them). The memory RETRIEVER is probed here too (one
+//              `memory:<tier>` row per selected tier): the embedding tier
+//              needs its optional package; the lexical default needs
+//              nothing.
 //   loops      per registered loop, every step's executor binding resolved
 //              through the same chain a run would use (config bindings >
 //              the step's declared default — doctor reports the at-rest
@@ -25,14 +27,14 @@
 // entry's REAL runtime in a throwaway scratch dir (construction is lazy —
 // nothing spawns), so the report can never drift from what `vernier run`
 // would resolve. Probes never execute the probed thing: binaries are
-// looked up on PATH, the SDK is resolved but not imported. Exit 0 iff
-// every registered loop is runnable; an unusable executor no step resolves
-// to is reported but does not fail the doctor.
+// looked up on PATH, optional packages are resolved but not imported.
+// Exit 0 iff every registered loop is runnable; an unusable executor no
+// step resolves to is reported but does not fail the doctor.
 
 import { accessSync, constants, mkdtempSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { delimiter, isAbsolute, join } from "node:path"
-import { ClaudeExecutor, CLAUDE_SDK } from "../executors/claude.js"
+import { ClaudeExecutor } from "../executors/claude.js"
 import { CodexExecutor } from "../executors/codex.js"
 import { CursorExecutor } from "../executors/cursor.js"
 import { HermesExecutor } from "../executors/hermes.js"
@@ -40,6 +42,7 @@ import { JudgeExecutor } from "../executors/judge.js"
 import { recallExecutor, rememberExecutor } from "../executors/memory.js"
 import { OpencodeExecutor } from "../executors/opencode.js"
 import { PiExecutor } from "../executors/pi.js"
+import type { ProviderId } from "../executors/vendor/omegacode/types.js"
 import type { Executor } from "../kernel/types.js"
 import { EMBEDDING_PACKAGE, EmbeddingRetriever } from "../memory/embedding.js"
 import { Memory } from "../memory/memory.js"
@@ -91,7 +94,7 @@ function executable(path: string): boolean {
 export interface ExecutorReport {
   readonly id: string
   readonly ok: boolean
-  /** What the probe checked: a binary name, the SDK specifier, or null for in-process executors. */
+  /** What the probe checked: a binary name, an optional-package specifier (the embedding retriever), or null for in-process executors. */
   readonly requires: string | null
   readonly detail: string
 }
@@ -124,33 +127,37 @@ export interface DoctorReport {
 
 // ---------------------------------------------------------------- diagnosis
 
+/** The binary each provider id spawns — what doctor looks up on PATH. */
+const PROVIDER_BIN: Record<ProviderId, string> = {
+  codex: "codex",
+  "cursor-agent": "cursor-agent",
+  "claude-code": "claude",
+  opencode: "opencode",
+  pi: "pi",
+}
+
 /** Probe one executor for the one thing it needs. Classification is by implementation, not id string. */
 function checkExecutor(executor: Executor, fromConfig: boolean, probes: DoctorProbes): ExecutorReport {
   const id = executor.id
   if (fromConfig) {
     return { id, ok: true, requires: null, detail: "config-registered executor (its module loaded)" }
   }
-  if (executor instanceof ClaudeExecutor) {
-    const ok = probes.resolvable(CLAUDE_SDK)
-    return {
-      id,
-      ok,
-      requires: CLAUDE_SDK,
-      detail: ok ? `${CLAUDE_SDK} resolvable` : `${CLAUDE_SDK} not installed (optional peer) — npm install ${CLAUDE_SDK}`,
-    }
-  }
   const bin =
-    executor instanceof CodexExecutor || executor instanceof JudgeExecutor
-      ? "codex" // JudgeExecutor drives a CodexWorker by default
-      : executor instanceof CursorExecutor
-        ? "cursor-agent"
-        : executor instanceof OpencodeExecutor
-          ? "opencode"
-          : executor instanceof PiExecutor
-            ? "pi"
-            : executor instanceof HermesExecutor
-              ? "hermes"
-              : null
+    executor instanceof CodexExecutor
+      ? "codex"
+      : executor instanceof JudgeExecutor
+        ? PROVIDER_BIN[executor.provider] // whichever provider actually backs judge/distill
+        : executor instanceof ClaudeExecutor
+          ? "claude" // the Claude Code CLI, probed like every other provider
+          : executor instanceof CursorExecutor
+            ? "cursor-agent"
+            : executor instanceof OpencodeExecutor
+              ? "opencode"
+              : executor instanceof PiExecutor
+                ? "pi"
+                : executor instanceof HermesExecutor
+                  ? "hermes"
+                  : null
   if (bin !== null) {
     const found = probes.which(bin)
     return {
@@ -167,8 +174,8 @@ function checkExecutor(executor: Executor, fromConfig: boolean, probes: DoctorPr
 
 /**
  * Probe the memory retriever for the one thing it needs — the embedding
- * tier its optional package (the claude-SDK probe, mirrored); every other
- * tier is in-process. Classification is by implementation, not id string.
+ * tier its optional package (the one remaining optional-peer probe); every
+ * other tier is in-process. Classification is by implementation, not id string.
  */
 function checkRetriever(retriever: Retriever, probes: DoctorProbes): ExecutorReport {
   const id = `memory:${retriever.id}`

@@ -61,11 +61,12 @@ npm run build     # tsc -> dist/ (ESM + .d.ts); bin/vernier.js then runs under P
 npm link          # optional: a global `vernier` on PATH
 ```
 
-The claude executor needs `@anthropic-ai/claude-agent-sdk`, an **optional**
-peer dependency — the base install stays light. Add it next to vernier when
-you want claude (`vernier doctor` tells you whether it is missing). The
-embedding memory retriever (`VERNIER_RETRIEVER=embedding`) needs
-`@huggingface/transformers`, the same way — see "Memory & recall".
+Agent providers are CLIs on PATH — `codex`, `claude` (Claude Code),
+`cursor-agent`, `opencode`, `pi` — and none is required to install or to
+run the test suite: `vernier doctor` tells you which are usable on this
+machine, and any of them can fill any role. The embedding memory retriever
+(`VERNIER_RETRIEVER=embedding`) needs `@huggingface/transformers`, an
+optional peer dependency — see "Memory & recall".
 
 ## Quickstart
 
@@ -110,7 +111,8 @@ vernier doctor                                      # probe executors + per-loop
 
 `doctor` answers "can this installation actually run its loops": every
 registered executor is probed for the one thing it needs (CLI executors a
-binary on PATH, claude its SDK, in-process executors nothing — probes look
+binary on PATH — claude included; judge/distill the binary of whichever
+provider backs them; in-process executors nothing — probes look
 things up, they never execute them), then every loop's steps are resolved
 through the same binding chain a run would use and judged runnable. Exit 0
 iff every registered loop is runnable; an unusable executor that no step
@@ -155,10 +157,12 @@ a same-host pid that no longer exists) is taken over; the lease is released
 on terminal state or process exit. A crashed driver therefore never wedges
 a run.
 
-`npm test` never needs credentials: agent executors are tested against
-omegacode's deterministic `FakeWorker` and injected subprocess runners.
-The live Pilot 1 paths (`npm run pilot1`, `VERNIER_LIVE=1`) require authed
-`hermes` and `codex` CLIs on PATH; codex runs under sandbox
+`npm test` never needs credentials, agents, or auth — agent executors are
+tested against deterministic fake workers and injected subprocess runners.
+The live Pilot 1 paths (`npm run pilot1`, `VERNIER_LIVE=1`) need whichever
+agent you bind — both steps default to `codex` (with `hermes` an optional
+route binding), but any wired provider can fill either role, and `vernier
+doctor` tells you what is usable. The implement step runs under sandbox
 `workspace-write` rooted at a throwaway scratch dir — the sandbox level is
 DERIVED from the step's `EffectScope` (no scope → read-only;
 danger-full-access is unconstructible from a loop declaration).
@@ -303,7 +307,8 @@ And the boundary that actually matters: **a registered config module runs
 with this process's full privileges** — loading a config or any module it
 names executes that code, exactly the trust you extend to any npm script.
 Effect scopes bound what a STEP may touch (observed, and for codex
-OS-sandboxed; for claude gate-enforced; cursor, opencode, and pi fail
+OS-sandboxed; for claude enforced through Claude Code's permission modes
+and toolset restriction; cursor, opencode, and pi fail
 closed on write scopes); they do not sandbox the config itself. Do not point vernier at a config you would not `node` yourself.
 
 ## Memory & recall
@@ -327,8 +332,8 @@ three tiers:
   REMEMBER time and stored on the JSONL record, versioned with the model
   id ([src/memory/embedding.ts](src/memory/embedding.ts)). Select it with
   `VERNIER_RETRIEVER=embedding` (read where the registry constructs
-  Memory). Needs `@huggingface/transformers`, an optional peer exactly
-  like the claude SDK — `npm install @huggingface/transformers`, and
+  Memory). Needs `@huggingface/transformers`, an optional peer —
+  `npm install @huggingface/transformers`, and
   `vernier doctor` probes it. After the one-time model download every
   embed is local: no network at query time. Records without a comparable
   embedding (every pre-embedding store, or vectors from a different
@@ -364,11 +369,11 @@ re-embeds it (same content-derived id, last record wins).
 |---|---|---|
 | `codex` | wired | `codex` on PATH; sandbox derived from EffectScope, never full-access |
 | `cursor-agent` | wired | `cursor-agent` on PATH; read-only steps only (no hard sandbox for writes) |
-| `claude` | wired | `@anthropic-ai/claude-agent-sdk` (optional peer); sandbox enforced via the SDK's canUseTool gate |
+| `claude` | wired | `claude` (Claude Code >= 2.0) on PATH; effect-free steps run on a read-only toolset (`Read,Glob,Grep`, asks auto-denied), write scopes on `acceptEdits` — edits confined to the workdir by Claude Code's workspace boundary, Bash and out-of-workspace writes denied (print mode cannot grant); permission-bypass flags are never passed |
 | `opencode` | wired | `opencode` (>= 1.16.2) on PATH; noEffects() steps only — the provider has no enforceable sandbox, so write scopes fail closed and effect-free steps run unconfined (read-only intent observed post-hoc, not enforced) |
 | `pi` | wired | `pi` (>= 0.79.1, `@earendil-works/pi-coding-agent`) on PATH; same posture as opencode — write scopes fail closed, effect-free steps run unconfined |
 | `hermes` | optional binding | `hermes` on PATH; a router CLI behind the same seam (`--executor route=hermes`) |
-| `judge` / `distill` | wired | drives the codex binary; independent structured-output grading |
+| `judge` / `distill` | wired | independent structured-output grading on whichever provider backs it — codex by default, claude via `new JudgeExecutor({ provider: "claude-code" })`, anything else via an injected worker; `vernier doctor` reports the bound provider's binary |
 
 ## Toolchain
 
@@ -376,21 +381,23 @@ Node 22 + TypeScript (strict) + tsx + vitest + zod, plain npm; `tsc` emits
 `dist/` (no bundler — the source is already NodeNext ESM, and a 1:1 emit
 keeps the vendored files' MIT headers intact). Node rather than bun because
 the vendored code (omegacode's journal shape and its provider adapters —
-Claude agent SDK, Codex JSON-RPC over stdio) is written against Node APIs
-and Node process semantics; staying on the same runtime keeps that
+Codex JSON-RPC over stdio, the subprocess JSONL workers) is written against
+Node APIs and Node process semantics; staying on the same runtime keeps that
 vendoring honest. zod because in TS the signature *is* the home idiom — no
 mini-language parser needed (the design doc's §7 Python risk dissolves here).
 
 ## Provenance
 
 - **Vendored from [omegacode](https://github.com/SawyerHood/omegacode)** (MIT — see [NOTICE](NOTICE)):
-  the whole worker family under `src/executors/vendor/omegacode/` — the
+  the worker family under `src/executors/vendor/omegacode/` — the
   codex app-server worker + JSON-RPC protocol/transport, the subprocess
   JSONL mechanics, schema strictify/validation, the error taxonomy, the
-  deterministic `FakeWorker` test double, and the claude/opencode/pi
-  adapters (vendored as a family; all five — codex, cursor-agent, claude,
-  opencode, pi — are wired behind the seam, claude lazily, its SDK being
-  an optional peer). Also adapted:
+  deterministic `FakeWorker` test double, and the cursor/opencode/pi
+  adapters. All five providers — codex, cursor-agent, claude, opencode,
+  pi — are wired behind the same seam; claude's adapter is vernier's own
+  (it drives the Claude Code CLI; the SDK-based vendored worker was
+  removed along with the SDK dependency, with its stream-event mapping
+  adapted into `src/executors/claude.ts` — see NOTICE). Also adapted:
   the `journal.jsonl` shape and canonical hashing (`src/ledger/ledger.ts`);
   the Executor seam as a rename of `Worker.runAgent(spec, ctx) →
   AgentResult`. Deliberately left behind: the `node:vm` sandbox trunk, the

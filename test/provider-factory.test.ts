@@ -152,7 +152,7 @@ describe("DefaultWorkerFactory", () => {
     expect(calls[1]!.opts.cwd).toBe(spec.cwd)
   })
 
-  it("keeps claude-code behind the executor layer (factory stays not-implemented; the SDK must not load here)", async () => {
+  it("keeps claude-code behind the executor layer (factory stays not-implemented; ClaudeCliWorker lives in src/executors/claude.ts)", async () => {
     const factory = new DefaultWorkerFactory()
     await expect(
       factory.get("claude-code").runAgent(agentSpec("claude-code"), {

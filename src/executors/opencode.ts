@@ -24,8 +24,9 @@
 //       the prompt and is observed post-hoc by effect attribution
 //       (kernel/effects.ts flags out-of-scope changes), never enforced
 //       up front. That is strictly weaker than codex (OS sandbox), claude
-//       (SDK canUseTool gate), and cursor (provider read-only mode) — bind
-//       those providers to steps where read enforcement matters.
+//       (CLI permission-mode + toolset gate), and cursor (provider
+//       read-only mode) — bind those providers to steps where read
+//       enforcement matters.
 //
 // The worker also rejects maxTurns and effort pre-spawn; vernier never sets
 // either, so those refusals are unreachable from here.

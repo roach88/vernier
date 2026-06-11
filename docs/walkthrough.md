@@ -70,7 +70,7 @@ name), and each step's input schema picks what it needs from that plane.
 
 **The executor is fungible.** An executor is anything with an id and
 `run(spec, ctx) -> StepResult`: a deterministic script, the codex CLI, the
-claude SDK, an LLM judge, a human at a keyboard. Steps name an executor
+claude CLI, an LLM judge, a human at a keyboard. Steps name an executor
 *id*, and the binding is resolved at run time — so any agent can fill any
 role (`--executor route=hermes`), and swapping providers is a rebind, not
 a rewrite.
@@ -120,7 +120,7 @@ EXECUTORS
   ok  hermes                       `hermes` on PATH (/Users/tyler/.local/bin/hermes)
   ok  codex                        `codex` on PATH (/Users/tyler/.local/bin/codex)
   !!  cursor-agent                 `cursor-agent` not found on PATH
-  ok  claude                       @anthropic-ai/claude-agent-sdk resolvable
+  ok  claude                       `claude` on PATH (/Users/tyler/.local/bin/claude)
   ok  opencode                     `opencode` on PATH (/Users/tyler/.opencode/bin/opencode)
   ok  pi                           `pi` on PATH (/Users/tyler/.bun/bin/pi)
   ok  judge                        `codex` on PATH (/Users/tyler/.local/bin/codex)
@@ -151,7 +151,9 @@ all registered loops are runnable.
 How to read it:
 
 - **EXECUTORS** probes each registered executor for the one thing it needs:
-  CLI executors a binary on PATH, claude its SDK, in-process executors
+  CLI executors a binary on PATH (claude included — the Claude Code CLI,
+  like every other provider; judge/distill the binary of whichever provider
+  backs them), in-process executors
   nothing. Probes look things up; they never execute anything. `ok` means
   usable, `!!` means not usable *as installed* — above, `cursor-agent` is
   missing.
@@ -329,7 +331,9 @@ timelines, stats, resume — is a pure function of files like this one.
 ## 5. A real coding loop — plan-work-review
 
 > **LIVE section.** `plan-work-review` drives real agent CLIs; running it
-> needs an authed `codex` on PATH (`vernier doctor` will tell you). The
+> needs whichever agent you bind — codex in this transcript, but any wired
+> provider can fill either role, and `vernier doctor` tells you what is
+> usable. (The test suite never needs any agent or auth.) The
 > output below is transcribed from a **real run of 2026-06-10** made while
 > building this tool. Those pre-rename ledgers live under the author's
 > checkout (gitignored, so not in the repo); they render with today's CLI
@@ -429,9 +433,10 @@ is resolved at run time through one chain:
 
 Keys are a step id (binds that step) or an executor id (binds the role
 everywhere it appears). Today's plan-work-review (v0.3.0) defaults *both*
-steps to codex, so one authed CLI suffices; the run above is what
-`--executor route=hermes` produces — the orchestrator role itself is just
-a binding, hermes optional:
+steps to codex, so one wired agent suffices — and because any agent can
+fill any role, that one agent does not have to be codex; the run above is
+what `--executor route=hermes` produces — the orchestrator role itself is
+just a binding, hermes optional:
 
 ```sh
 vernier run plan-work-review --executor route=hermes --input '{"task":"…"}'   # route on hermes (this is the historical configuration)
@@ -999,8 +1004,8 @@ decision  escalate / failure — step `review` failed: line 1 has 5 syllables �
 
 And because user loops register the wired providers alongside your own
 executors, `--executor compose=claude` resolves too. It then fails — at
-the prompt check, deterministically, before the SDK is even loaded —
-because an LLM-bound step needs a `prompt` template and compose
+the prompt check, deterministically, before any provider process is
+spawned — because an LLM-bound step needs a `prompt` template and compose
 deliberately declares none (scripts read inputs, agents read prompts).
 For real:
 
@@ -1262,14 +1267,16 @@ The real gotchas, in the order you will hit them:
   mode — OS-unconfined, with read-only *intent* observed post-hoc by
   effect attribution, never enforced up front. `cursor-agent` is the same
   for writes (fail closed; read-only steps only). Bind codex (OS sandbox
-  derived from the EffectScope) or claude (SDK permission gate) where
-  enforcement matters.
-- **claude executor setup:** `@anthropic-ai/claude-agent-sdk` is an
-  optional peer — install it next to vernier when you want claude;
-  `vernier doctor` says whether it is resolvable. Note vernier's
-  `package.json` pins the SDK's zod to vernier's zod 3 via an `overrides`
-  entry (the SDK peers on zod 4); this is verified to work because vernier
-  never passes zod schemas to the SDK's `tool()` helper.
+  derived from the EffectScope) or claude (permission-mode + toolset gate)
+  where enforcement matters.
+- **claude executor setup:** the `claude` CLI (Claude Code >= 2.0) on
+  PATH, like every other provider — no SDK, no extra package;
+  `vernier doctor` says whether it is found. Effect-free steps run on a
+  read-only toolset (`Read,Glob,Grep`, permission asks auto-denied);
+  write-scoped steps run on `acceptEdits` — edits confined to the workdir
+  by Claude Code's workspace boundary, Bash and out-of-workspace writes
+  denied (print mode cannot grant a prompt). Permission-bypass flags are
+  never passed.
 - **Exit 3 (`lease held`)** is not an error to fight: another live driver
   owns the run. If the holder is genuinely dead, its lease goes stale
   (heartbeat TTL, default 30s) and the next driver takes over — §9.

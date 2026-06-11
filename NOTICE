@@ -18,15 +18,20 @@ a copy of the omegacode LICENSE sits alongside the files):
       subprocess-jsonl.ts spawn-per-call JSONL subprocess mechanics
       schema.ts           JSON-Schema strictify + ajv re-validation
       errors.ts           withRetry backoff + notImplemented stub
-      factory.ts          worker factory (adapted: claude-code/opencode/pi
-                          branches return notImplemented; codex is the only
-                          wired live provider this step)
+      factory.ts          worker factory (adapted: the claude-code branch
+                          returns notImplemented — vernier drives Claude
+                          Code through its CLI with a non-vendored worker;
+                          codex/cursor-agent/opencode/pi construct their
+                          real workers)
       fake.ts             deterministic FakeWorker (the auth-free test double)
-      claude.ts           vendored for adapter-family completeness but
-                          EXCLUDED from compilation (tsconfig "exclude") —
-                          it requires @anthropic-ai/claude-agent-sdk, which
-                          vernier does not carry yet
-      opencode.ts, pi.ts  vendored, compiled, not yet wired (notImplemented)
+      cursor.ts, opencode.ts, pi.ts   vendored, compiled, wired
+
+      Previously vendored, since REMOVED: claude.ts (the SDK-based
+      ClaudeWorker, which required @anthropic-ai/claude-agent-sdk). vernier
+      now drives the Claude Code CLI directly via its own ClaudeCliWorker
+      in src/executors/claude.ts; that file's stream-json event mapping and
+      usage summation are adapted from the removed vendored worker (same
+      MIT attribution as above).
 
       Local adaptations across these files: import paths from "../dsl/types.js"
       to "./types.js"; optional properties widened with `| undefined` for
