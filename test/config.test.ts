@@ -10,7 +10,17 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import { describe, expect, it } from "vitest"
+import { z } from "zod"
+import { defineConfig, type LoadedConfig } from "../src/cli/config.js"
+import { loopRegistry } from "../src/cli/registry.js"
+import { JudgeExecutor } from "../src/executors/judge.js"
+import type { Loop } from "../src/kernel/types.js"
 import { journalPath } from "../src/ledger/ledger.js"
+
+// In-process registry construction below builds runtimes whose Memory mkdirs
+// under the vernier root; point it at scratch so the repo is never touched.
+// (Spawned CLI calls are unaffected: cli() sets VERNIER_HOME explicitly.)
+process.env.VERNIER_HOME = mkdtempSync(join(tmpdir(), "vernier-config-home-"))
 
 const execFileAsync = promisify(execFile)
 const BIN = join(import.meta.dirname, "..", "bin", "vernier.js")
@@ -156,5 +166,100 @@ describe("vernier.config: out-of-tree loops and executors", () => {
     expect(result.code).toBe(0)
     expect(JSON.parse(result.stdout)).toEqual([])
     expect(result.stderr).toContain("vernier init") // the friendly empty-state pointer
+  })
+})
+
+// ---------------------------------------------------- the judge config block
+
+describe("vernier.config: the judge block", () => {
+  const echoLoop = join(FIXTURE, "echo-loop.mjs")
+
+  /** A scratch config dir registering the echo loop plus the given judge block. */
+  function judgeConfigDir(judge: unknown): string {
+    const dir = scratch()
+    writeFileSync(join(dir, "vernier.config.json"), JSON.stringify({ loops: [echoLoop], judge }), "utf8")
+    return dir
+  }
+
+  it("accepts codex and claude — the executor vocabulary, not internal worker ids", async () => {
+    for (const provider of ["codex", "claude"]) {
+      const result = await cli({ home: home(), cwd: judgeConfigDir({ provider }) }, "loops", "--json")
+      expect(result.code).toBe(0)
+      expect((JSON.parse(result.stdout) as Array<{ id: string }>).map((l) => l.id)).toEqual(["echo-shout"])
+    }
+  })
+
+  it("rejects unsupported providers with the WHY for each (the error text is the documentation)", async () => {
+    const result = await cli({ home: home(), cwd: judgeConfigDir({ provider: "opencode" }) }, "loops")
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain('judge.provider must be "codex" or "claude"')
+    expect(result.stderr).toContain("pinned read-only sandbox")
+    expect(result.stderr).toContain("opencode and pi refuse it")
+    expect(result.stderr).toContain("cursor-agent has no per-run config plumbing")
+    expect(result.stderr).toContain("inject a custom worker")
+  })
+
+  it("points the internal worker id back at the executor vocabulary", async () => {
+    const result = await cli({ home: home(), cwd: judgeConfigDir({ provider: "claude-code" }) }, "loops")
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain("internal worker id")
+    expect(result.stderr).toContain("executor vocabulary")
+  })
+
+  it("rejects unknown keys inside the block (exit 2, schema named)", async () => {
+    const result = await cli({ home: home(), cwd: judgeConfigDir({ provider: "codex", model: "o3" }) }, "loops")
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain("config error")
+  })
+
+  it("validates the block in TS/JS configs too (the form zod never sees)", async () => {
+    const dir = scratch()
+    writeFileSync(
+      join(dir, "vernier.config.mjs"),
+      `export default { loops: [${JSON.stringify(echoLoop)}], judge: { provider: "pi" } }\n`,
+      "utf8",
+    )
+    const result = await cli({ home: home(), cwd: dir }, "loops")
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain('judge.provider must be "codex" or "claude"')
+  })
+
+  it("config-loop runtimes construct the judge on the configured provider (construction never spawns)", async () => {
+    const loop = {
+      id: "judge-wiring",
+      version: "0.0.1",
+      signature: { input: z.object({}), output: z.object({}) },
+      steps: [{ id: "grade", signature: { input: z.object({}), output: z.object({}) }, executor: "judge", effects: { allow: [] } }],
+      policy: () => ({ kind: "stop", classification: "success", summary: "", notes: [], improvement: "" }),
+      trust: "dry-run",
+      ledger: {},
+    }
+    const loaded = (judge?: { readonly provider: "codex" | "claude" }): LoadedConfig => ({
+      path: "/scratch/vernier.config.json",
+      loops: [{ registration: { loop: loop as unknown as Loop }, source: "test" }],
+      executors: [],
+      bindings: new Map(),
+      ...(judge !== undefined ? { judge } : {}),
+    })
+    // claude maps to the claude-code worker; codex and the absent block stay codex.
+    for (const [judge, expected] of [
+      [{ provider: "claude" }, "claude-code"],
+      [{ provider: "codex" }, "codex"],
+      [undefined, "codex"],
+    ] as const) {
+      const runtime = loopRegistry(loaded(judge)).get("judge-wiring")!.runtime(scratch())
+      try {
+        const judgeExecutor = runtime.deps.executors.get("judge")
+        expect(judgeExecutor).toBeInstanceOf(JudgeExecutor)
+        expect((judgeExecutor as JudgeExecutor).provider).toBe(expected)
+      } finally {
+        await runtime.shutdown()
+      }
+    }
+  })
+
+  it("defineConfig carries the judge block (type-level support, held by tsc over this file)", () => {
+    const cfg = defineConfig({ judge: { provider: "claude" } })
+    expect(cfg.judge?.provider).toBe("claude")
   })
 })

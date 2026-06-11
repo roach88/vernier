@@ -23,8 +23,10 @@
 // constructible defaults because their workers refuse a read-only sandbox
 // (nothing enforceable behind it — a judge that can write is not a judge);
 // cursor needs per-run config plumbing. Both remain reachable via `worker`.
-// Config-level judge binding (a `judgeProvider` key in vernier.config) is
-// deferred; the constructor seam is the supported path today.
+// Config-level judge binding is the `judge` block in vernier.config
+// (`"judge": { "provider": "codex" | "claude" }` — the user-facing executor
+// vocabulary, mapped onto this constructor's provider by cli/config.ts);
+// the constructor seam remains for custom runtimes and injected workers.
 //
 // The verdict is model-emitted STRUCTURED output — the first real use of the
 // StepSpec.outputSchema escape hatch. The engine derives that schema from

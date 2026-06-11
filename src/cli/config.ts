@@ -35,6 +35,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { z } from "zod"
+import type { JudgeProvider } from "../executors/judge.js"
 import type { Contract } from "../kernel/contract.js"
 import type { Executor, Loop } from "../kernel/types.js"
 import type { LoopRuntime } from "./registry.js"
@@ -57,6 +58,8 @@ export const vernierConfigSchema = z
     executors: z.array(z.string()).optional(),
     /** Executor bindings: stepId-or-executorId -> executorId. */
     bindings: z.record(z.string()).optional(),
+    /** Backing provider for the built-in judge/distill wrapper. The provider value is validated by parseJudgeBlock (see judgeProviderError). */
+    judge: z.object({ provider: z.string() }).strict().optional(),
   })
   .strict()
 
@@ -92,6 +95,8 @@ export interface VernierConfig {
   readonly loops?: ReadonlyArray<string | Loop | LoopRegistration>
   readonly executors?: ReadonlyArray<string | Executor>
   readonly bindings?: Readonly<Record<string, string>>
+  /** Backing provider for the built-in judge/distill wrapper. Absent = codex. */
+  readonly judge?: { readonly provider: JudgeConfigProvider }
 }
 
 /** Typed identity helper for TS/JS configs: `export default defineConfig({...})`. */
@@ -99,6 +104,51 @@ export const defineConfig = (config: VernierConfig): VernierConfig => config
 
 /** Typed identity helper for TS/JS loop modules: `export default defineLoop({ loop, ... })`. */
 export const defineLoop = (registration: LoopRegistration): LoopRegistration => registration
+
+// -------------------------------------------------------------- judge block
+
+/**
+ * Providers the `judge` config block accepts — the USER-FACING executor
+ * vocabulary (`claude` is the executor id users bind steps to, not the
+ * internal worker id `claude-code`; judgeBackingProvider maps it).
+ */
+export const JUDGE_CONFIG_PROVIDERS = ["codex", "claude"] as const
+export type JudgeConfigProvider = (typeof JUDGE_CONFIG_PROVIDERS)[number]
+
+/** Why a value cannot back the judge — the rejection text IS the documentation. */
+export function judgeProviderError(value: unknown): string {
+  const got = typeof value === "string" ? `\`${value}\`` : JSON.stringify(value)
+  const hint =
+    value === "claude-code" ? ` (\`claude-code\` is the internal worker id — the config speaks the executor vocabulary: \`claude\`)` : ""
+  return (
+    `judge.provider must be "codex" or "claude", got ${got}${hint}. ` +
+    `The judge pins its sandbox to read-only for every verdict, so only providers that honor a pinned read-only sandbox can back it: ` +
+    `opencode and pi refuse it (their workers expose no enforceable sandbox — a judge that can write is not a judge), and ` +
+    `cursor-agent has no per-run config plumbing to pin one yet. ` +
+    `Any other backend: inject a custom worker (\`new JudgeExecutor({ worker })\`) in a defineLoop runtime.`
+  )
+}
+
+/**
+ * Map the config vocabulary onto the judge's internal worker provider id
+ * (`claude` = the Claude Code CLI). No config, or no `judge` block = codex —
+ * a default, not a privilege.
+ */
+export function judgeBackingProvider(config: { readonly judge?: { readonly provider: JudgeConfigProvider } } | undefined): JudgeProvider {
+  return config?.judge?.provider === "claude" ? "claude-code" : "codex"
+}
+
+/** Validate the judge block (both config forms — TS/JS configs never pass through zod). */
+function parseJudgeBlock(raw: unknown, path: string): { readonly provider: JudgeConfigProvider } | undefined {
+  if (raw === undefined) return undefined
+  if (!isRecord(raw) || typeof raw.provider !== "string" || Object.keys(raw).length !== 1) {
+    throw new ConfigError(`\`${path}\`: \`judge\` must be \`{ "provider": "codex" | "claude" }\`.`)
+  }
+  if (!(JUDGE_CONFIG_PROVIDERS as readonly string[]).includes(raw.provider)) {
+    throw new ConfigError(`\`${path}\`: ${judgeProviderError(raw.provider)}`)
+  }
+  return { provider: raw.provider as JudgeConfigProvider }
+}
 
 // ---------------------------------------------------------------- discovery
 
@@ -127,6 +177,8 @@ export interface LoadedConfig {
   readonly loops: ReadonlyArray<{ readonly registration: LoopRegistration; readonly source: string }>
   readonly executors: readonly Executor[]
   readonly bindings: ReadonlyMap<string, string>
+  /** The validated `judge` block; absent = codex backs the wrapper. */
+  readonly judge?: { readonly provider: JudgeConfigProvider }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -219,11 +271,15 @@ function parseJsonConfig(path: string): VernierConfig {
   // properties; VernierConfig keeps optional keys strictly ABSENT. Normalize
   // here (drop undefined keys, repo-wide conditional-spread pattern) so the
   // public type stays strict instead of widening it.
-  const { loops, executors, bindings } = result.data
+  const { loops, executors, bindings, judge } = result.data
+  // The schema checks judge's shape; parseJudgeBlock narrows the provider
+  // value (and rejects unsupported providers with the actionable WHY).
+  const judgeBlock = parseJudgeBlock(judge, path)
   return {
     ...(loops !== undefined ? { loops } : {}),
     ...(executors !== undefined ? { executors } : {}),
     ...(bindings !== undefined ? { bindings } : {}),
+    ...(judgeBlock !== undefined ? { judge: judgeBlock } : {}),
   }
 }
 
@@ -265,7 +321,9 @@ export async function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = p
     if (typeof value !== "string") throw new ConfigError(`\`${path}\` binding \`${key}\` must map to an executor id string.`)
     bindings.set(key, value)
   }
-  return { path, loops, executors, bindings }
+  // Validated for BOTH forms here: the TS/JS form arrives as an unchecked cast.
+  const judge = parseJudgeBlock(config.judge, path)
+  return { path, loops, executors, bindings, ...(judge !== undefined ? { judge } : {}) }
 }
 
 // ----------------------------------------------------- executor resolution

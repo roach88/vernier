@@ -187,8 +187,8 @@ files), and the scaffold is yours to edit:
 |---|---|---|---|
 | `smoke` | `control-plane-smoke-test` | the whole five-slot lifecycle, hand-rolled, nothing hidden | nothing — no agent, no auth |
 | `coding-review` | `plan-work-review` | an LLM route gate + a contract-checked artifact in a bounded fs scope | any wired agent (bindings ship on codex; `implement` needs codex or claude for enforced writes) |
-| `verified-answer` | `verified-answer` | independent judging + `until` iteration with feedback threading | any wired agent for `answer`; the judge runs on codex by default |
-| `self-improving` | `compounding-answer` | recall → answer → grade → distill → remember; memory compounds across runs | any wired agent for `answer`; judge/distill on codex by default |
+| `verified-answer` | `verified-answer` | independent judging + `until` iteration with feedback threading | any wired agent for `answer`; the judge runs on codex unless the config's `judge` block says otherwise |
+| `self-improving` | `compounding-answer` | recall → answer → grade → distill → remember; memory compounds across runs | any wired agent for `answer`; judge/distill on codex by default (rebind via the `judge` block) |
 
 The agent templates name NO provider in the loop data: steps declare the
 binding target `agent`, and each scaffolded `vernier.config.json` carries
@@ -311,6 +311,27 @@ roles onto the wired agents — every user loop's runtime registers `codex`,
 read prompts), and the agent must be usable on this machine
 (`vernier doctor`).
 
+One more config key rebinds the built-in **judge/distill wrapper's backing
+provider** — distinct from `bindings`, which re-point a step at a different
+executor. The wrapper's guarantees (sandbox pinned read-only regardless of
+the step's scope, structured verdicts only, verdict evidence files) are the
+reason to rebind its backing rather than the step:
+
+```json
+{ "judge": { "provider": "claude" } }
+```
+
+Default `codex` when absent; values speak the executor vocabulary
+(`claude`, not the internal worker id). One wrapper instance serves every
+step that names `judge` — the self-improving template's `grade` AND
+`distill` both ride it (per-role splits remain the job of `bindings`).
+Only `codex` and `claude` can back it: opencode and pi refuse the pinned
+read-only sandbox (their workers expose no enforceable sandbox — a judge
+that can write is not a judge), and cursor-agent has no per-run config
+plumbing to pin one yet; anything else arrives as an injected `worker` in a
+`defineLoop` runtime. `vernier doctor` probes whichever binary the block
+names.
+
 Dependency lending, named honestly: a loop module's bare specifiers (`zod`
 above, and `"vernier"` itself in the scaffolded templates) resolve from
 the **config dir's own node_modules** when one exists — and when none does
@@ -403,7 +424,7 @@ re-embeds it (same content-derived id, last record wins).
 | `opencode` | wired | `opencode` (>= 1.16.2) on PATH; noEffects() steps only — the provider has no enforceable sandbox, so write scopes fail closed and effect-free steps run unconfined (read-only intent observed post-hoc, not enforced) |
 | `pi` | wired | `pi` (>= 0.79.1, `@earendil-works/pi-coding-agent`) on PATH; same posture as opencode — write scopes fail closed, effect-free steps run unconfined |
 | `hermes` | optional binding | `hermes` on PATH; a router CLI behind the same seam (`--executor route=hermes`) |
-| `judge` / `distill` | wired | independent structured-output grading on whichever provider backs it — codex by default, claude via `new JudgeExecutor({ provider: "claude-code" })`, anything else via an injected worker; `vernier doctor` reports the bound provider's binary |
+| `judge` / `distill` | wired | independent structured-output grading on whichever provider backs it — codex by default, claude via `"judge": { "provider": "claude" }` in vernier.config (or `new JudgeExecutor({ provider: "claude-code" })` in a custom runtime), anything else via an injected worker; `vernier doctor` reports the bound provider's binary |
 
 ## Toolchain
 

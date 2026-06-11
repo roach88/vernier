@@ -52,13 +52,17 @@ special-casing**. That generality is the whole point; protect it.
 | — | `43744f0` | **Rebrand: looper → vernier** (Tyler's call; npm name `vernier` verified free). Clean break, no fallbacks: package `vernier` (`private` removed), bin `vernier`, env `VERNIER_*` (was `LOOPER_*`), config `vernier.config.{ts,js,mjs,json}`, default state dir `./.vernier`, public API `VernierConfig`/`vernierConfigSchema`. Loop ids, the `loop-v2` resume-key version, journal shapes, NOTICE, LICENSE, vendored sources, and historical docs unchanged. Old runs under `./.looper` are not listed unless `VERNIER_HOME` points there. |
 | — | `8f7f519` | **claude = the Claude Code CLI on PATH** (Tyler's call: every provider is a CLI; the SDK detour is gone). `ClaudeExecutor` now wraps vernier's own `ClaudeCliWorker` (`claude -p --output-format stream-json`, prompt on stdin, real `--json-schema` structured output, posture: read-only toolset for effect-free steps / `acceptEdits` for write scopes, never a bypass flag). `@anthropic-ai/claude-agent-sdk` removed from devDeps + optional peers, the `overrides` zod pin removed with it (that rough edge is GONE), the vendored SDK worker deleted (NOTICE updated). JudgeExecutor de-privileged: the backing provider is a constructor binding (`provider: "codex" \| "claude-code"`, or any injected worker), carried on the AgentSpec and reported honestly by doctor. Docs normalized: tests are auth-free, agents are fungible, codex is a transcript default — not a requirement. |
 
-| — | this commit | **Pilots cut; templates + `vernier init` shipped** (Tyler's call: the in-tree pilots "feel like leftover artifacts … maybe we create a set of templates"). `src/pilot0..3/` deleted; the registry ships EMPTY (zero builtins — `vernier loops` with no config prints a friendly empty state; `doctor` with zero loops probes the baseline executor set and exits 0). New `templates/{smoke,coding-review,verified-answer,self-improving}` carry the pilots' full substance (prompts, contracts, policies) as scaffoldable starters — loop ids unchanged (`control-plane-smoke-test`, `plan-work-review`, `verified-answer`, `compounding-answer`); the agent templates name NO provider in loop data (steps declare the binding target `agent`; each shipped `vernier.config.json` binds it to codex, visibly and editably; the route contract pins the worker ROLE `implement`, not a provider). New `vernier init [template]` lists/scaffolds (refuses overwrites, `--json`, templates ship in the npm package via `files`, resolved package-root-relative so dist and tsx bins both find them). Tests migrated, not deleted: pilot suites → `*-template.test.ts` (driven through the templates + their shipped bindings via the vitest `vernier`→`src/index.ts` alias), live suites → `coding-review/verified-answer/self-improving.live.test.ts` (still gated), CLI/doctor/config suites retarget the smoke template, and `walkthrough.test.ts` §3 exercises the REAL `init` copy path end-to-end (init → loops → run → done). |
+| — | `7db8da4` | **Pilots cut; templates + `vernier init` shipped** (Tyler's call: the in-tree pilots "feel like leftover artifacts … maybe we create a set of templates"). `src/pilot0..3/` deleted; the registry ships EMPTY (zero builtins — `vernier loops` with no config prints a friendly empty state; `doctor` with zero loops probes the baseline executor set and exits 0). New `templates/{smoke,coding-review,verified-answer,self-improving}` carry the pilots' full substance (prompts, contracts, policies) as scaffoldable starters — loop ids unchanged (`control-plane-smoke-test`, `plan-work-review`, `verified-answer`, `compounding-answer`); the agent templates name NO provider in loop data (steps declare the binding target `agent`; each shipped `vernier.config.json` binds it to codex, visibly and editably; the route contract pins the worker ROLE `implement`, not a provider). New `vernier init [template]` lists/scaffolds (refuses overwrites, `--json`, templates ship in the npm package via `files`, resolved package-root-relative so dist and tsx bins both find them). Tests migrated, not deleted: pilot suites → `*-template.test.ts` (driven through the templates + their shipped bindings via the vitest `vernier`→`src/index.ts` alias), live suites → `coding-review/verified-answer/self-improving.live.test.ts` (still gated), CLI/doctor/config suites retarget the smoke template, and `walkthrough.test.ts` §3 exercises the REAL `init` copy path end-to-end (init → loops → run → done). |
 
-**Health:** `npx tsc --noEmit` clean · `npm test` → 271 passed / 8 gated-live
+| — | this commit | **Config-level judge binding shipped**: a `judge` block in vernier.config (`"judge": { "provider": "codex" \| "claude" }`, default codex; the user-facing executor vocabulary, mapped internally to the judge's worker provider) backs the built-in judge/distill wrapper in every config loop's default runtime AND doctor's zero-loop baseline — doctor probes whichever binary the block names. One key, one wrapper instance: `grade` and `distill` both ride it (per-role splits stay with `bindings`). Unsupported providers are rejected with the WHY (opencode/pi refuse the pinned read-only sandbox; cursor-agent lacks per-run config plumbing), validated for JSON and TS/JS config forms alike. |
+
+**Health:** `npx tsc --noEmit` clean · `npm test` → 281 passed / 8 gated-live
 skipped (auth-free) · `npm run build` green · `npm pack` installs and runs in
 a fresh consumer project without tsx; no agent CLI or SDK is needed to
 install or test. Compiled-bin smoke: `vernier init smoke` in a scratch dir →
-`vernier run control-plane-smoke-test` green.
+`vernier run control-plane-smoke-test` green; `vernier init verified-answer`
++ `"judge": { "provider": "claude" }` → `vernier doctor` probes `claude` for
+the judge row.
 
 ### Code map
 - `src/kernel/` — `types.ts` (the five-slot model), `policy.ts` (`decideNextStep`, `retryPolicy`, `until`), `contract.ts`, `effects.ts` (hash observer + `artifactsFromEffects`), `git-effects.ts`
@@ -165,16 +169,14 @@ npm test                                   # auth-free suite
   semantics, the posture needs re-verifying.
 - **`HermesExecutor` ignores `ctx.signal`** (its subprocess has its own
   timeout; no caller passes a signal yet).
-- **judge provider binding is constructor-level only:** `judge`/`distill`
-  take a `provider` ("codex" | "claude-code") or any injected worker, the
-  chosen provider travels on the AgentSpec, and doctor probes THAT
-  provider's binary — but there is no `vernier.config` key for it yet, so
-  rebinding the judge means a custom runtime. opencode/pi cannot back the
-  judge by construction (their workers refuse a read-only sandbox);
-  cursor needs per-run config plumbing (inject a worker if you must).
-  Same caveat shape for memory: the retriever probe covers the builtin
-  `Memory` + recall/remember executors only — a custom MemoryStore or
-  custom store executors make no doctor claim.
+- **doctor's memory claim covers the builtins only:** the retriever probe
+  covers the builtin `Memory` + recall/remember executors — a custom
+  MemoryStore or custom store executors make no doctor claim. (The judge
+  used to share this caveat's shape; the `judge` config block landed, and
+  doctor now probes whichever provider the config names. opencode/pi
+  still cannot back the judge by construction — their workers refuse a
+  read-only sandbox — and cursor still needs per-run config plumbing;
+  inject a worker via a custom runtime if you must.)
 - **Embedding recall is model-version sensitive:** vectors are compared
   only within one model id (stored per record); switching models silently
   demotes old records to the lexical tier until they are re-remembered.

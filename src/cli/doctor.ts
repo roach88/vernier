@@ -50,7 +50,7 @@ import type { Executor } from "../kernel/types.js"
 import { EMBEDDING_PACKAGE, EmbeddingRetriever } from "../memory/embedding.js"
 import { Memory, retrieverFromEnv } from "../memory/memory.js"
 import type { Retriever } from "../memory/retriever.js"
-import { resolveExecutorId, type BindingLayer, type LoadedConfig } from "./config.js"
+import { judgeBackingProvider, resolveExecutorId, type BindingLayer, type LoadedConfig } from "./config.js"
 import type { RegisteredLoop } from "./registry.js"
 
 // ------------------------------------------------------------------- probes
@@ -231,7 +231,9 @@ export async function diagnose(
       new ClaudeExecutor(),
       new OpencodeExecutor(),
       new PiExecutor(),
-      new JudgeExecutor(),
+      // The baseline judge honors the config's `judge` block too — a config
+      // with a judge block but zero loops still reports the right binary.
+      new JudgeExecutor({ provider: judgeBackingProvider(config) }),
       new HermesExecutor(),
       recallExecutor,
       rememberExecutor,

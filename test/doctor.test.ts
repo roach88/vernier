@@ -161,6 +161,20 @@ describe("diagnose()", () => {
     expect(report.ok).toBe(true)
   })
 
+  it("the config's `judge` block rebinds the wrapper: doctor probes the CONFIGURED provider's binary", async () => {
+    const cfg = { ...ALL_TEMPLATES, judge: { provider: "claude" } as const }
+    const onlyClaude = probes({ which: (bin) => (bin === "claude" ? "/fake/bin/claude" : undefined) })
+    const report = await diagnose(loopRegistry(cfg), cfg, onlyClaude)
+    expect(executorById(report, "judge")).toMatchObject({ ok: true, requires: "claude" })
+    // grade and distill both ride the ONE wrapper instance — one key backs both.
+    expect(loopById(report, "verified-answer")!.steps.find((s) => s.stepId === "grade")).toMatchObject({ ok: true })
+    expect(loopById(report, "compounding-answer")!.steps.find((s) => s.stepId === "distill")).toMatchObject({ ok: true })
+
+    // ZERO loops registered: the baseline probe honors the block too.
+    const baseline = await diagnose(loopRegistry(), config({ judge: { provider: "claude" } }), onlyClaude)
+    expect(executorById(baseline, "judge")).toMatchObject({ ok: true, requires: "claude" })
+  })
+
   it("a binding onto an executor nobody registered names the registered set", async () => {
     const smokeOnly = await templatesAsConfig("smoke")
     const bindings = new Map([["smoke", "nope"]])

@@ -38,7 +38,9 @@ effect-free, so any provider qualifies):
 
 `grade` and `distill` both run on vernier's built-in `judge` executor —
 independent, structured-output, read-only; every invocation is a fresh
-provider conversation (codex-backed by default; rebind per step with
+provider conversation. Codex backs it by default; the config's `judge`
+block rebinds the ONE wrapper instance both steps ride
+(`"judge": { "provider": "claude" }` — per-step splits stay with
 `--executor distill=…`). `recall`/`remember` are built in and need nothing.
 
 The store lives under the vernier root (`$VERNIER_HOME`, else `./.vernier`)

@@ -20,7 +20,7 @@ import { ClaudeExecutor } from "../executors/claude.js"
 import { CodexExecutor } from "../executors/codex.js"
 import { CursorExecutor } from "../executors/cursor.js"
 import { HermesExecutor } from "../executors/hermes.js"
-import { JudgeExecutor } from "../executors/judge.js"
+import { JudgeExecutor, type JudgeProvider } from "../executors/judge.js"
 import { recallExecutor, rememberExecutor } from "../executors/memory.js"
 import { OpencodeExecutor } from "../executors/opencode.js"
 import { PiExecutor } from "../executors/pi.js"
@@ -29,7 +29,7 @@ import { defaultContractRegistry } from "../kernel/contract.js"
 import { gitObserver } from "../kernel/git-effects.js"
 import type { Executor, Loop } from "../kernel/types.js"
 import { Memory, resolveMemoryRoot, retrieverFromEnv, rulesPath } from "../memory/memory.js"
-import { ConfigError, type LoadedConfig, type LoopRegistration } from "./config.js"
+import { ConfigError, judgeBackingProvider, type LoadedConfig, type LoopRegistration } from "./config.js"
 
 export interface LoopRuntime {
   readonly deps: EngineDeps
@@ -88,7 +88,7 @@ export function wiredProviders(): { readonly executors: readonly Executor[]; shu
  * registration brings; `runtime` on the registration overrides all of that
  * for full control.
  */
-function userEntry(reg: LoopRegistration, source: string): RegisteredLoop {
+function userEntry(reg: LoopRegistration, source: string, judgeProvider: JudgeProvider): RegisteredLoop {
   return {
     loop: reg.loop,
     signature: reg.signature ?? "(zod signature; see the loop module)",
@@ -100,7 +100,11 @@ function userEntry(reg: LoopRegistration, source: string): RegisteredLoop {
     runtime(workdir) {
       if (reg.runtime) return reg.runtime(workdir)
       const providers = wiredProviders()
-      const judge = new JudgeExecutor()
+      // ONE wrapper instance serves every step that names `judge` (the
+      // self-improving template's grade AND distill both do); the config's
+      // `judge` block picks which provider backs it — codex when absent.
+      // Per-role splits remain the job of `bindings`/`--executor`.
+      const judge = new JudgeExecutor({ provider: judgeProvider })
       const contracts = defaultContractRegistry()
       for (const contract of reg.contracts ?? []) contracts.register(contract)
       // Registration executors merge OVER the builtins (the user's module
@@ -127,8 +131,9 @@ function userEntry(reg: LoopRegistration, source: string): RegisteredLoop {
 }
 
 export function loopRegistry(config?: LoadedConfig): ReadonlyMap<string, RegisteredLoop> {
+  const judgeProvider = judgeBackingProvider(config)
   const entries: RegisteredLoop[] = []
-  for (const { registration, source } of config?.loops ?? []) entries.push(userEntry(registration, source))
+  for (const { registration, source } of config?.loops ?? []) entries.push(userEntry(registration, source, judgeProvider))
   const map = new Map<string, RegisteredLoop>()
   for (const entry of entries) {
     const existing = map.get(entry.loop.id)

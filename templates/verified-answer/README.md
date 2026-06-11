@@ -39,9 +39,17 @@ vernier run verified-answer --executor answer=pi     --input '{"goal":"…","rub
 ```
 
 The `grade` step runs on vernier's built-in `judge` executor (codex-backed
-by default). Rebinding the judge's backing provider is a constructor-level
-binding today (`new JudgeExecutor({ provider: "claude-code" })` in a custom
-runtime); a `vernier.config` key for it is deferred.
+by default). Rebind the judge's BACKING provider in the config — the same
+wrapper guarantees (pinned read-only sandbox, structured verdicts, verdict
+evidence files) on a different CLI:
+
+```json
+"judge": { "provider": "claude" }
+```
+
+Only `codex` and `claude` can back it (opencode/pi refuse the pinned
+read-only sandbox; cursor-agent lacks per-run config plumbing) — the
+config error spells this out if you try.
 
 ## Run it
 

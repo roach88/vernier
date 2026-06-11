@@ -167,7 +167,8 @@ How to read it:
 - **EXECUTORS** probes each executor for the one thing it needs: CLI
   executors a binary on PATH (claude included — the Claude Code CLI, like
   every other provider; judge/distill the binary of whichever provider
-  backs them), in-process executors nothing. Probes look things up; they
+  backs them — codex above, `claude` once the config says
+  `"judge": { "provider": "claude" }`), in-process executors nothing. Probes look things up; they
   never execute anything. `ok` means usable, `!!` means not usable *as
   installed* — above, `cursor-agent` is missing. With zero loops
   registered, doctor probes the baseline set every config loop's runtime
