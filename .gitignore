@@ -3,3 +3,5 @@ dist/
 .looper/
 *.tsbuildinfo
 .DS_Store
+.codegraph/
+.cursor/
