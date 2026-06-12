@@ -349,6 +349,20 @@ describe("assertSkillContained: a skill must be a self-contained tree of regular
     symlinkSync(join(root, "nested-link", "SKILL.md"), join(root, "nested-link", "scripts", "alias.md"))
     expect(() => assertSkillContained(join(root, "nested-link"), "nested-link")).toThrow(/contains a symlink/)
   })
+
+  it("the skill DIRECTORY itself may be a symlink (the .claude/skills marketplace install shape)", () => {
+    // Spec-shaped content: SKILL.md + scripts/ + references/, all regular files.
+    const cache = scratch("alias-cache")
+    writeSkill(cache, { name: "aliased" })
+    mkdirSync(join(cache, "aliased", "scripts"))
+    writeFileSync(join(cache, "aliased", "scripts", "run.sh"), "echo hi\n", "utf8")
+    const links = scratch("alias-links")
+    symlinkSync(join(cache, "aliased"), join(links, "aliased"))
+    // The guard accepts the alias (readdir follows the root link) and the
+    // resolved path alike; only links INSIDE the tree are banned.
+    expect(() => assertSkillContained(join(links, "aliased"), "aliased")).not.toThrow()
+    expect(() => assertSkillContained(join(cache, "aliased"), "aliased")).not.toThrow()
+  })
 })
 
 // ------------------------------------------------------------ config surface

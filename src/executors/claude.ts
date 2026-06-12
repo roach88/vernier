@@ -42,7 +42,7 @@
 // Evidence: claude-prompt.md / claude-events.jsonl / claude-final.md under
 // StepSpec.runDir, prefix-aware — identical to the sibling conventions.
 
-import { cpSync, mkdirSync, writeFileSync } from "node:fs"
+import { cpSync, mkdirSync, realpathSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { ArtifactRef, Executor, RunContext, StepResult, StepSpec } from "../kernel/types.js"
 import { zeroUsage } from "../kernel/types.js"
@@ -365,14 +365,20 @@ export class ClaudeExecutor implements Executor {
     if (spec.skills !== undefined && spec.skills.length > 0) {
       const dir = join(spec.runDir, `${prefix}skills-plugin`)
       try {
-        for (const skill of spec.skills) assertSkillContained(skill.dir, skill.name)
+        // The skill DIR itself may be a symlink — the .claude/skills
+        // marketplace install convention links the dir to a cache — so
+        // resolve it first: cpSync handed a symlinked SOURCE copies a bare
+        // link, not the tree, which would gut the snapshot for exactly the
+        // most common install shape. Links INSIDE the tree stay banned.
+        const sources = spec.skills.map((skill) => ({ skill, src: realpathSync(skill.dir) }))
+        for (const { skill, src } of sources) assertSkillContained(src, skill.name)
         mkdirSync(join(dir, ".claude-plugin"), { recursive: true })
         writeFileSync(
           join(dir, ".claude-plugin", "plugin.json"),
           JSON.stringify({ name: SKILLS_PLUGIN_NAME, description: "Per-step Agent Skills delivered by vernier" }, null, 2) + "\n",
           "utf8",
         )
-        for (const skill of spec.skills) cpSync(skill.dir, join(dir, "skills", skill.name), { recursive: true })
+        for (const { skill, src } of sources) cpSync(src, join(dir, "skills", skill.name), { recursive: true })
         pluginDir = dir
       } catch (error) {
         return {

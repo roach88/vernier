@@ -4,7 +4,7 @@
 
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { EventEmitter } from "node:events"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
@@ -205,6 +205,31 @@ describe("ClaudeExecutor", () => {
     expect(seen[0]!.pluginDirs).toBeUndefined()
     expect(existsSync(join(s.runDir, "skills-plugin"))).toBe(false)
     expect(result.evidence.map((e) => e.role)).not.toContain("skills-plugin")
+  })
+
+  it("a SYMLINKED skill dir (the .claude/skills marketplace install shape) is resolved and copied as a real tree, not a bare link", async () => {
+    const { worker, seen } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
+    // The real skill lives in a "cache"; ~/.claude/skills/<name> would be a link to it.
+    const cache = mkdtempSync(join(tmpdir(), "vernier-skill-cache-"))
+    const real = join(cache, "aliased-skill")
+    mkdirSync(join(real, "scripts"), { recursive: true })
+    writeFileSync(join(real, "SKILL.md"), "---\nname: aliased-skill\ndescription: Installed via symlink. Use when testing.\n---\n\nbody\n", "utf8")
+    writeFileSync(join(real, "scripts", "run.sh"), "echo hi\n", "utf8")
+    const linkParent = mkdtempSync(join(tmpdir(), "vernier-skill-links-"))
+    const alias = join(linkParent, "aliased-skill")
+    symlinkSync(real, alias)
+
+    const s = spec({ skills: [{ name: "aliased-skill", description: "x", dir: alias, file: join(alias, "SKILL.md") }] })
+    const result = await new ClaudeExecutor({ worker }).run(s, { workdir: workdir() })
+
+    expect(result.status).toBe("completed")
+    expect(seen).toHaveLength(1)
+    const copied = join(s.runDir, "skills-plugin", "skills", "aliased-skill")
+    // The copy is a REAL directory tree — a snapshot — not a symlink back to mutable source.
+    expect(lstatSync(copied).isSymbolicLink()).toBe(false)
+    expect(lstatSync(copied).isDirectory()).toBe(true)
+    expect(lstatSync(join(copied, "SKILL.md")).isSymbolicLink()).toBe(false)
+    expect(readFileSync(join(copied, "scripts", "run.sh"), "utf8")).toBe("echo hi\n")
   })
 
   it("refuses a skill whose dir escapes via symlink: failed result, no plugin, and the out-of-tree secret never lands under runDir", async () => {

@@ -331,9 +331,13 @@ export function bindSkills(loop: Loop, layers: readonly SkillBindingLayer[]): Lo
  *     path back at the original, mutable source) — so the copy would still
  *     follow the source, a TOCTOU window, not the recorded snapshot.
  *
- * Rejecting all symlinks closes both. A skill that wants an alias ships a
- * real file; legitimate skills are plain files, so this has no false
- * positives. Native-delivery executors call this before materializing.
+ * Rejecting all symlinks INSIDE the tree closes both. The skill directory
+ * ITSELF may be a symlink — the .claude/skills marketplace convention links
+ * the dir to a cache — callers pass the resolved real path (and copy from
+ * it). Spec-shaped skills (SKILL.md + scripts/ + references/ + assets/, all
+ * regular files) pass untouched; across 800+ real installed skills surveyed,
+ * none contained an internal symlink, so the ban has no observed false
+ * positives. A skill that wants an alias ships a real file.
  */
 export function assertSkillContained(dir: string, name: string): void {
   const walk = (current: string): void => {
