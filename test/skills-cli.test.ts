@@ -212,6 +212,25 @@ describe("vernier run --skill (spawned CLI)", () => {
     expect(human.stdout).toContain("[config]")
   })
 
+  it("a --json output larger than the 64KB pipe buffer arrives COMPLETE (exit discipline: drain, never process.exit)", async () => {
+    // A user tier big enough that `skills --json` exceeds the pipe buffer:
+    // process.exit() after writing would truncate mid-document (the bug this
+    // pins was found live against a ~190-skill machine).
+    const userHome = scratch("big-tier")
+    const filler = "x".repeat(900)
+    for (let i = 0; i < 90; i++) {
+      const name = `bulk-skill-${String(i).padStart(2, "0")}`
+      const dir = join(userHome, ".claude", "skills", name)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: Bulk fixture ${i}. ${filler}\n---\n\nbody\n`, "utf8")
+    }
+    const result = await cli({ home: scratch("home"), userHome }, "skills", "--json")
+    expect(result.code).toBe(0)
+    expect(result.stdout.length).toBeGreaterThan(65536) // past the pipe buffer
+    const rows = JSON.parse(result.stdout) as Array<{ name: string | null }> // parses ⇔ it arrived whole
+    expect(rows.filter((r) => r.name?.startsWith("bulk-skill-"))).toHaveLength(90)
+  })
+
   it("`vernier skills --json` is [] with a friendly stderr when nothing is discovered (exit 0; not a health check)", async () => {
     // A cwd with no config above it and an empty user tier: zero skills.
     const empty = await cli({ home: scratch("home"), userHome: scratch("empty-user"), cwd: scratch("no-config") }, "skills", "--json")
