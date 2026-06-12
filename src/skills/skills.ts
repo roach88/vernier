@@ -41,7 +41,7 @@
 // be a YAML parser; a SKILL.md the subset cannot read is reported as
 // invalid with the reason.
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
+import { cpSync, existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { basename, join } from "node:path"
 import type { Loop, StepSkill } from "../kernel/types.js"
 
@@ -352,6 +352,27 @@ export function assertSkillContained(dir: string, name: string): void {
     }
   }
   walk(dir)
+}
+
+/**
+ * Materialize skills as byte-for-byte snapshots under `destDir/<name>` and
+ * return them re-rooted at their snapshots. The ONE copy path both delivery
+ * modes share: native plugin synthesis copies into the plugin's skills/,
+ * prompt delivery copies under the run dir so the embedded body AND the
+ * bundled files the fence's `dir` names come from the same immutable copy.
+ * Each skill dir is realpath-resolved first (the dir itself may be a
+ * marketplace symlink — cpSync handed a symlinked SOURCE copies a bare
+ * link, not the tree) and EVERY skill is containment-checked before ANY is
+ * copied, so a hostile skill never yields a partial snapshot.
+ */
+export function snapshotSkills(skills: readonly StepSkill[], destDir: string): StepSkill[] {
+  const sources = skills.map((skill) => ({ skill, src: realpathSync(skill.dir) }))
+  for (const { skill, src } of sources) assertSkillContained(src, skill.name)
+  return sources.map(({ skill, src }) => {
+    const dir = join(destDir, skill.name)
+    cpSync(src, dir, { recursive: true })
+    return { ...skill, dir, file: join(dir, SKILL_FILE) }
+  })
 }
 
 /**

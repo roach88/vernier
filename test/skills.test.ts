@@ -5,7 +5,7 @@
 // in-process and deterministic; delivery THROUGH executors is pinned in
 // skills-delivery.test.ts, and through the spawned CLI in skills-cli.test.ts.
 
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -22,6 +22,7 @@ import {
   skillBody,
   SkillError,
   SKILLS_PLUGIN_NAME,
+  snapshotSkills,
   type SkillBindingLayer,
 } from "../src/skills/skills.js"
 
@@ -362,6 +363,35 @@ describe("assertSkillContained: a skill must be a self-contained tree of regular
     // resolved path alike; only links INSIDE the tree are banned.
     expect(() => assertSkillContained(join(links, "aliased"), "aliased")).not.toThrow()
     expect(() => assertSkillContained(join(cache, "aliased"), "aliased")).not.toThrow()
+  })
+
+  it("snapshotSkills resolves an aliased dir, copies a real tree, and re-roots the StepSkill at the snapshot", () => {
+    const cache = scratch("snap-cache")
+    writeSkill(cache, { name: "snapped" })
+    mkdirSync(join(cache, "snapped", "scripts"))
+    writeFileSync(join(cache, "snapped", "scripts", "run.sh"), "echo hi\n", "utf8")
+    const links = scratch("snap-links")
+    symlinkSync(join(cache, "snapped"), join(links, "snapped"))
+    const dest = join(scratch("snap-dest"), "skills-snapshot")
+
+    const source = { name: "snapped", description: "d", dir: join(links, "snapped"), file: join(links, "snapped", "SKILL.md") }
+    const [out] = snapshotSkills([source], dest)
+    expect(out).toMatchObject({ name: "snapped", dir: join(dest, "snapped"), file: join(dest, "snapped", "SKILL.md") })
+    expect(lstatSync(join(dest, "snapped")).isSymbolicLink()).toBe(false) // a real tree, not a bare link
+    expect(readFileSync(join(dest, "snapped", "scripts", "run.sh"), "utf8")).toBe("echo hi\n")
+    expect(readFileSync(out!.file, "utf8")).toBe(readFileSync(join(cache, "snapped", "SKILL.md"), "utf8"))
+  })
+
+  it("snapshotSkills guards EVERY skill before copying ANY: one hostile skill yields no partial snapshot", () => {
+    const root = scratch("snap-hostile")
+    writeSkill(root, { name: "good-one" })
+    writeSkill(root, { name: "evil-one" })
+    symlinkSync(join(scratch("snap-secret"), ".."), join(root, "evil-one", "leak")) // escapes
+    const dest = join(scratch("snap-hostile-dest"), "skills-snapshot")
+
+    const skill = (name: string) => ({ name, description: "d", dir: join(root, name), file: join(root, name, "SKILL.md") })
+    expect(() => snapshotSkills([skill("good-one"), skill("evil-one")], dest)).toThrow(/contains a symlink/)
+    expect(existsSync(dest)).toBe(false) // not even good-one was materialized
   })
 })
 

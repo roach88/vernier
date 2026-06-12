@@ -470,11 +470,17 @@ loads the body on demand, namespaced `vernier-skills:<name>`; the prompt
 gains only a short use-these directive, and the synthesized plugin doubles
 as evidence of exactly what the step ran with. Every other executor gets
 the pragmatic one-shot equivalent: the `SKILL.md` body embedded in the
-step prompt, delimited (`<skill name=… dir=…>`) and attributed. The ledger
-records both: each `step_started` entry carries the resolved skills and
-the delivery mode. Skill-bearing steps must have a prompt template — a
-missing skill, like a missing executor, fails before the first journal
-write, and `vernier doctor` reports resolvable/missing skills per step.
+step prompt, delimited (`<skill name=… dir=…>`) and attributed — and the
+skill is first snapshotted under the run dir (the same guard + copy native
+delivery uses), so the fence's `dir` names an immutable copy: bundled
+files (`scripts/`, `references/`) the agent reads cannot drift from what
+the ledger recorded. Both modes refuse a skill whose tree contains a
+symlink (a skill dir that IS a symlink — the marketplace install shape —
+is fine: it's resolved first). The ledger records each `step_started`'s
+resolved skills and delivery mode. Skill-bearing steps must have a prompt
+template — a missing skill, like a missing executor, fails before the
+first journal write, and `vernier doctor` reports resolvable/missing
+skills per step.
 
 ## Toolchain
 

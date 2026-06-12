@@ -8,7 +8,7 @@
 
 import { randomBytes } from "node:crypto"
 import { existsSync } from "node:fs"
-import { dirname } from "node:path"
+import { dirname, join } from "node:path"
 import type { ContractRegistry, ContractResult } from "../kernel/contract.js"
 import { failedCheckMessages } from "../kernel/contract.js"
 import { hashObserver, type EffectObservation, type EffectsObserver } from "../kernel/effects.js"
@@ -16,7 +16,7 @@ import type { Decision, Observation } from "../kernel/policy.js"
 import type { Executor, Loop, MemoryStore, Step, StepResult, StepSkill } from "../kernel/types.js"
 import { derivedOutputSchema, zeroUsage } from "../kernel/types.js"
 import { journalPath, Ledger, resolveLedgerRoot, resumeKey, KEY_VERSION, type Replay, type StepResultEntry } from "../ledger/ledger.js"
-import { embedSkillsInPrompt, nativeSkillsDirective, skillBody } from "../skills/skills.js"
+import { embedSkillsInPrompt, nativeSkillsDirective, skillBody, snapshotSkills } from "../skills/skills.js"
 
 export type RunStatus = "running" | "done" | "needs_human" | "stopped"
 
@@ -157,6 +157,18 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
   const skillsDelivery: "native" | "prompt" | undefined =
     stepSkills.length === 0 ? undefined : executor.skillDelivery === "native" ? "native" : "prompt"
 
+  // Prompt delivery materializes each skill as a byte-for-byte snapshot
+  // under the run dir FIRST — the same guard+copy native plugin synthesis
+  // uses — so the embedded body AND the bundled files the fence's `dir`
+  // names come from one immutable copy (not live, mutable source), and a
+  // hostile or vanished skill fails BEFORE the step_started entry, like an
+  // unknown skill. Native mode snapshots inside the executor instead (into
+  // the plugin), so it passes through here untouched. The ledger keeps the
+  // SOURCE dirs: provenance — which skill on this machine — with the
+  // snapshot at a known place under the run dir.
+  const deliveredSkills =
+    skillsDelivery === "prompt" ? snapshotSkills(stepSkills, join(dirname(ledger.path), "skills-snapshot")) : stepSkills
+
   ledger.append({
     type: "step_started",
     key,
@@ -199,10 +211,10 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
     rendered === undefined || skillsDelivery === undefined
       ? rendered
       : skillsDelivery === "native"
-        ? rendered + nativeSkillsDirective(stepSkills)
+        ? rendered + nativeSkillsDirective(deliveredSkills)
         : embedSkillsInPrompt(
             rendered,
-            stepSkills.map((skill) => ({ ...skill, body: skillBody(skill.file) })),
+            deliveredSkills.map((skill) => ({ ...skill, body: skillBody(skill.file) })),
           )
   const spec = {
     ...base,
