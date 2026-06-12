@@ -928,23 +928,36 @@ process.once("SIGTERM", () => process.exit(143))
 // code is unchanged. --json is read from argv because the top-level catch has
 // no parsed flags (a parse failure is itself one of these errors).
 //
-// EXIT DISCIPLINE: set process.exitCode and fall off the end — NEVER
-// process.exit() after writing output. A piped stdout drains asynchronously,
-// and process.exit() truncates it at the pipe buffer (~64KB): any --json
-// output past that (a big skill inventory, a long run's `show`) would arrive
-// cut mid-document. Letting the event loop drain is the fix; nothing in the
-// CLI holds the loop open after a command returns. The SIGINT/SIGTERM
-// handlers above keep hard exits — an interactive kill must not wait.
+// EXIT DISCIPLINE: drain, THEN hard-exit — never a bare process.exit() after
+// writing output, and never a bare exitCode either. A piped stdout drains
+// asynchronously, and process.exit() truncates it at the pipe buffer
+// (~64KB): any --json output past that (a big skill inventory, a long run's
+// `show`) would arrive cut mid-document. But relying on process.exitCode
+// alone has the opposite failure: a stray handle (a hung agent subprocess,
+// a lingering timer) would hold the event loop — and the CLI — hostage on
+// the way out. exitAfterDrain gives both halves: the nested write callbacks
+// fire only once stdout THEN stderr have flushed to the OS, and the hard
+// exit then guarantees departure. exitCode is set first as a fallback so the
+// right code survives even if the exit is never reached. The SIGINT/SIGTERM
+// handlers above keep immediate hard exits — an interactive kill must not
+// wait on a drain.
+const exitAfterDrain = (code: number): void => {
+  process.exitCode = code
+  process.stdout.write("", () => {
+    process.stderr.write("", () => process.exit(code))
+  })
+}
 const wantsJson = (): boolean => process.argv.includes("--json")
+/** Terminal in effect: schedules the hard exit for after output drains. Typed void because the exit is asynchronous — nothing may follow a failWith call in its branch. */
 const failWith = (type: string, exitCode: number, message: string, ...extraNotes: string[]): void => {
   if (wantsJson()) json({ error: message, type, exitCode })
   note(`${type.replace(/_/g, " ")}: ${message}`)
   for (const line of extraNotes) note(line)
-  process.exitCode = exitCode
+  exitAfterDrain(exitCode)
 }
 
 try {
-  process.exitCode = await main(process.argv.slice(2))
+  exitAfterDrain(await main(process.argv.slice(2)))
 } catch (error) {
   if (error instanceof UsageError) {
     failWith("usage_error", EXIT.usage, error.message, "run `vernier --help` for the command surface.")
@@ -959,6 +972,6 @@ try {
   } else {
     if (wantsJson()) json({ error: error instanceof Error ? error.message : String(error), type: "error", exitCode: EXIT.failed })
     note(error instanceof Error ? (error.stack ?? error.message) : String(error))
-    process.exitCode = EXIT.failed
+    exitAfterDrain(EXIT.failed)
   }
 }
