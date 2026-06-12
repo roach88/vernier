@@ -4,6 +4,8 @@
 // Local adaptations: imports of "../dsl/types.js" point at "./types.js"
 // (vendored subset); optional properties widened with `| undefined` because
 // vernier compiles with exactOptionalPropertyTypes (omegacode does not).
+// Local semantic extension (2026-06-12): the structured-extraction path
+// applies stripNullOptionals (null-optional parity with cursor.ts).
 
 // CodexWorker — drives the local `codex app-server` over newline-delimited
 // JSON-RPC 2.0 (stdio). The transport (child process, framing, pending-request
@@ -18,7 +20,7 @@ import type { AgentResult, AgentSpec, AgentUsage } from "./types.js"
 import { emptyUsage } from "./types.js"
 import type { Worker, WorkerContext } from "./index.js"
 import { AgentError, AgentInterrupted } from "./index.js"
-import { toCodexOutputSchema, parseJsonLoose } from "./schema.js"
+import { toCodexOutputSchema, parseJsonLoose, stripNullOptionals } from "./schema.js"
 import { JsonRpcStdioClient, StdioTransportError, JsonRpcResponseError, type SpawnChild } from "./jsonrpc-stdio.js"
 import {
   encodeNotification,
@@ -193,7 +195,14 @@ export class CodexWorker implements Worker {
     )
     let structured: unknown
     try {
-      structured = parseJsonLoose(extraction.text)
+      // Strip null-valued OPTIONAL fields against the ORIGINAL schema (the
+      // same call the cursor worker makes — though HERE inside the parse
+      // try/catch, so a JSON parse failure skips it; cursor calls it
+      // unconditionally): strictify's makeNullable taught the model "null
+      // means absent" for optional fields, so honor that here — otherwise a
+      // null reaches zod parses that declared .optional() (which rejects
+      // null) and a correct model turn reads as invalid.
+      structured = stripNullOptionals(parseJsonLoose(extraction.text), spec.schema)
     } catch {
       structured = undefined
     }

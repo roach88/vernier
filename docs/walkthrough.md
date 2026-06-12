@@ -501,7 +501,7 @@ is resolved at run time through one chain:
 ```
 
 Keys are a step id (binds that step) or an executor id (binds the role
-everywhere it appears). Today's plan-work-review (v0.5.0, the template)
+everywhere it appears). Today's plan-work-review (v0.5.1, the template)
 names NO provider at all: both steps declare the binding target `agent`,
 and the scaffolded `vernier.config.json` binds both roles to codex —
 visible data you edit, not a default baked into the loop. One wired agent

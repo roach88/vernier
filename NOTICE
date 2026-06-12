@@ -35,7 +35,13 @@ a copy of the omegacode LICENSE sits alongside the files):
 
       Local adaptations across these files: import paths from "../dsl/types.js"
       to "./types.js"; optional properties widened with `| undefined` for
-      vernier's exactOptionalPropertyTypes; nothing semantic changed.
+      vernier's exactOptionalPropertyTypes. Semantic extensions, each noted
+      in its file header where it lives: AgentSpec.pluginDirs (types.ts —
+      per-step Agent Skill plugins for claude-code); strictify enforces
+      additionalProperties:false on EVERY object-typed node, records
+      included (schema.ts, 2026-06-12 — OpenAI strict rejected record
+      shapes); the codex extraction path applies stripNullOptionals for
+      null-optional parity with cursor (codex.ts, same date).
 
       Deliberately left behind from omegacode: src/runtime/ (the node:vm
       sandbox trunk, primitives, v3 chained call-tree resume keys, the
