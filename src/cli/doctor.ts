@@ -46,10 +46,11 @@ import { recallExecutor, rememberExecutor } from "../executors/memory.js"
 import { OpencodeExecutor } from "../executors/opencode.js"
 import { PiExecutor } from "../executors/pi.js"
 import type { ProviderId } from "../executors/vendor/omegacode/types.js"
-import type { Executor } from "../kernel/types.js"
+import type { Executor, Step } from "../kernel/types.js"
 import { EMBEDDING_PACKAGE, EmbeddingRetriever } from "../memory/embedding.js"
 import { Memory, retrieverFromEnv } from "../memory/memory.js"
 import type { Retriever } from "../memory/retriever.js"
+import { resolveSkillNames, type SkillBindingLayer, type SkillOrigin, type SkillRegistry } from "../skills/skills.js"
 import { judgeBackingProvider, resolveExecutorId, type BindingLayer, type LoadedConfig } from "./config.js"
 import type { RegisteredLoop } from "./registry.js"
 
@@ -102,12 +103,21 @@ export interface ExecutorReport {
   readonly detail: string
 }
 
+export interface StepSkillReport {
+  readonly name: string
+  readonly ok: boolean
+  /** The skill dir when ok; the reason when not. */
+  readonly detail: string
+}
+
 export interface StepReport {
   readonly stepId: string
   /** The executor id the step declares. */
   readonly declared: string
   /** After config bindings — what a run would actually resolve. */
   readonly resolved: string
+  /** The step's Agent Skills after config skillBindings, each probed against the discovered registry. Present only when the step resolves skills. */
+  readonly skills?: readonly StepSkillReport[]
   readonly ok: boolean
   readonly why: string
 }
@@ -121,8 +131,20 @@ export interface LoopReport {
   readonly error?: string
 }
 
+/** One discovered (or rejected) Agent Skill in the inventory section. */
+export interface SkillReport {
+  /** The skill name; for invalid entries, the offending path. */
+  readonly name: string
+  readonly ok: boolean
+  readonly origin: SkillOrigin
+  /** The skill dir when ok; the spec violation when not. */
+  readonly detail: string
+}
+
 export interface DoctorReport {
   readonly executors: readonly ExecutorReport[]
+  /** The discovered skill inventory (config > project > user) plus standard-location skills that fail the spec. */
+  readonly skills: readonly SkillReport[]
   readonly loops: readonly LoopReport[]
   /** True iff every registered loop is runnable. The doctor's exit code. */
   readonly ok: boolean
@@ -196,17 +218,44 @@ function checkRetriever(retriever: Retriever, probes: DoctorProbes): ExecutorRep
   return { id, ok: true, requires: null, detail: "in-process retriever (no external dependency)" }
 }
 
+/** The empty skill registry: what diagnose assumes when the caller skipped discovery. */
+export const NO_SKILLS: SkillRegistry = { skills: new Map(), invalid: [] }
+
+/**
+ * Resolve a step's skills (config skillBindings > declared default; --skill
+ * overrides do not apply at rest) and probe each against the discovered
+ * registry. Shared by the runnable and broken-runtime paths so a loop whose
+ * runtime factory threw STILL reports its declared skills — otherwise a
+ * user-tier skill it needs would be wrongly elided from the inventory.
+ */
+function stepSkillReports(step: Step, skillBindings: readonly SkillBindingLayer[], skills: SkillRegistry): StepSkillReport[] {
+  return resolveSkillNames(step, skillBindings).map((name) => {
+    const found = skills.skills.get(name)
+    return found !== undefined
+      ? { name, ok: true, detail: found.dir }
+      : { name, ok: false, detail: `skill \`${name}\` is not discovered (vernier.config skills, <project>/.claude/skills, ~/.claude/skills)` }
+  })
+}
+
 /**
  * Build the full report. Each entry's runtime is constructed in a fresh
  * scratch dir and shut down immediately — executor construction is lazy
- * everywhere in this repo, so nothing spawns.
+ * everywhere in this repo, so nothing spawns. The skill registry arrives
+ * discovered (cmdDoctor runs the real discovery; tests inject) so this
+ * stays deterministic under injected probes.
  */
 export async function diagnose(
   registry: ReadonlyMap<string, RegisteredLoop>,
   config: LoadedConfig | undefined,
   probes: DoctorProbes = defaultProbes,
+  skills: SkillRegistry = NO_SKILLS,
 ): Promise<DoctorReport> {
   const bindings: BindingLayer[] = [config?.bindings ?? new Map<string, string>()]
+  const skillBindings: SkillBindingLayer[] = [config?.skillBindings ?? new Map<string, readonly string[]>()]
+  const skillRows: SkillReport[] = [
+    ...[...skills.skills.values()].map((s) => ({ name: s.name, ok: true, origin: s.origin, detail: s.dir })),
+    ...skills.invalid.map((i) => ({ name: i.path, ok: false, origin: i.origin, detail: i.reason })),
+  ]
   const configIds = new Set((config?.executors ?? []).map((e) => e.id))
   const checked = new Map<string, ExecutorReport>()
   const check = (executor: Executor): ExecutorReport => {
@@ -243,7 +292,7 @@ export async function diagnose(
     const retrieverReport = checkRetriever(retrieverFromEnv(), probes)
     checked.set(retrieverReport.id, retrieverReport)
     for (const executor of baseline) await (executor as { shutdown?: () => Promise<void> }).shutdown?.()
-    return { executors: [...checked.values()], loops: [], ok: true }
+    return { executors: [...checked.values()], skills: skillRows, loops: [], ok: true }
   }
 
   const loops: LoopReport[] = []
@@ -252,11 +301,19 @@ export async function diagnose(
     try {
       runtime = entry.runtime(mkdtempSync(join(tmpdir(), "vernier-doctor-")))
     } catch (error) {
+      // The runtime is gone, but the loop's DECLARED skills are still known —
+      // report them (marked not-ok, loop unavailable) so the inventory's
+      // elision counts a user-tier skill this loop needs as referenced.
+      const steps: StepReport[] = entry.loop.steps.map((step) => {
+        const skillReports = stepSkillReports(step, skillBindings, skills)
+        const base = { stepId: step.id, declared: step.executor, resolved: resolveExecutorId(step, bindings), ok: false, why: "loop runtime unavailable" }
+        return skillReports.length > 0 ? { ...base, skills: skillReports } : base
+      })
       loops.push({
         loopId: entry.loop.id,
         source: entry.source,
         runnable: false,
-        steps: [],
+        steps,
         error: `runtime factory failed: ${error instanceof Error ? error.message : String(error)}`,
       })
       continue
@@ -277,25 +334,41 @@ export async function diagnose(
       }
 
       const steps: StepReport[] = entry.loop.steps.map((step) => {
+        // The step's skills, through the SAME chain a run would use at rest
+        // (config skillBindings > the step's declared default; CLI --skill
+        // overrides do not apply, same as --executor), each probed against
+        // the discovered registry.
+        const skillReports = stepSkillReports(step, skillBindings, skills)
+        const promptlessSkills = skillReports.length > 0 && !step.prompt
+        const withSkills = (report: Omit<StepReport, "skills">): StepReport =>
+          skillReports.length > 0 ? { ...report, skills: skillReports } : report
+
         const resolved = resolveExecutorId(step, bindings)
         const registered = executors.get(resolved)
         if (registered === undefined) {
-          return {
+          return withSkills({
             stepId: step.id,
             declared: step.executor,
             resolved,
             ok: false,
             why: `executor \`${resolved}\` is not registered for this loop (registered: ${[...executors.keys()].join(", ")})`,
-          }
+          })
         }
         const report = check(registered)
         // A store op is only as usable as the store's retriever: recall and
         // remember run THROUGH it, so a failed retriever probe blocks them.
         const memoryBlocked =
           retrieverReport !== undefined && !retrieverReport.ok && (registered === recallExecutor || registered === rememberExecutor)
-        const ok = report.ok && !memoryBlocked
-        const why = !report.ok ? report.detail : memoryBlocked ? retrieverReport!.detail : "ok"
-        return { stepId: step.id, declared: step.executor, resolved, ok, why }
+        const skillBlocked = skillReports.some((s) => !s.ok) || promptlessSkills
+        const ok = report.ok && !memoryBlocked && !skillBlocked
+        const why = !report.ok
+          ? report.detail
+          : memoryBlocked
+            ? retrieverReport!.detail
+            : promptlessSkills
+              ? "declares skills but no prompt template (skills travel through the prompt seam)"
+              : skillReports.find((s) => !s.ok)?.detail ?? "ok"
+        return withSkills({ stepId: step.id, declared: step.executor, resolved, ok, why })
       })
       loops.push({ loopId: entry.loop.id, source: entry.source, runnable: steps.every((s) => s.ok), steps })
     } finally {
@@ -305,6 +378,7 @@ export async function diagnose(
 
   return {
     executors: [...checked.values()],
+    skills: skillRows,
     loops,
     ok: loops.every((l) => l.runnable),
   }
@@ -318,6 +392,20 @@ export function renderDoctor(report: DoctorReport): string[] {
   for (const e of report.executors) {
     lines.push(`  ${mark(e.ok)}  ${e.id.padEnd(28)} ${e.detail}`)
   }
+  if (report.skills.length > 0) {
+    // Config/project skills and every invalid skill print in full; valid
+    // user-tier (~/.claude/skills) skills that no step references collapse
+    // to a count — a big personal skill library must not drown the report
+    // (--json always carries every row).
+    const referenced = new Set(report.loops.flatMap((l) => l.steps.flatMap((s) => (s.skills ?? []).map((sk) => sk.name))))
+    const shown = report.skills.filter((s) => !s.ok || s.origin !== "user" || referenced.has(s.name))
+    const elided = report.skills.length - shown.length
+    lines.push("", "SKILLS")
+    for (const s of shown) {
+      lines.push(`  ${mark(s.ok)}  ${s.name.padEnd(28)} ${s.origin}: ${s.detail}`)
+    }
+    if (elided > 0) lines.push(`      (+ ${elided} more spec-valid skill${elided === 1 ? "" : "s"} under ~/.claude/skills; see --json)`)
+  }
   lines.push("", "LOOPS")
   if (report.loops.length === 0) {
     lines.push("  none registered — nothing is broken, and nothing can run yet.")
@@ -330,6 +418,9 @@ export function renderDoctor(report: DoctorReport): string[] {
     for (const s of l.steps) {
       const binding = s.resolved === s.declared ? s.resolved : `${s.declared} => ${s.resolved}`
       lines.push(`        ${s.stepId} -> ${binding}${s.ok ? "" : `  (${s.why})`}`)
+      for (const sk of s.skills ?? []) {
+        lines.push(`          skill ${sk.name}${sk.ok ? "" : `  (${sk.detail})`}`)
+      }
     }
   }
   lines.push(

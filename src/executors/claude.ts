@@ -46,6 +46,7 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { ArtifactRef, Executor, RunContext, StepResult, StepSpec } from "../kernel/types.js"
 import { zeroUsage } from "../kernel/types.js"
+import { SKILLS_PLUGIN_NAME, snapshotSkills } from "../skills/skills.js"
 import { evidencePrefix } from "./evidence.js"
 import { AgentError, AgentInterrupted, type Worker, type WorkerContext, type WorkerProgress } from "./vendor/omegacode/index.js"
 import type { AgentResult, AgentSpec, AgentUsage, Effort } from "./vendor/omegacode/types.js"
@@ -154,6 +155,11 @@ export class ClaudeCliWorker implements Worker {
       ...(spec.sandbox === "read-only"
         ? ["--tools", CLAUDE_READONLY_TOOLS, "--permission-mode", "dontAsk"]
         : ["--permission-mode", "acceptEdits"]),
+      // Session-scoped plugins (per-step Agent Skills): the one context
+      // channel Claude Code documents as surviving hermetic runs — skills
+      // load with progressive disclosure intact, namespaced
+      // `vernier-skills:<name>`, with the user's settings still untouched.
+      ...(spec.pluginDirs ?? []).flatMap((dir) => ["--plugin-dir", dir]),
       ...(spec.model ? ["--model", spec.model] : []),
       ...(spec.effort ? ["--effort", toClaudeEffort(spec.effort)] : []),
       ...(spec.instructions ? ["--append-system-prompt", spec.instructions] : []),
@@ -318,6 +324,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export class ClaudeExecutor implements Executor {
   readonly id = "claude"
+  /** Native Agent Skill delivery: the engine passes StepSpec.skills instead of embedding bodies in the prompt. */
+  readonly skillDelivery = "native" as const
   private readonly worker: Worker
   private readonly model: string | undefined
 
@@ -341,12 +349,47 @@ export class ClaudeExecutor implements Executor {
 
     // EffectScope -> sandbox ceiling, exactly like codex. Never danger-full-access.
     const sandbox = spec.effects.allow.length > 0 ? "workspace-write" : "read-only"
+
+    // Native skill delivery: synthesize a session plugin under the run's
+    // ledger dir (runner-managed evidence, never the workdir — effect
+    // observation must not see it) and hand it to the CLI via --plugin-dir.
+    // snapshotSkills (the shared guard+copy both delivery modes use)
+    // realpath-resolves each skill dir (the marketplace install shape links
+    // it to a cache), verifies the tree symlink-free, and copies it
+    // byte-for-byte — a true snapshot of exactly what this step ran with.
+    // Every skill is checked before ANY is copied, and `pluginDir` is
+    // assigned only after full success, so a containment violation or
+    // filesystem failure returns a clean failed StepResult (with evidence)
+    // and never passes a partial plugin to the CLI or emits one as evidence.
+    let pluginDir: string | undefined
+    if (spec.skills !== undefined && spec.skills.length > 0) {
+      const dir = join(spec.runDir, `${prefix}skills-plugin`)
+      try {
+        snapshotSkills(spec.skills, join(dir, "skills"))
+        mkdirSync(join(dir, ".claude-plugin"), { recursive: true })
+        writeFileSync(
+          join(dir, ".claude-plugin", "plugin.json"),
+          JSON.stringify({ name: SKILLS_PLUGIN_NAME, description: "Per-step Agent Skills delivered by vernier" }, null, 2) + "\n",
+          "utf8",
+        )
+        pluginDir = dir
+      } catch (error) {
+        return {
+          status: "failed",
+          output: { error: `skills plugin synthesis failed: ${errorText(error)}`, code: "skills_delivery_failed", retryable: false },
+          evidence: this.writeEvidence(spec, prefix, promptPath, [], errorText(error)),
+          usage: zeroUsage(Date.now() - startedAt),
+        }
+      }
+    }
+
     const agentSpec: AgentSpec = {
       prompt: spec.prompt,
       provider: PROVIDER,
       cwd: ctx.workdir,
       sandbox,
       approval: "never",
+      ...(pluginDir !== undefined ? { pluginDirs: [pluginDir] } : {}),
       ...(this.model ? { model: this.model } : {}),
       ...(spec.outputSchema ? { schema: spec.outputSchema } : {}),
     }
@@ -363,7 +406,7 @@ export class ClaudeExecutor implements Executor {
     try {
       result = await this.worker.runAgent(agentSpec, { signal, onProgress })
     } catch (error) {
-      const evidence = this.writeEvidence(spec, prefix, promptPath, events, errorText(error))
+      const evidence = this.writeEvidence(spec, prefix, promptPath, events, errorText(error), pluginDir)
       const durationMs = Date.now() - startedAt
       if (error instanceof AgentInterrupted) {
         return { status: "interrupted", output: { error: error.message }, evidence, usage: zeroUsage(durationMs) }
@@ -381,7 +424,7 @@ export class ClaudeExecutor implements Executor {
     }
 
     const durationMs = Date.now() - startedAt
-    const evidence = this.writeEvidence(spec, prefix, promptPath, events, result.text)
+    const evidence = this.writeEvidence(spec, prefix, promptPath, events, result.text, pluginDir)
     const output = isRecord(result.structured) ? result.structured : { text: result.text }
     return {
       status: result.status,
@@ -401,6 +444,7 @@ export class ClaudeExecutor implements Executor {
     promptPath: string,
     events: readonly string[],
     finalText: string,
+    pluginDir?: string,
   ): ArtifactRef[] {
     const eventsPath = join(spec.runDir, `${prefix}claude-events.jsonl`)
     const finalPath = join(spec.runDir, `${prefix}claude-final.md`)
@@ -410,6 +454,8 @@ export class ClaudeExecutor implements Executor {
       { role: "worker-prompt", path: promptPath },
       { role: "worker-events", path: eventsPath },
       { role: "worker-final", path: finalPath },
+      // The synthesized plugin IS evidence: exactly the skills this step ran with.
+      ...(pluginDir !== undefined ? [{ role: "skills-plugin", path: pluginDir }] : []),
     ]
   }
 }

@@ -37,7 +37,7 @@ import { artifactFromEffects, fsScope, noEffects, retryPolicy, sig } from "verni
 import { z } from "zod"
 
 const LOOP_ID = "plan-work-review"
-const LOOP_VERSION = "0.4.0" // 0.3.0 + any-agent role ids (no provider named in the loop data)
+const LOOP_VERSION = "0.5.0" // 0.4.0 + a per-step Agent Skill on `implement` (dry-run-note-style)
 /** The worker ROLE name: used in prompts and contracts instead of a provider name. */
 const WORKER_ROLE = "implement"
 
@@ -359,6 +359,13 @@ const loop = {
       id: "implement",
       signature: sig(z.object({ task: z.string(), route: z.record(z.unknown()) }), implementOutput),
       executor: "agent", // a binding target, not a provider — see the header
+      // The loop's default Agent Skill for this step (shipped under
+      // ./skills, registered by the template's vernier.config). Rebind per
+      // run exactly like the executor: --skill implement=<name>, or
+      // --skill implement= to clear. Claude receives it natively
+      // (--plugin-dir); every other provider gets the SKILL.md body
+      // embedded in this prompt, delimited and attributed.
+      skills: ["dry-run-note-style"],
       contract: DRY_RUN_NOTE_V1,
       effects: fsScope(`${ALLOWED_WORKER_ROOT}/**`), // the allowed worker artifact root
       prompt: implementPrompt,

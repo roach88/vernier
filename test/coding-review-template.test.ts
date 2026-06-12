@@ -21,7 +21,8 @@ import type { Contract } from "../src/kernel/contract.js"
 import type { Loop, PromptTemplate, StepSpec } from "../src/kernel/types.js"
 import { Ledger, journalPath } from "../src/ledger/ledger.js"
 import { executorRegistry, scriptExecutor } from "../src/executors/script.js"
-import { templateBindings, templateModule, templateRegistration } from "./templates.js"
+import { discoverSkills } from "../src/skills/skills.js"
+import { templateBindings, templateModule, templateRegistration, templateSkills } from "./templates.js"
 
 const registration = await templateRegistration("coding-review", "coding-review-loop.mjs")
 const mod = await templateModule("coding-review", "coding-review-loop.mjs")
@@ -98,6 +99,10 @@ function fakeWorker(opts: { conforming: boolean }) {
   })
 }
 
+// The template's shipped skill registrations, discovered the way the CLI
+// would discover them (implement declares skills: ["dry-run-note-style"]).
+const templateSkillRegistry = discoverSkills({ explicit: templateSkills("coding-review") })
+
 function deps(workdir: string, executors: ReturnType<typeof scriptExecutor>[]): EngineDeps {
   const contracts = defaultContractRegistry()
   for (const contract of registration.contracts ?? []) contracts.register(contract as Contract)
@@ -105,6 +110,7 @@ function deps(workdir: string, executors: ReturnType<typeof scriptExecutor>[]): 
     executors: executorRegistry(...executors),
     contracts,
     workdir,
+    skills: templateSkillRegistry.skills,
   }
 }
 
@@ -142,6 +148,30 @@ describe("coding-review template: plan-work-review through tick()", () => {
     expect(contracts.map((c) => (c.type === "contract" ? c.result.valid : null))).toEqual([true, true])
     const effects = entries.filter((e) => e.type === "effects").at(-1)
     expect(effects?.type === "effects" && effects.observation.changed).toEqual([expectedArtifactPath(outcome.state.traceId)])
+  })
+
+  it("implement declares the shipped Agent Skill, and its SKILL.md body reaches the bound worker's prompt, delimited and attributed", async () => {
+    // The declaration is loop data; the registration is the template's config.
+    expect(planWorkReviewLoop.steps.find((s) => s.id === "implement")?.skills).toEqual(["dry-run-note-style"])
+    expect(planWorkReviewLoop.steps.find((s) => s.id === "route")?.skills).toBeUndefined()
+    expect(templateSkillRegistry.skills.get("dry-run-note-style")).toMatchObject({ origin: "config" })
+
+    const { workdir, ledgerRoot, loop } = setup()
+    let seenPrompt = ""
+    const spy = scriptExecutor("fake-worker", (spec, ctx) => {
+      seenPrompt = spec.prompt ?? ""
+      const absolute = join(ctx.workdir, expectedArtifactPath(spec.traceId))
+      mkdirSync(dirname(absolute), { recursive: true })
+      writeFileSync(absolute, conformingNote(spec), "utf8")
+      return { output: { text: "ok" } }
+    })
+    const outcome = await runLoop(loop(ledgerRoot), { task: TASK }, deps(workdir, [fakeGate("approve"), spy]))
+    expect(outcome.state.status).toBe("done")
+    expect(seenPrompt).toContain('<skill name="dry-run-note-style"')
+    expect(seenPrompt).toContain("Runner dry-run note style") // the SKILL.md body itself
+
+    const started = Ledger.load(journalPath(ledgerRoot, outcome.state.runId)).filter((e) => e.type === "step_started")
+    expect(started.at(-1)).toMatchObject({ skills: { delivery: "prompt", resolved: [{ name: "dry-run-note-style" }] } })
   })
 
   it("threads the route decision into the implement step's inputs (the data plane)", async () => {

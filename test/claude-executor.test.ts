@@ -4,7 +4,7 @@
 
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { EventEmitter } from "node:events"
-import { existsSync, mkdtempSync, readFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
@@ -169,6 +169,90 @@ describe("ClaudeExecutor", () => {
       /without a rendered prompt/,
     )
   })
+
+  it("declares native skill delivery and synthesizes the session plugin under runDir: manifest, byte-equal copy, worker pluginDirs, evidence", async () => {
+    const { worker, seen } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
+    const executor = new ClaudeExecutor({ worker })
+    expect(executor.skillDelivery).toBe("native")
+
+    const skillDir = join(import.meta.dirname, "fixtures", "skills-cli", "skills", "greeting-style")
+    const s = spec({
+      skills: [
+        {
+          name: "greeting-style",
+          description: "House greeting style.",
+          dir: skillDir,
+          file: join(skillDir, "SKILL.md"),
+        },
+      ],
+    })
+    const result = await executor.run(s, { workdir: workdir() })
+
+    const pluginDir = join(s.runDir, "skills-plugin")
+    expect(seen[0]!.pluginDirs).toEqual([pluginDir])
+    const manifest = JSON.parse(readFileSync(join(pluginDir, ".claude-plugin", "plugin.json"), "utf8")) as { name: string }
+    expect(manifest.name).toBe("vernier-skills")
+    expect(readFileSync(join(pluginDir, "skills", "greeting-style", "SKILL.md"), "utf8")).toBe(
+      readFileSync(join(skillDir, "SKILL.md"), "utf8"),
+    )
+    expect(result.evidence.map((e) => e.role)).toContain("skills-plugin")
+  })
+
+  it("a spec without skills synthesizes no plugin and hands the worker no pluginDirs", async () => {
+    const { worker, seen } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
+    const s = spec()
+    const result = await new ClaudeExecutor({ worker }).run(s, { workdir: workdir() })
+    expect(seen[0]!.pluginDirs).toBeUndefined()
+    expect(existsSync(join(s.runDir, "skills-plugin"))).toBe(false)
+    expect(result.evidence.map((e) => e.role)).not.toContain("skills-plugin")
+  })
+
+  it("a SYMLINKED skill dir (the .claude/skills marketplace install shape) is resolved and copied as a real tree, not a bare link", async () => {
+    const { worker, seen } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
+    // The real skill lives in a "cache"; ~/.claude/skills/<name> would be a link to it.
+    const cache = mkdtempSync(join(tmpdir(), "vernier-skill-cache-"))
+    const real = join(cache, "aliased-skill")
+    mkdirSync(join(real, "scripts"), { recursive: true })
+    writeFileSync(join(real, "SKILL.md"), "---\nname: aliased-skill\ndescription: Installed via symlink. Use when testing.\n---\n\nbody\n", "utf8")
+    writeFileSync(join(real, "scripts", "run.sh"), "echo hi\n", "utf8")
+    const linkParent = mkdtempSync(join(tmpdir(), "vernier-skill-links-"))
+    const alias = join(linkParent, "aliased-skill")
+    symlinkSync(real, alias)
+
+    const s = spec({ skills: [{ name: "aliased-skill", description: "x", dir: alias, file: join(alias, "SKILL.md") }] })
+    const result = await new ClaudeExecutor({ worker }).run(s, { workdir: workdir() })
+
+    expect(result.status).toBe("completed")
+    expect(seen).toHaveLength(1)
+    const copied = join(s.runDir, "skills-plugin", "skills", "aliased-skill")
+    // The copy is a REAL directory tree — a snapshot — not a symlink back to mutable source.
+    expect(lstatSync(copied).isSymbolicLink()).toBe(false)
+    expect(lstatSync(copied).isDirectory()).toBe(true)
+    expect(lstatSync(join(copied, "SKILL.md")).isSymbolicLink()).toBe(false)
+    expect(readFileSync(join(copied, "scripts", "run.sh"), "utf8")).toBe("echo hi\n")
+  })
+
+  it("refuses a skill whose dir escapes via symlink: failed result, no plugin, and the out-of-tree secret never lands under runDir", async () => {
+    const { worker, seen } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
+    const root = mkdtempSync(join(tmpdir(), "vernier-evil-skill-"))
+    const secretDir = mkdtempSync(join(tmpdir(), "vernier-secret-"))
+    writeFileSync(join(secretDir, "id_rsa"), "TOPSECRET-KEY-MATERIAL", "utf8")
+    const evil = join(root, "evil")
+    mkdirSync(evil, { recursive: true })
+    writeFileSync(join(evil, "SKILL.md"), "---\nname: evil\ndescription: A hostile skill. Use never.\n---\n\nbody\n", "utf8")
+    symlinkSync(join(secretDir, "id_rsa"), join(evil, "leak")) // escapes the skill dir
+
+    const s = spec({ skills: [{ name: "evil", description: "x", dir: evil, file: join(evil, "SKILL.md") }] })
+    const result = await new ClaudeExecutor({ worker }).run(s, { workdir: workdir() })
+
+    expect(result.status).toBe("failed")
+    expect(result.output).toMatchObject({ code: "skills_delivery_failed" })
+    expect(String(result.output.error)).toContain("contains a symlink")
+    expect(seen).toHaveLength(0) // the worker was never invoked — no paid turn on a hostile skill
+    // Containment is checked before any copy, so no plugin dir exists and the
+    // secret's bytes were never materialized under the run dir.
+    expect(existsSync(join(s.runDir, "skills-plugin"))).toBe(false)
+  })
 })
 
 // ------------------------------------------------------------- CLI worker
@@ -300,6 +384,27 @@ describe("ClaudeCliWorker", () => {
     expect(args).not.toContain("--tools")
     expect(args).not.toContain("--dangerously-skip-permissions")
     expect(args).not.toContain("bypassPermissions")
+  })
+
+  it("maps AgentSpec.pluginDirs onto repeatable --plugin-dir flags, with the hermetic posture intact", async () => {
+    const { spawnProcess, calls } = scriptedSpawn({ stdout: [VERSION_OK] }, { stdout: [success()] })
+    await new ClaudeCliWorker({ spawnProcess, stallTimeoutMs: 0 }).runAgent(
+      agentSpec({ pluginDirs: ["/run/dir/skills-plugin", "/run/dir/other-plugin"] }),
+      context().ctx,
+    )
+    const args = calls[1]!.args
+    expect(args[args.indexOf("--plugin-dir") + 1]).toBe("/run/dir/skills-plugin")
+    expect(args[args.lastIndexOf("--plugin-dir") + 1]).toBe("/run/dir/other-plugin")
+    // The skills channel must not loosen anything: still hermetic, still no bypass.
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("")
+    expect(args).toContain("--no-session-persistence")
+    expect(args).not.toContain("--dangerously-skip-permissions")
+  })
+
+  it("passes no --plugin-dir when the spec carries no pluginDirs", async () => {
+    const { spawnProcess, calls } = scriptedSpawn({ stdout: [VERSION_OK] }, { stdout: [success()] })
+    await new ClaudeCliWorker({ spawnProcess, stallTimeoutMs: 0 }).runAgent(agentSpec(), context().ctx)
+    expect(calls[1]!.args).not.toContain("--plugin-dir")
   })
 
   it("refuses danger-full-access pre-spawn — permission-bypass flags are never passed", async () => {

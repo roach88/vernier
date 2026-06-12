@@ -23,7 +23,8 @@ import { z } from "zod"
 import { JudgeExecutor } from "../src/executors/judge.js"
 import { defaultContractRegistry } from "../src/kernel/contract.js"
 import { EMBEDDING_PACKAGE } from "../src/memory/embedding.js"
-import { diagnose, type DoctorProbes, type DoctorReport } from "../src/cli/doctor.js"
+import { diagnose, renderDoctor, type DoctorProbes, type DoctorReport } from "../src/cli/doctor.js"
+import { discoverSkills } from "../src/skills/skills.js"
 import type { LoadedConfig } from "../src/cli/config.js"
 import { loopRegistry, type RegisteredLoop } from "../src/cli/registry.js"
 import { TEMPLATES, templatesAsConfig } from "./templates.js"
@@ -39,6 +40,8 @@ process.env.VERNIER_HOME = mkdtempSync(join(tmpdir(), "vernier-doctor-home-"))
 // All four templates, registered as their scaffolded configs would register
 // them (loop modules + shipped bindings) — the at-rest state doctor reports.
 const ALL_TEMPLATES = await templatesAsConfig("smoke", "coding-review", "verified-answer", "self-improving")
+// The templates' shipped skill registrations, discovered the way cmdDoctor would.
+const ALL_TEMPLATE_SKILLS = discoverSkills({ explicit: ALL_TEMPLATES.skills })
 const allTemplatesRegistry = () => loopRegistry(ALL_TEMPLATES)
 
 const probes = (over: Partial<DoctorProbes> = {}): DoctorProbes => ({
@@ -55,6 +58,8 @@ const config = (over: Partial<LoadedConfig>): LoadedConfig => ({
   loops: [],
   executors: [],
   bindings: new Map<string, string>(),
+  skills: [],
+  skillBindings: new Map<string, readonly string[]>(),
   ...over,
 })
 
@@ -63,7 +68,7 @@ const loopById = (report: DoctorReport, id: string) => report.loops.find((l) => 
 
 describe("diagnose()", () => {
   it("probes every executor the template runtimes register, and a bare machine blocks exactly the agent-driven loops", async () => {
-    const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, probes())
+    const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, probes(), ALL_TEMPLATE_SKILLS)
 
     expect(executorById(report, "codex")).toMatchObject({ ok: false, requires: "codex" })
     expect(executorById(report, "cursor-agent")).toMatchObject({ ok: false, requires: "cursor-agent" })
@@ -93,10 +98,29 @@ describe("diagnose()", () => {
       allTemplatesRegistry(),
       ALL_TEMPLATES,
       allFound({ which: (bin) => (bin === "claude" ? undefined : `/fake/bin/${bin}`) }),
+      ALL_TEMPLATE_SKILLS,
     )
     expect(executorById(report, "claude")?.ok).toBe(false)
     expect(report.loops.every((l) => l.runnable)).toBe(true)
     expect(report.ok).toBe(true) // the shipped bindings point at codex, not claude
+  })
+
+  it("reports each step's resolved skills against the discovered registry; a config skillBindings layer rebinds at rest and a missing name blocks", async () => {
+    const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, allFound(), ALL_TEMPLATE_SKILLS)
+    const loop = loopById(report, "plan-work-review")!
+    expect(loop.steps.find((s) => s.stepId === "implement")!.skills).toEqual([
+      expect.objectContaining({ name: "dry-run-note-style", ok: true }),
+    ])
+    expect(loop.steps.find((s) => s.stepId === "route")!.skills).toBeUndefined()
+    expect(report.skills).toContainEqual(expect.objectContaining({ name: "dry-run-note-style", ok: true, origin: "config" }))
+
+    // The same chain a run resolves: config skillBindings > the step's declared default.
+    const bound = { ...ALL_TEMPLATES, skillBindings: new Map<string, readonly string[]>([["implement", ["missing-skill"]]]) }
+    const rebound = await diagnose(loopRegistry(bound), bound, allFound(), ALL_TEMPLATE_SKILLS)
+    const step = loopById(rebound, "plan-work-review")!.steps.find((s) => s.stepId === "implement")!
+    expect(step.skills).toEqual([expect.objectContaining({ name: "missing-skill", ok: false })])
+    expect(step.ok).toBe(false)
+    expect(rebound.ok).toBe(false)
   })
 
   it("ZERO loops registered: the baseline executor set is still probed, loops say none, exit-0 semantics", async () => {
@@ -191,14 +215,14 @@ describe("diagnose()", () => {
     })
 
     it("the lexical default needs nothing: probed in-process, memory loops unaffected", async () => {
-      const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, allFound())
+      const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, allFound(), ALL_TEMPLATE_SKILLS)
       expect(executorById(report, "memory:lexical")).toMatchObject({ ok: true, requires: null })
       expect(loopById(report, "compounding-answer")?.runnable).toBe(true)
     })
 
     it("VERNIER_RETRIEVER=embedding without the package blocks exactly the store-op steps, actionably", async () => {
       process.env.VERNIER_RETRIEVER = "embedding"
-      const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, allFound({ resolvable: (s) => s !== EMBEDDING_PACKAGE }))
+      const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, allFound({ resolvable: (s) => s !== EMBEDDING_PACKAGE }), ALL_TEMPLATE_SKILLS)
       expect(executorById(report, "memory:embedding")).toMatchObject({ ok: false, requires: EMBEDDING_PACKAGE })
       expect(executorById(report, "memory:embedding")?.detail).toContain(`npm install ${EMBEDDING_PACKAGE}`)
       const loop = loopById(report, "compounding-answer")!
@@ -211,7 +235,7 @@ describe("diagnose()", () => {
 
     it("VERNIER_RETRIEVER=embedding with the package resolvable keeps memory loops runnable", async () => {
       process.env.VERNIER_RETRIEVER = "embedding"
-      const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, allFound())
+      const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, allFound(), ALL_TEMPLATE_SKILLS)
       expect(executorById(report, "memory:embedding")).toMatchObject({ ok: true, requires: EMBEDDING_PACKAGE })
       expect(loopById(report, "compounding-answer")?.runnable).toBe(true)
     })
@@ -242,6 +266,58 @@ describe("diagnose()", () => {
     expect(report.loops[0]).toMatchObject({ loopId: "broken-runtime", runnable: false })
     expect(report.loops[0]!.error).toContain("frobnicator")
     expect(report.ok).toBe(false)
+  })
+
+  it("a broken-runtime loop STILL reports its declared skills, so a user-tier skill it needs is not elided from the inventory", async () => {
+    // A user-tier skill referenced ONLY by a loop whose runtime throws.
+    const home = mkdtempSync(join(tmpdir(), "vernier-doctor-skill-home-"))
+    const skillDir = join(home, ".claude", "skills", "broken-only-skill")
+    mkdirSync(skillDir, { recursive: true })
+    writeFileSync(
+      join(skillDir, "SKILL.md"),
+      "---\nname: broken-only-skill\ndescription: Needed only by a broken loop. Use when testing elision.\n---\n\nbody\n",
+      "utf8",
+    )
+    const skills = discoverSkills({ home })
+
+    const loop = {
+      id: "broken-with-skill",
+      version: "0.0.1",
+      signature: { input: z.object({}), output: z.object({}) },
+      steps: [
+        {
+          id: "only",
+          signature: { input: z.object({}), output: z.object({}) },
+          executor: "codex",
+          skills: ["broken-only-skill"],
+          effects: { allow: [] },
+          prompt: () => "x",
+        },
+      ],
+      policy: () => ({ kind: "stop", classification: "success", summary: "", notes: [], improvement: "" }),
+      trust: "dry-run",
+      ledger: {},
+    }
+    const entry: RegisteredLoop = {
+      loop: loop as RegisteredLoop["loop"],
+      signature: "{} -> {}",
+      summary: "fixture",
+      source: "test",
+      live: false,
+      defaultWorkdir: () => mkdtempSync(join(tmpdir(), "vernier-doctor-broken2-")),
+      runtime: () => {
+        throw new Error("tool missing")
+      },
+    }
+
+    const report = await diagnose(new Map([["broken-with-skill", entry]]), undefined, allFound(), skills)
+    // The declared skill survives the broken runtime in the report...
+    const step = loopById(report, "broken-with-skill")!.steps.find((s) => s.stepId === "only")!
+    expect(step.skills).toEqual([expect.objectContaining({ name: "broken-only-skill", ok: true })])
+    // ...so renderDoctor counts it as referenced and does NOT elide it.
+    const lines = renderDoctor(report).join("\n")
+    expect(lines).toContain("broken-only-skill")
+    expect(lines).not.toMatch(/\+ 1 more spec-valid skill/)
   })
 })
 

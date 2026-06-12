@@ -92,6 +92,16 @@ export interface StepStartedEntry {
   readonly attempt: number
   readonly iteration: number
   readonly executorId: string
+  /**
+   * The Agent Skills this execution runs with, post-resolution, and how
+   * they reached the provider: "native" (provider-side load, e.g. claude
+   * --plugin-dir) or "prompt" (bodies embedded in the step prompt). Absent
+   * when the step resolved no skills.
+   */
+  readonly skills?: {
+    readonly resolved: readonly { readonly name: string; readonly dir: string }[]
+    readonly delivery: "native" | "prompt"
+  }
   readonly at: string
 }
 
