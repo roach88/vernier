@@ -353,14 +353,14 @@ export class ClaudeExecutor implements Executor {
     // Native skill delivery: synthesize a session plugin under the run's
     // ledger dir (runner-managed evidence, never the workdir — effect
     // observation must not see it) and hand it to the CLI via --plugin-dir.
-    // Copies, not symlinks: the plugin dir then RECORDS byte-for-byte what
-    // this step actually ran with. Every skill is first checked for symlinks
-    // that escape its directory (assertSkillContained) — a third-party skill
-    // must not exfiltrate an out-of-tree file into the plugin the model
-    // loads. `pluginDir` is assigned only after the copy fully succeeds, so a
-    // containment violation or filesystem failure mid-synthesis returns a
-    // clean failed StepResult (with evidence) and never passes a partial
-    // plugin to the CLI or emits one as evidence.
+    // Every skill is first verified symlink-free (assertSkillContained): a
+    // skill is a self-contained tree of regular files, so cpSync RECORDS it
+    // byte-for-byte — a true snapshot of exactly what this step ran with,
+    // with no link able to escape into the plugin or leave the copy pointing
+    // at mutable source. `pluginDir` is assigned only after the copy fully
+    // succeeds, so a containment violation or filesystem failure mid-
+    // synthesis returns a clean failed StepResult (with evidence) and never
+    // passes a partial plugin to the CLI or emits one as evidence.
     let pluginDir: string | undefined
     if (spec.skills !== undefined && spec.skills.length > 0) {
       const dir = join(spec.runDir, `${prefix}skills-plugin`)

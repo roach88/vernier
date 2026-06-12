@@ -41,8 +41,8 @@
 // be a YAML parser; a SKILL.md the subset cannot read is reported as
 // invalid with the reason.
 
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
-import { basename, join, sep } from "node:path"
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
+import { basename, join } from "node:path"
 import type { Loop, StepSkill } from "../kernel/types.js"
 
 /** Skill problems are usage/config problems: the CLI maps this to exit 2 with the message verbatim. */
@@ -318,40 +318,36 @@ export function bindSkills(loop: Loop, layers: readonly SkillBindingLayer[]): Lo
 // ----------------------------------------------------------------- delivery
 
 /**
- * Refuse a skill whose directory tree contains a symlink resolving OUTSIDE
- * the skill. Third-party skills are first-class, so a skill must not be able
- * to pull an out-of-tree file (a secret, anything) into a native plugin the
- * provider then loads with tool access — `dereference` would byte-copy the
- * target in, and a preserved link would be followed by the provider just the
- * same, so the only safe move is to reject the escape outright. Internal
- * symlinks (resolving within the skill) are allowed; legitimate skills never
- * escape, so this guard has no false positives. Native-delivery executors
- * call this before materializing a skill; broken links are refused too.
+ * Refuse a skill whose directory tree contains ANY symlink. A skill must be
+ * a self-contained tree of regular files, for two reasons that both bite at
+ * native-delivery copy time:
+ *
+ *   - Escape: a symlink out of the skill could pull an out-of-tree file (a
+ *     secret, anything) into the plugin the provider loads with tool access.
+ *   - Snapshot integrity: even an INTERNAL symlink defeats the byte-for-byte
+ *     copy the native plugin promises. `cpSync` does not dereference links
+ *     inside a recursive copy (Node 22: `dereference: true` is ignored for
+ *     in-tree links, and a relative link is even rewritten to an ABSOLUTE
+ *     path back at the original, mutable source) — so the copy would still
+ *     follow the source, a TOCTOU window, not the recorded snapshot.
+ *
+ * Rejecting all symlinks closes both. A skill that wants an alias ships a
+ * real file; legitimate skills are plain files, so this has no false
+ * positives. Native-delivery executors call this before materializing.
  */
 export function assertSkillContained(dir: string, name: string): void {
-  const root = realpathSync(dir)
   const walk = (current: string): void => {
     for (const entry of readdirSync(current, { withFileTypes: true })) {
       const path = join(current, entry.name)
       if (entry.isSymbolicLink()) {
-        let target: string
-        try {
-          target = realpathSync(path)
-        } catch {
-          throw new SkillError(`skill \`${name}\`: broken symlink \`${path}\` cannot be resolved.`)
-        }
-        if (target !== root && !target.startsWith(root + sep)) {
-          throw new SkillError(
-            `skill \`${name}\` contains a symlink that escapes its directory: \`${path}\` -> \`${target}\`. A skill may not reference files outside itself.`,
-          )
-        }
-        // Within-root link: the real target dir, if any, is walked on its own.
-      } else if (entry.isDirectory()) {
-        walk(path)
+        throw new SkillError(
+          `skill \`${name}\` contains a symlink (\`${path}\`); a skill must be a self-contained tree of regular files — bundle a real file instead of a link.`,
+        )
       }
+      if (entry.isDirectory()) walk(path) // never recurse THROUGH a link: symlinked dirs are rejected above
     }
   }
-  walk(root)
+  walk(dir)
 }
 
 /**

@@ -222,7 +222,7 @@ describe("ClaudeExecutor", () => {
 
     expect(result.status).toBe("failed")
     expect(result.output).toMatchObject({ code: "skills_delivery_failed" })
-    expect(String(result.output.error)).toContain("escapes its directory")
+    expect(String(result.output.error)).toContain("contains a symlink")
     expect(seen).toHaveLength(0) // the worker was never invoked — no paid turn on a hostile skill
     // Containment is checked before any copy, so no plugin dir exists and the
     // secret's bytes were never materialized under the run dir.

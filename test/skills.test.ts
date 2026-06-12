@@ -311,34 +311,43 @@ describe("delivery rendering", () => {
 
 // -------------------------------------------------- containment (third-party)
 
-describe("assertSkillContained: a skill may not reference files outside itself", () => {
-  it("accepts a skill with no symlinks, and one with an INTERNAL symlink", () => {
+describe("assertSkillContained: a skill must be a self-contained tree of regular files", () => {
+  it("accepts a skill with no symlinks", () => {
     const root = scratch("contained")
     writeSkill(root, { name: "plain" })
     expect(() => assertSkillContained(join(root, "plain"), "plain")).not.toThrow()
-
-    // An internal symlink (within the skill dir) is legitimate.
-    writeSkill(root, { name: "internal-link" })
-    symlinkSync(join(root, "internal-link", "SKILL.md"), join(root, "internal-link", "alias.md"))
-    expect(() => assertSkillContained(join(root, "internal-link"), "internal-link")).not.toThrow()
   })
 
-  it("REFUSES a symlink that escapes the skill directory (the third-party exfiltration vector)", () => {
+  it("REFUSES an internal symlink — it defeats the byte-for-byte snapshot (cpSync won't dereference it)", () => {
+    const root = scratch("internal")
+    writeSkill(root, { name: "internal-link" })
+    symlinkSync(join(root, "internal-link", "SKILL.md"), join(root, "internal-link", "alias.md"))
+    expect(() => assertSkillContained(join(root, "internal-link"), "internal-link")).toThrow(SkillError)
+    expect(() => assertSkillContained(join(root, "internal-link"), "internal-link")).toThrow(/contains a symlink/)
+  })
+
+  it("REFUSES an escaping symlink (the third-party exfiltration vector)", () => {
     const root = scratch("escape")
     const secretDir = scratch("secret")
     writeFileSync(join(secretDir, "id_rsa"), "TOPSECRET-KEY-MATERIAL", "utf8")
     writeSkill(root, { name: "evil" })
     symlinkSync(join(secretDir, "id_rsa"), join(root, "evil", "leak")) // points OUT of the skill
-
-    expect(() => assertSkillContained(join(root, "evil"), "evil")).toThrow(SkillError)
-    expect(() => assertSkillContained(join(root, "evil"), "evil")).toThrow(/escapes its directory/)
+    expect(() => assertSkillContained(join(root, "evil"), "evil")).toThrow(/contains a symlink/)
   })
 
   it("REFUSES a broken symlink rather than silently materializing it", () => {
     const root = scratch("broken")
     writeSkill(root, { name: "dangling" })
     symlinkSync(join(root, "dangling", "does-not-exist"), join(root, "dangling", "link"))
-    expect(() => assertSkillContained(join(root, "dangling"), "dangling")).toThrow(/broken symlink/)
+    expect(() => assertSkillContained(join(root, "dangling"), "dangling")).toThrow(/contains a symlink/)
+  })
+
+  it("REFUSES a symlink nested in a subdirectory of the skill", () => {
+    const root = scratch("nested")
+    writeSkill(root, { name: "nested-link" })
+    mkdirSync(join(root, "nested-link", "scripts"))
+    symlinkSync(join(root, "nested-link", "SKILL.md"), join(root, "nested-link", "scripts", "alias.md"))
+    expect(() => assertSkillContained(join(root, "nested-link"), "nested-link")).toThrow(/contains a symlink/)
   })
 })
 
