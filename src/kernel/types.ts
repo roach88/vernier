@@ -63,6 +63,25 @@ export interface EffectScope {
 export const noEffects = (): EffectScope => ({ allow: [] })
 export const fsScope = (...allow: string[]): EffectScope => ({ allow })
 
+// ------------------------------------------------------------------- Skills
+
+/**
+ * One resolved Agent Skill (https://agentskills.io) as the engine hands it
+ * to an Executor: spec metadata plus where the skill lives on disk. How a
+ * skill name becomes a StepSkill (discovery, binding layers) is the CLI's
+ * business — see skills/skills.ts; the kernel only carries the result.
+ */
+export interface StepSkill {
+  /** The spec-validated skill name (lowercase, hyphens; matches its directory name). */
+  readonly name: string
+  /** The frontmatter description — what the skill does and when to use it. */
+  readonly description: string
+  /** Absolute path of the skill directory (SKILL.md plus any bundled files). */
+  readonly dir: string
+  /** Absolute path of the SKILL.md itself. */
+  readonly file: string
+}
+
 // --------------------------------------------------------------------- Step
 
 /** What the engine hands an Executor for one attempt. Inputs are already signature-validated. */
@@ -97,6 +116,14 @@ export interface StepSpec {
   readonly outputSchema?: Record<string, unknown> | undefined
   readonly effects: EffectScope
   /**
+   * Set by the engine ONLY for native skill delivery: the resolved skills
+   * a `skillDelivery: "native"` executor must load provider-side (Claude
+   * Code: a synthesized --plugin-dir). For every other executor the engine
+   * has already embedded the skill bodies into `prompt`, and this field is
+   * absent — present skills ⇔ the executor owes native delivery.
+   */
+  readonly skills?: readonly StepSkill[] | undefined
+  /**
    * Absolute path of this run's ledger directory. Executors write
    * runner-managed evidence here (prompts, transcripts, route JSON) —
    * the Python predecessor's "task bundle". It is OUTSIDE the workdir, so effect
@@ -124,6 +151,15 @@ export interface Step<I = any, O = any> {
   readonly signature: Signature<I, O>
   /** Executor id, resolved against a registry at run time. The executor is fungible. */
   readonly executor: string
+  /**
+   * Agent Skill names this step runs with (the loop default; rebindable per
+   * run exactly like the executor: --skill overrides > config skillBindings
+   * > this list). Names resolve against the discovered skill registry at
+   * the CLI layer; the engine delivers each skill natively or via the
+   * prompt depending on the resolved executor. Skill-bearing steps must
+   * have a prompt template — skills travel through the prompt seam.
+   */
+  readonly skills?: readonly string[]
   /** Optional contract id: deterministic semantic validation of the output value. */
   readonly contract?: string
   readonly effects: EffectScope
@@ -233,9 +269,22 @@ export interface RunContext {
   readonly signal?: AbortSignal
 }
 
+/**
+ * How an executor receives a step's Agent Skills. "native": the engine
+ * passes StepSpec.skills and the executor loads them provider-side with
+ * progressive disclosure intact (Claude Code: --plugin-dir). An executor
+ * that omits skillDelivery gets prompt delivery — the engine embeds the
+ * SKILL.md bodies into the step prompt before run(), so the executor needs
+ * no skill awareness at all. Named (and exported) so a loop author writing
+ * a custom native-delivery executor can reference the literal.
+ */
+export type SkillDelivery = "native"
+
 /** Anything that can run one Step: a script, a CLI agent, an API agent, a judge, a human. */
 export interface Executor {
   readonly id: string
+  /** How this executor receives a step's Agent Skills (see SkillDelivery). Absent = prompt-embedded delivery. */
+  readonly skillDelivery?: SkillDelivery
   run(spec: StepSpec, ctx: RunContext): Promise<StepResult>
 }
 

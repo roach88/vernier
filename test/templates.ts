@@ -39,24 +39,37 @@ export function templateBindings(template: string): Map<string, string> {
   return new Map(Object.entries(config.bindings ?? {}))
 }
 
+/** The skill registrations the template's shipped vernier.config.json declares, template-dir-resolved. */
+export function templateSkills(template: string): string[] {
+  const config = JSON.parse(readFileSync(join(TEMPLATES, template, "vernier.config.json"), "utf8")) as {
+    skills?: string[]
+  }
+  return (config.skills ?? []).map((entry) => join(TEMPLATES, template, entry))
+}
+
 /**
  * A LoadedConfig equivalent to scaffolding the named templates into one
- * project: their registrations plus their shipped bindings, merged — what
- * loadConfig() would produce, built in-process so the suites need no
- * scaffold step (and no node_modules/vernier for the spawned bin).
+ * project: their registrations plus their shipped bindings and skill
+ * registrations, merged — what loadConfig() would produce, built in-process
+ * so the suites need no scaffold step (and no node_modules/vernier for the
+ * spawned bin).
  */
 export async function templatesAsConfig(...names: string[]): Promise<{
   path: string
   loops: Array<{ registration: LoopRegistration; source: string }>
   executors: never[]
   bindings: Map<string, string>
+  skills: string[]
+  skillBindings: Map<string, readonly string[]>
 }> {
   const loops: Array<{ registration: LoopRegistration; source: string }> = []
   const bindings = new Map<string, string>()
+  const skills: string[] = []
   for (const name of names) {
     const moduleFile = templateModuleFile(name)
     loops.push({ registration: await templateRegistration(name, moduleFile), source: join(TEMPLATES, name, moduleFile) })
     for (const [key, value] of templateBindings(name)) bindings.set(key, value)
+    skills.push(...templateSkills(name))
   }
-  return { path: join(TEMPLATES, "vernier.config.json"), loops, executors: [], bindings }
+  return { path: join(TEMPLATES, "vernier.config.json"), loops, executors: [], bindings, skills, skillBindings: new Map() }
 }

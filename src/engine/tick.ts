@@ -13,9 +13,10 @@ import type { ContractRegistry, ContractResult } from "../kernel/contract.js"
 import { failedCheckMessages } from "../kernel/contract.js"
 import { hashObserver, type EffectObservation, type EffectsObserver } from "../kernel/effects.js"
 import type { Decision, Observation } from "../kernel/policy.js"
-import type { Executor, Loop, MemoryStore, Step, StepResult } from "../kernel/types.js"
+import type { Executor, Loop, MemoryStore, Step, StepResult, StepSkill } from "../kernel/types.js"
 import { derivedOutputSchema, zeroUsage } from "../kernel/types.js"
 import { journalPath, Ledger, resolveLedgerRoot, resumeKey, KEY_VERSION, type Replay, type StepResultEntry } from "../ledger/ledger.js"
+import { embedSkillsInPrompt, nativeSkillsDirective, skillBody } from "../skills/skills.js"
 
 export type RunStatus = "running" | "done" | "needs_human" | "stopped"
 
@@ -50,6 +51,12 @@ export interface EngineDeps {
    * Only loops with recall/remember steps need it.
    */
   readonly memory?: MemoryStore
+  /**
+   * Resolved Agent Skills by name (skills/skills.ts discovery, performed at
+   * the CLI layer). Only loops whose steps declare `skills` need it; a step
+   * naming a skill this map lacks fails before its step_started entry.
+   */
+  readonly skills?: ReadonlyMap<string, StepSkill>
 }
 
 export interface Run {
@@ -129,7 +136,39 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
   const executor = deps.executors.get(step.executor)
   if (!executor) throw new Error(`Unknown executor id \`${step.executor}\` for step \`${step.id}\`.`)
 
-  ledger.append({ type: "step_started", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, executorId: executor.id, at: now() })
+  // Resolve the step's Agent Skills BEFORE the step_started entry: an
+  // unresolvable name or a skill on a promptless step is a wiring error,
+  // not an attempt the journal should record. Delivery is the executor's
+  // declared mode: "native" executors load skills provider-side (the spec's
+  // progressive disclosure intact); everyone else gets the bodies embedded
+  // in the prompt below.
+  const stepSkills: StepSkill[] = (step.skills ?? []).map((name) => {
+    const skill = deps.skills?.get(name)
+    if (!skill) {
+      throw new Error(
+        `Unknown skill \`${name}\` for step \`${step.id}\`. Register it in vernier.config (skills: [...]) or place it under .claude/skills.`,
+      )
+    }
+    return skill
+  })
+  if (stepSkills.length > 0 && !step.prompt) {
+    throw new Error(`Step \`${step.id}\` declares skills but no prompt template; skills are delivered through the prompt seam.`)
+  }
+  const skillsDelivery: "native" | "prompt" | undefined =
+    stepSkills.length === 0 ? undefined : executor.skillDelivery === "native" ? "native" : "prompt"
+
+  ledger.append({
+    type: "step_started",
+    key,
+    stepId: step.id,
+    attempt: state.attempt,
+    iteration: state.iteration,
+    executorId: executor.id,
+    ...(skillsDelivery !== undefined
+      ? { skills: { resolved: stepSkills.map(({ name, dir }) => ({ name, dir })), delivery: skillsDelivery } }
+      : {}),
+    at: now(),
+  })
 
   // 2. Snapshot effects, 3. execute, 4. attribute changes against the scope.
   const observer = deps.observer ?? hashObserver
@@ -151,8 +190,25 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
     // output signature here, never hand-written (see kernel/types.ts).
     ...(step.structuredOutput ? { outputSchema: derivedOutputSchema(step.signature) } : {}),
   }
-  const prompt = step.prompt?.(base)
-  const spec = { ...base, ...(prompt !== undefined ? { prompt } : {}) }
+  // Skill delivery happens at prompt-render time: native executors get the
+  // structured skills (spec.skills) plus a short use-these directive; every
+  // other executor gets the SKILL.md bodies embedded, delimited and
+  // attributed. spec.skills present ⇔ the executor owes native delivery.
+  const rendered = step.prompt?.(base)
+  const prompt =
+    rendered === undefined || skillsDelivery === undefined
+      ? rendered
+      : skillsDelivery === "native"
+        ? rendered + nativeSkillsDirective(stepSkills)
+        : embedSkillsInPrompt(
+            rendered,
+            stepSkills.map((skill) => ({ ...skill, body: skillBody(skill.file) })),
+          )
+  const spec = {
+    ...base,
+    ...(prompt !== undefined ? { prompt } : {}),
+    ...(skillsDelivery === "native" ? { skills: stepSkills } : {}),
+  }
   let result: StepResult
   try {
     result = await executor.run(spec, { workdir: deps.workdir, ...(deps.memory ? { memory: deps.memory } : {}) })

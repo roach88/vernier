@@ -3,5 +3,6 @@
   "bindings": {
     "route": "codex",
     "implement": "codex"
-  }
+  },
+  "skills": ["./skills/dry-run-note-style"]
 }

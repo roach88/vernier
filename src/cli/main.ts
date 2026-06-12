@@ -18,6 +18,7 @@
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { register as registerModuleHooks } from "node:module"
+import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { parseArgs } from "node:util"
@@ -28,8 +29,9 @@ import { driveRun, finalOutput, newRunId, startRun, tick, type EngineDeps, type 
 import type { Executor, Loop } from "../kernel/types.js"
 import { journalPath, Ledger, resolveLedgerRoot, type LedgerEntry } from "../ledger/ledger.js"
 import { buildTimeline, computedCostUsd, renderStats, renderTimeline, rollupByLoop, runStatsRow, type PriceModel, type RunStatsRow } from "../ledger/stats.js"
+import { bindSkills, discoverSkills, SKILL_NAME_PATTERN, SkillError, type SkillBindingLayer, type SkillRegistry } from "../skills/skills.js"
 import { bindExecutors, ConfigError, loadConfig, type BindingLayer, type LoadedConfig } from "./config.js"
-import { diagnose, renderDoctor } from "./doctor.js"
+import { defaultProbes, diagnose, renderDoctor } from "./doctor.js"
 import { loopRegistry, type LoopRuntime, type RegisteredLoop } from "./registry.js"
 
 // Lend the CLI's own dependencies to config modules: scaffolded templates
@@ -56,12 +58,14 @@ USAGE
   vernier init [template]                             list starter templates, or scaffold one into
                                                      the current directory (never overwrites)
   vernier loops                                       list registered loops (from vernier.config)
+  vernier skills                                       list discovered Agent Skills (config + .claude/skills)
   vernier run <loopId> [--input '<json>'] [--input-file <path>] [--workdir <dir>]
              [--executor <stepIdOrExecutorId>=<executorId>]...
+             [--skill <stepIdOrExecutorId>=<name[,name...]>]...
                                                      start a run, drive to terminal
-  vernier tick <runId> [--workdir <dir>] [--executor ...]
+  vernier tick <runId> [--workdir <dir>] [--executor ...] [--skill ...]
                                                      advance ONE step from the ledger
-  vernier resume <runId> [--workdir <dir>] [--executor ...]
+  vernier resume <runId> [--workdir <dir>] [--executor ...] [--skill ...]
                                                      continue a run to terminal
   vernier runs                                        list runs under the ledger root
   vernier show <runId>                                run timeline + per-step usage from the journal
@@ -88,6 +92,18 @@ EXECUTOR BINDING
   Keys may be a step id (binds that step) or an executor id (binds the role
   everywhere it appears in the loop).
 
+SKILLS (Agent Skills, agentskills.io)
+  A step may declare skill names (skills: ["security-review"]); they resolve
+  through the executor chain: --skill overrides > config skillBindings > the
+  loop's declared default. Keys are a step id or an executor id (the loop's
+  DECLARED vocabulary); \`--skill <step>=\` clears a step's skills.
+  Discovery: vernier.config \`skills\` paths, then <project>/.claude/skills,
+  then ~/.claude/skills — earlier tiers win name collisions. Delivery is
+  provider-native where supported (claude: a session --plugin-dir, spec
+  progressive disclosure intact); for every other executor the SKILL.md
+  body is embedded in the step prompt, delimited and attributed. The ledger
+  records resolved skills and the delivery mode per step.
+
 EXIT CODES
   0 success   1 needs_human/stopped/failed   2 usage error   3 lease held`
 
@@ -100,6 +116,8 @@ interface Flags {
   readonly workdir?: string
   /** Repeatable --executor <stepIdOrExecutorId>=<executorId> overrides. */
   readonly executor: readonly string[]
+  /** Repeatable --skill <stepIdOrExecutorId>=<name[,name...]> overrides. */
+  readonly skill: readonly string[]
   /** `stats` filters/prices (raw strings; validated in cmdStats). */
   readonly loop?: string
   readonly last?: string
@@ -118,6 +136,7 @@ function parseFlags(args: readonly string[]): Flags {
         "input-file": { type: "string" },
         workdir: { type: "string" },
         executor: { type: "string", multiple: true },
+        skill: { type: "string", multiple: true },
         loop: { type: "string" },
         last: { type: "string" },
         "price-in": { type: "string" },
@@ -137,6 +156,7 @@ function parseFlags(args: readonly string[]): Flags {
       ...(values["input-file"] !== undefined ? { inputFile: values["input-file"] } : {}),
       ...(values.workdir !== undefined ? { workdir: resolve(values.workdir) } : {}),
       executor: values.executor ?? [],
+      skill: values.skill ?? [],
       ...(values.loop !== undefined ? { loop: values.loop } : {}),
       ...(values.last !== undefined ? { last: values.last } : {}),
       ...(values["price-in"] !== undefined ? { priceIn: values["price-in"] } : {}),
@@ -179,6 +199,111 @@ function parseExecutorOverrides(pairs: readonly string[], loop: Loop): BindingLa
 /** Layered bindings for one invocation: CLI overrides first, then config bindings. */
 function bindingLayers(flags: Flags, loop: Loop, config: LoadedConfig | undefined): BindingLayer[] {
   return [parseExecutorOverrides(flags.executor, loop), config?.bindings ?? new Map<string, string>()]
+}
+
+/**
+ * Parse --skill overrides, strictly (the --executor rule): a key must name
+ * a step id or an executor id the loop declares. Values are skill names —
+ * repeats and comma lists accumulate per key, in order; a layer that names
+ * a key REPLACES lower layers for it, so `--skill <step>=` (empty value)
+ * clears that step's skills.
+ */
+function parseSkillOverrides(pairs: readonly string[], loop: Loop): SkillBindingLayer {
+  const map = new Map<string, readonly string[]>()
+  if (pairs.length === 0) return map
+  const stepIds = [...new Set(loop.steps.map((s) => s.id))]
+  const executorIds = [...new Set(loop.steps.map((s) => s.executor))]
+  for (const pair of pairs) {
+    const eq = pair.indexOf("=")
+    if (eq <= 0) throw new UsageError(`--skill expects <stepIdOrExecutorId>=<skillName[,skillName...]>, got \`${pair}\`.`)
+    const key = pair.slice(0, eq)
+    if (!stepIds.includes(key) && !executorIds.includes(key)) {
+      throw new UsageError(
+        `--skill \`${key}\` names no step or executor in \`${loop.id}\` (steps: ${stepIds.join(", ")}; executors: ${executorIds.join(", ")}).`,
+      )
+    }
+    const raw = pair.slice(eq + 1)
+    // An EMPTY value (`step=`) is an explicit clear, and it WINS over any
+    // earlier accumulation for this key — `--skill s=a --skill s=` clears.
+    if (raw.trim() === "") {
+      map.set(key, [])
+      continue
+    }
+    // A non-empty value must be real skill names. A value that splits to
+    // blank tokens (`step=,` / `step=a,,b`) is a typo, not a silent clear —
+    // and an invalid name fails HERE, not later, with the grammar named.
+    const names = raw.split(",").map((name) => name.trim())
+    const bad = names.find((name) => name.length === 0 || !SKILL_NAME_PATTERN.test(name))
+    if (bad !== undefined) {
+      throw new UsageError(
+        `--skill \`${pair}\`: \`${bad}\` is not a valid skill name (lowercase letters, numbers, and hyphens). ` +
+          `Use \`--skill ${key}=\` with no value to clear a step's skills.`,
+      )
+    }
+    // Accumulate, de-duping both against earlier flags for this key AND
+    // within this flag's own comma list (`s=a,a` is one `a`, not two).
+    const merged = [...(map.get(key) ?? [])]
+    for (const name of names) if (!merged.includes(name)) merged.push(name)
+    map.set(key, merged)
+  }
+  return map
+}
+
+/** Layered skill bindings: CLI --skill first, then config skillBindings. Keys speak the loop's DECLARED vocabulary. */
+function skillBindingLayers(flags: Flags, loop: Loop, config: LoadedConfig | undefined): SkillBindingLayer[] {
+  return [parseSkillOverrides(flags.skill, loop), config?.skillBindings ?? new Map<string, readonly string[]>()]
+}
+
+/**
+ * The standard three-tier discovery a run/doctor/skills invocation uses:
+ * config-registered paths, then <config-dir>/.claude/skills, then
+ * ~/.claude/skills. `home` is injectable (defaults to os.homedir()) so the
+ * user tier is controllable without spawning a process.
+ */
+function discoverConfiguredSkills(config: LoadedConfig | undefined, home: string = homedir()): SkillRegistry {
+  return discoverSkills({
+    ...(config !== undefined ? { explicit: config.skills } : {}),
+    projectRoot: config !== undefined ? dirname(config.path) : process.cwd(),
+    home,
+  })
+}
+
+/**
+ * Discover skills only when this invocation needs them (a bound step names
+ * one, or --skill was passed): discovery reads SKILL.md frontmatter across
+ * three locations, and loops without skills must not pay for that. Missing
+ * names fail here — BEFORE the first journal write, like executors.
+ */
+function resolveSkillRegistry(loop: Loop, flags: Flags, config: LoadedConfig | undefined): SkillRegistry | undefined {
+  const used = loop.steps.some((step) => (step.skills?.length ?? 0) > 0)
+  if (!used && flags.skill.length === 0) return undefined
+  const registry = discoverConfiguredSkills(config)
+  assertSkillsResolvable(loop, registry)
+  return registry
+}
+
+/** Fail BEFORE the first journal write when a bound step names a skill nobody discovered (or cannot receive one). */
+function assertSkillsResolvable(loop: Loop, registry: SkillRegistry): void {
+  const problems: string[] = []
+  for (const step of loop.steps) {
+    const names = step.skills ?? []
+    if (names.length === 0) continue
+    if (!step.prompt) problems.push(`step \`${step.id}\` declares skills but no prompt template (skills travel through the prompt seam)`)
+    for (const name of names) {
+      if (!registry.skills.has(name)) problems.push(`step \`${step.id}\` -> skill \`${name}\``)
+    }
+  }
+  if (problems.length === 0) return
+  const known = [...registry.skills.keys()]
+  throw new UsageError(
+    `Unresolved skill binding(s): ${problems.join("; ")}. Discovered skills: ${known.length > 0 ? known.join(", ") : "(none)"}. ` +
+      `Register skills in vernier.config (skills: [...]) or under .claude/skills (project or ~), or rebind with --skill <stepId>=<name>.`,
+  )
+}
+
+/** Thread the discovered skills into the engine deps (EngineDeps.skills). */
+function withSkills(deps: EngineDeps, registry: SkillRegistry | undefined): EngineDeps {
+  return registry === undefined ? deps : { ...deps, skills: registry.skills }
 }
 
 /** Config-registered executors merge OVER the entry's runtime set (the user's config is closest to the user's intent). */
@@ -347,6 +472,47 @@ async function cmdLoops(flags: Flags): Promise<number> {
   return EXIT.ok
 }
 
+/**
+ * `vernier skills`: the Agent Skill inventory, the cheap parallel to
+ * `vernier loops`. Pure discovery (config paths > project/.claude/skills >
+ * ~/.claude/skills) — no loop runtimes, no executor probes, so an agent can
+ * enumerate what it can bind without paying the full `doctor` cost. Exit 0
+ * always: an inventory is not a health check (use `doctor` for runnability).
+ * Spec-invalid skills in the standard locations are surfaced, never hidden.
+ */
+async function cmdSkills(flags: Flags): Promise<number> {
+  const config = await loadConfig()
+  const { skills, invalid } = discoverConfiguredSkills(config)
+  if (flags.json) {
+    json([
+      ...[...skills.values()].map((s) => ({ name: s.name, origin: s.origin, dir: s.dir, description: s.description, ok: true })),
+      ...invalid.map((i) => ({ name: null, origin: i.origin, dir: i.path, reason: i.reason, ok: false })),
+    ])
+    if (skills.size === 0 && invalid.length === 0) {
+      note("no skills discovered.")
+      note("Register skills in vernier.config (skills: [...]) or place them under .claude/skills (project) or ~/.claude/skills (user).")
+    }
+    return EXIT.ok
+  }
+  if (skills.size === 0 && invalid.length === 0) {
+    out("no skills discovered.")
+    out("")
+    out("Skills are discovered from three locations (earlier wins name collisions):")
+    out("  vernier.config `skills`   explicitly registered SKILL.md / skill dirs")
+    out("  <project>/.claude/skills  per-project skills")
+    out("  ~/.claude/skills          your personal skills")
+    return EXIT.ok
+  }
+  for (const s of skills.values()) {
+    out(`${s.name}  [${s.origin}]  ${s.dir}`)
+    out(`  ${s.description}`)
+  }
+  for (const i of invalid) {
+    out(`!! ${i.path}  [${i.origin}]  invalid: ${i.reason}`)
+  }
+  return EXIT.ok
+}
+
 // -------------------------------------------------------------------- init
 
 interface TemplateInfo {
@@ -467,9 +633,14 @@ async function cmdRun(flags: Flags): Promise<number> {
   const registry = loopRegistry(config)
   const entry = lookupLoop(registry, flags.positionals[0])
   const inputs = parseInputs(entry, flags)
-  // Resolve executor bindings BEFORE the run: the Loop stays declarative
-  // data — binding is a pure rewrite of step.executor ids at this layer.
-  const loop = bindExecutors(entry.loop, bindingLayers(flags, entry.loop, config))
+  // Resolve bindings BEFORE the run: the Loop stays declarative data — both
+  // rewrites are pure. Skills bind FIRST so --skill/skillBindings keys speak
+  // the loop's DECLARED step/executor vocabulary, exactly like --executor keys.
+  const loop = bindExecutors(
+    bindSkills(entry.loop, skillBindingLayers(flags, entry.loop, config)),
+    bindingLayers(flags, entry.loop, config),
+  )
+  const skills = resolveSkillRegistry(loop, flags, config)
   const workdir = flags.workdir ?? entry.defaultWorkdir()
   if (entry.live) note(`note: \`${entry.loop.id}\` drives live LLM CLIs; this requires authed binaries on PATH.`)
 
@@ -480,7 +651,7 @@ async function cmdRun(flags: Flags): Promise<number> {
   let runtime: LoopRuntime | undefined
   try {
     runtime = entry.runtime(workdir)
-    const deps = withConfigExecutors(runtime.deps, config?.executors ?? [])
+    const deps = withSkills(withConfigExecutors(runtime.deps, config?.executors ?? []), skills)
     assertExecutorsResolvable(loop, deps.executors)
     const run = startRun(loop, inputs, deps, { runId })
     const outcome = await driveRun(run, deps)
@@ -515,15 +686,19 @@ async function cmdTickOrResume(flags: Flags, mode: "tick" | "resume"): Promise<n
   const config = await loadConfig()
   const target = resumeTarget(flags, loopRegistry(config))
   // Same binding resolution as `run`: completed steps replay from the
-  // ledger regardless (the resume key ignores the executor), so a rebind
-  // only affects steps that still have to execute.
-  const loop = bindExecutors(target.entry.loop, bindingLayers(flags, target.entry.loop, config))
+  // ledger regardless (the resume key ignores the executor AND the skills),
+  // so a rebind only affects steps that still have to execute.
+  const loop = bindExecutors(
+    bindSkills(target.entry.loop, skillBindingLayers(flags, target.entry.loop, config)),
+    bindingLayers(flags, target.entry.loop, config),
+  )
+  const skills = resolveSkillRegistry(loop, flags, config)
   const { lease, tookOver } = acquireLease(target.runDir)
   if (tookOver) note(`note: took over a stale lease (pid ${tookOver.pid} on ${tookOver.host}, heartbeat ${tookOver.heartbeatAt}).`)
   let runtime: LoopRuntime | undefined
   try {
     runtime = target.entry.runtime(target.workdir)
-    const deps = withConfigExecutors(runtime.deps, config?.executors ?? [])
+    const deps = withSkills(withConfigExecutors(runtime.deps, config?.executors ?? []), skills)
     assertExecutorsResolvable(loop, deps.executors)
     const run = resumeRun(loop, target.runId)
     if (run.state.status !== "running") {
@@ -686,7 +861,11 @@ function cmdStats(flags: Flags): number {
 async function cmdDoctor(flags: Flags): Promise<number> {
   const config = await loadConfig()
   const registry = loopRegistry(config)
-  const report = await diagnose(registry, config)
+  // Doctor always discovers skills (it is the diagnostic surface): the
+  // inventory says what THIS machine could bind, and per-step reports say
+  // what each loop would actually resolve at rest.
+  const skills = discoverConfiguredSkills(config)
+  const report = await diagnose(registry, config, defaultProbes, skills)
   if (flags.json) {
     json(report)
   } else {
@@ -713,6 +892,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       return cmdInit(flags)
     case "loops":
       return cmdLoops(flags)
+    case "skills":
+      return cmdSkills(flags)
     case "run":
       return cmdRun(flags)
     case "tick":
@@ -728,7 +909,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     case "doctor":
       return cmdDoctor(flags)
     default:
-      throw new UsageError(`Unknown command \`${command}\`. Commands: init, loops, run, tick, resume, runs, show, stats, doctor.`)
+      throw new UsageError(`Unknown command \`${command}\`. Commands: init, loops, skills, run, tick, resume, runs, show, stats, doctor.`)
   }
 }
 
@@ -737,27 +918,39 @@ export async function main(argv: readonly string[]): Promise<number> {
 process.once("SIGINT", () => process.exit(130))
 process.once("SIGTERM", () => process.exit(143))
 
+// Every command promises "machine output on stdout under --json". Errors are
+// output too: under --json a structured `{ error, type, exitCode }` document
+// goes to stdout so an agent can branch on the failure class without parsing
+// prose; the human-readable diagnostics always go to stderr, and the exit
+// code is unchanged. --json is read from argv because the top-level catch has
+// no parsed flags (a parse failure is itself one of these errors).
+const wantsJson = (): boolean => process.argv.includes("--json")
+const failWith = (type: string, exitCode: number, message: string, ...extraNotes: string[]): never => {
+  if (wantsJson()) json({ error: message, type, exitCode })
+  note(`${type.replace(/_/g, " ")}: ${message}`)
+  for (const line of extraNotes) note(line)
+  process.exit(exitCode)
+}
+
 try {
   process.exit(await main(process.argv.slice(2)))
 } catch (error) {
   if (error instanceof UsageError) {
-    note(`usage error: ${error.message}`)
-    note(`run \`vernier --help\` for the command surface.`)
-    process.exit(EXIT.usage)
+    failWith("usage_error", EXIT.usage, error.message, "run `vernier --help` for the command surface.")
   }
   if (error instanceof ConfigError) {
-    note(`config error: ${error.message}`)
-    note(`reminder: vernier.config code runs with this process's full privileges — only load configs you trust.`)
-    process.exit(EXIT.usage)
+    failWith("config_error", EXIT.usage, error.message, "reminder: vernier.config code runs with this process's full privileges — only load configs you trust.")
+  }
+  if (error instanceof SkillError) {
+    failWith("skill_error", EXIT.usage, error.message)
   }
   if (error instanceof LeaseHeldError) {
-    note(`lease held: ${error.message}`)
-    process.exit(EXIT.leaseHeld)
+    failWith("lease_held", EXIT.leaseHeld, error.message)
   }
   if (error instanceof ZodError) {
-    note(`invalid value: ${error.message}`)
-    process.exit(EXIT.usage)
+    failWith("invalid_value", EXIT.usage, error.message)
   }
+  if (wantsJson()) json({ error: error instanceof Error ? error.message : String(error), type: "error", exitCode: EXIT.failed })
   note(error instanceof Error ? (error.stack ?? error.message) : String(error))
   process.exit(EXIT.failed)
 }

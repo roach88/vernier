@@ -501,7 +501,7 @@ is resolved at run time through one chain:
 ```
 
 Keys are a step id (binds that step) or an executor id (binds the role
-everywhere it appears). Today's plan-work-review (v0.4.0, the template)
+everywhere it appears). Today's plan-work-review (v0.5.0, the template)
 names NO provider at all: both steps declare the binding target `agent`,
 and the scaffolded `vernier.config.json` binds both roles to codex —
 visible data you edit, not a default baked into the loop. One wired agent
@@ -516,6 +516,36 @@ vernier run plan-work-review --executor implement=claude --input '{"task":"…"}
 
 The only requirements: an LLM-bound step must declare a `prompt` template,
 and the agent must be usable on this machine (`vernier doctor`).
+
+**Any skill in any step.** The same dictation works for capabilities:
+vernier implements the [Agent Skills](https://agentskills.io) open
+standard (a skill = a directory with a spec-validated `SKILL.md`), and
+this template's `implement` step declares one — `skills:
+["dry-run-note-style"]`, the skill shipped under `./skills` and registered
+by the scaffolded config's `skills` list. The resolution chain is the
+executor chain, verbatim — keys speak the same step-id/executor-id
+vocabulary:
+
+```
+--skill overrides  >  config skillBindings  >  the step's declared skills
+```
+
+```sh
+vernier run plan-work-review --skill implement=dry-run-note-style --input '{"task":"…"}'   # explicit (the shipped default)
+vernier run plan-work-review --skill implement= --input '{"task":"…"}'                     # clear the step's skills
+```
+
+Discovery: config `skills` paths > `<project>/.claude/skills` >
+`~/.claude/skills`, earlier tiers winning name collisions. Delivery is
+the executor's declared mode: claude loads skills NATIVELY — vernier
+synthesizes a session plugin under the run's ledger dir and passes
+`--plugin-dir`, so the spec's progressive disclosure survives and the
+plugin doubles as evidence — while every other provider gets the SKILL.md
+body embedded in the step prompt, delimited and attributed. Each ledger
+`step_started` entry records the resolved skills and the delivery mode;
+`vernier doctor` reports resolvable/missing skills per step; a missing
+skill fails before the first journal write. Skill-bearing steps must have
+a `prompt` template.
 
 ---
 

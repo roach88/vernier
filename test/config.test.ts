@@ -239,6 +239,8 @@ describe("vernier.config: the judge block", () => {
       loops: [{ registration: { loop: loop as unknown as Loop }, source: "test" }],
       executors: [],
       bindings: new Map(),
+      skills: [],
+      skillBindings: new Map(),
       ...(judge !== undefined ? { judge } : {}),
     })
     // claude maps to the claude-code worker; codex and the absent block stay codex.

@@ -33,6 +33,8 @@ export {
   type MemoryStore,
   type RuleRecord,
   type RuleEmbedding,
+  type StepSkill,
+  type SkillDelivery,
 } from "./kernel/types.js"
 
 // The Policy slot: the default decision procedure and its combinators.

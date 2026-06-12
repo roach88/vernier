@@ -1,0 +1,4 @@
+{
+  "loops": ["./skill-loop.mjs"],
+  "skills": ["./skills/greeting-style"]
+}

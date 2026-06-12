@@ -20,6 +20,17 @@ implement  an agent writes ONE artifact              contract: dry-run-note.v1  
   the diff is the report, and the contract pins it to the expected path.
 - Retry with substance: attempt 2's prompt carries attempt 1's exact failed
   contract checks (`spec.retryHint`).
+- Per-step **Agent Skills** (agentskills.io): `implement` declares
+  `skills: ["dry-run-note-style"]` — the skill ships under `./skills` and is
+  registered by the template's `vernier.config.json`. Claude receives it
+  natively (a session `--plugin-dir`); every other provider gets the
+  SKILL.md body embedded in the step prompt, delimited and attributed.
+  Rebind per run like the executor:
+
+  ```sh
+  vernier run plan-work-review --skill implement=dry-run-note-style …
+  vernier run plan-work-review --skill implement=    # clear the step's skills
+  ```
 
 ## What it needs
 

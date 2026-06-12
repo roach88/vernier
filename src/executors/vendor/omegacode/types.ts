@@ -34,6 +34,13 @@ export interface AgentSpec {
   instructions?: string
   schema?: JSONSchema
   maxTurns?: number
+  /**
+   * vernier extension (not omegacode): provider-native plugin directories.
+   * claude-code maps each to a repeatable --plugin-dir (how per-step Agent
+   * Skills arrive without touching the workdir or user settings); providers
+   * with no plugin notion ignore it.
+   */
+  pluginDirs?: string[]
 }
 
 export interface AgentUsage {

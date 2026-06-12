@@ -100,8 +100,10 @@ bin drives them by name and resumes runs from their ledgers:
 ```sh
 vernier init [template]                             # list starter templates / scaffold one into . (never overwrites)
 vernier loops                                       # list registered loops (id@version, signature, trust)
+vernier skills                                      # list discovered Agent Skills (config + .claude/skills); no doctor overhead
 vernier run <loopId> [--input '<json>'] [--input-file <path>] [--workdir <dir>]
            [--executor <stepIdOrExecutorId>=<executorId>]...
+           [--skill <stepIdOrExecutorId>=<name[,name...]>]...
 vernier tick <runId>                                # advance ONE step of an existing run from its ledger
 vernier resume <runId>                              # continue an existing run to a terminal state
 vernier runs                                        # list runs under the ledger root
@@ -138,8 +140,10 @@ and counted.
 Agent-ergonomic by contract: every command takes `--json` (machine output on
 stdout, diagnostics on stderr) and exit codes are classed — `0` success,
 `1` terminal-but-not-success (needs_human/stopped) or failure, `2` usage
-error, `3` run lease held. The ledger root is `$VERNIER_HOME`, else
-`./.vernier`.
+error, `3` run lease held. Even failures are machine-readable: under `--json`
+an error prints a `{ error, type, exitCode }` document to stdout (the human
+prose still goes to stderr), so an agent can branch on the failure class
+without parsing text. The ledger root is `$VERNIER_HOME`, else `./.vernier`.
 
 **Resume is replay of the ledger, not re-execution.** `vernier resume`
 rebuilds the run by folding the journal's decisions through the same
@@ -186,7 +190,7 @@ files), and the scaffold is yours to edit:
 | template | loop id | teaches | needs |
 |---|---|---|---|
 | `smoke` | `control-plane-smoke-test` | the whole five-slot lifecycle, hand-rolled, nothing hidden | nothing — no agent, no auth |
-| `coding-review` | `plan-work-review` | an LLM route gate + a contract-checked artifact in a bounded fs scope | any wired agent (bindings ship on codex; `implement` needs codex or claude for enforced writes) |
+| `coding-review` | `plan-work-review` | an LLM route gate + a contract-checked artifact in a bounded fs scope; `implement` carries a per-step Agent Skill | any wired agent (bindings ship on codex; `implement` needs codex or claude for enforced writes) |
 | `verified-answer` | `verified-answer` | independent judging + `until` iteration with feedback threading | any wired agent for `answer`; the judge runs on codex unless the config's `judge` block says otherwise |
 | `self-improving` | `compounding-answer` | recall → answer → grade → distill → remember; memory compounds across runs | any wired agent for `answer`; judge/distill on codex by default (rebind via the `judge` block) |
 
@@ -425,6 +429,52 @@ re-embeds it (same content-derived id, last record wins).
 | `pi` | wired | `pi` (>= 0.79.1, `@earendil-works/pi-coding-agent`) on PATH; same posture as opencode — write scopes fail closed, effect-free steps run unconfined |
 | `hermes` | optional binding | `hermes` on PATH; a router CLI behind the same seam (`--executor route=hermes`) |
 | `judge` / `distill` | wired | independent structured-output grading on whichever provider backs it — codex by default, claude via `"judge": { "provider": "claude" }` in vernier.config (or `new JudgeExecutor({ provider: "claude-code" })` in a custom runtime), anything else via an injected worker; `vernier doctor` reports the bound provider's binary |
+
+## Skills
+
+vernier implements the [Agent Skills](https://agentskills.io) open standard
+(a skill = a directory with a spec-validated `SKILL.md`), so a step can
+dictate *capabilities* the same way it dictates an executor — per step,
+across every provider:
+
+```js
+{ id: "review", executor: "agent", skills: ["security-review"], prompt: …, effects: noEffects() }
+```
+
+**Resolution mirrors executors** — the same layered chain, the same key
+vocabulary (a step id, or an executor id to bind a role everywhere):
+
+```
+--skill review=security-review     >   config skillBindings   >   the step's declared skills
+--skill review=                        (clears the step's skills)
+```
+
+A step can carry several skills, so repeated/comma'd `--skill` flags for one
+key *accumulate* (`--skill r=a --skill r=b` → `a,b`), where `--executor`
+(one executor per step) is last-wins. An empty value (`--skill r=`) clears,
+and clearing wins over any accumulation for that key.
+
+**Discovery** (only paid for when a step actually names a skill):
+`vernier.config` `skills` paths (a `SKILL.md`, a skill dir, or a parent dir
+of skill dirs) > `<project>/.claude/skills` > `~/.claude/skills` — earlier
+tiers win name collisions; duplicate names within the config tier are an
+error. Invalid skills in the standard locations are reported by `vernier
+doctor` with the violated spec rule, never silently hidden.
+
+**Delivery is the executor's declared mode.** Claude Code gets the skill
+NATIVELY: vernier synthesizes a session plugin under the run's ledger dir
+and passes `--plugin-dir` (verified against claude 2.1.x: plugin skills
+load even under vernier's hermetic `--setting-sources ""`), so the spec's
+progressive disclosure survives — the model sees name + description and
+loads the body on demand, namespaced `vernier-skills:<name>`; the prompt
+gains only a short use-these directive, and the synthesized plugin doubles
+as evidence of exactly what the step ran with. Every other executor gets
+the pragmatic one-shot equivalent: the `SKILL.md` body embedded in the
+step prompt, delimited (`<skill name=… dir=…>`) and attributed. The ledger
+records both: each `step_started` entry carries the resolved skills and
+the delivery mode. Skill-bearing steps must have a prompt template — a
+missing skill, like a missing executor, fails before the first journal
+write, and `vernier doctor` reports resolvable/missing skills per step.
 
 ## Toolchain
 

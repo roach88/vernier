@@ -38,6 +38,7 @@ import { z } from "zod"
 import type { JudgeProvider } from "../executors/judge.js"
 import type { Contract } from "../kernel/contract.js"
 import type { Executor, Loop } from "../kernel/types.js"
+import type { SkillBindingLayer } from "../skills/skills.js"
 import type { LoopRuntime } from "./registry.js"
 
 /** Config problems are usage problems: the CLI maps this to exit 2 with the message verbatim. */
@@ -58,6 +59,10 @@ export const vernierConfigSchema = z
     executors: z.array(z.string()).optional(),
     /** Executor bindings: stepId-or-executorId -> executorId. */
     bindings: z.record(z.string()).optional(),
+    /** Explicit Agent Skill registrations: a SKILL.md file, a skill dir, or a parent dir of skill dirs. Wins name collisions against .claude/skills discovery. */
+    skills: z.array(z.string()).optional(),
+    /** Skill bindings: stepId-or-executorId -> skill name(s) (a name, a comma-separated list, or an array). */
+    skillBindings: z.record(z.union([z.string(), z.array(z.string())])).optional(),
     /** Backing provider for the built-in judge/distill wrapper. The provider value is validated by parseJudgeBlock (see judgeProviderError). */
     judge: z.object({ provider: z.string() }).strict().optional(),
   })
@@ -95,6 +100,10 @@ export interface VernierConfig {
   readonly loops?: ReadonlyArray<string | Loop | LoopRegistration>
   readonly executors?: ReadonlyArray<string | Executor>
   readonly bindings?: Readonly<Record<string, string>>
+  /** Explicit Agent Skill registrations (paths: a SKILL.md, a skill dir, or a parent dir of skill dirs). */
+  readonly skills?: ReadonlyArray<string>
+  /** Skill bindings: stepId-or-executorId -> skill name(s). */
+  readonly skillBindings?: Readonly<Record<string, string | readonly string[]>>
   /** Backing provider for the built-in judge/distill wrapper. Absent = codex. */
   readonly judge?: { readonly provider: JudgeConfigProvider }
 }
@@ -177,6 +186,10 @@ export interface LoadedConfig {
   readonly loops: ReadonlyArray<{ readonly registration: LoopRegistration; readonly source: string }>
   readonly executors: readonly Executor[]
   readonly bindings: ReadonlyMap<string, string>
+  /** Explicitly registered skill paths, config-dir-resolved to absolute. */
+  readonly skills: readonly string[]
+  /** Skill bindings: stepId-or-executorId -> skill names, normalized to lists. */
+  readonly skillBindings: SkillBindingLayer
   /** The validated `judge` block; absent = codex backs the wrapper. */
   readonly judge?: { readonly provider: JudgeConfigProvider }
 }
@@ -271,7 +284,7 @@ function parseJsonConfig(path: string): VernierConfig {
   // properties; VernierConfig keeps optional keys strictly ABSENT. Normalize
   // here (drop undefined keys, repo-wide conditional-spread pattern) so the
   // public type stays strict instead of widening it.
-  const { loops, executors, bindings, judge } = result.data
+  const { loops, executors, bindings, skills, skillBindings, judge } = result.data
   // The schema checks judge's shape; parseJudgeBlock narrows the provider
   // value (and rejects unsupported providers with the actionable WHY).
   const judgeBlock = parseJudgeBlock(judge, path)
@@ -279,6 +292,8 @@ function parseJsonConfig(path: string): VernierConfig {
     ...(loops !== undefined ? { loops } : {}),
     ...(executors !== undefined ? { executors } : {}),
     ...(bindings !== undefined ? { bindings } : {}),
+    ...(skills !== undefined ? { skills } : {}),
+    ...(skillBindings !== undefined ? { skillBindings } : {}),
     ...(judgeBlock !== undefined ? { judge: judgeBlock } : {}),
   }
 }
@@ -321,9 +336,46 @@ export async function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = p
     if (typeof value !== "string") throw new ConfigError(`\`${path}\` binding \`${key}\` must map to an executor id string.`)
     bindings.set(key, value)
   }
+  const skills: string[] = []
+  for (const entry of config.skills ?? []) {
+    if (typeof entry !== "string") throw new ConfigError(`\`${path}\` \`skills\` entries must be path strings (a SKILL.md, a skill dir, or a parent dir of skill dirs).`)
+    skills.push(fromConfigDir(path, entry))
+  }
+  const skillBindings = new Map<string, readonly string[]>()
+  for (const [key, value] of Object.entries(config.skillBindings ?? {})) {
+    skillBindings.set(key, parseSkillBindingValue(key, value, path))
+  }
   // Validated for BOTH forms here: the TS/JS form arrives as an unchecked cast.
   const judge = parseJudgeBlock(config.judge, path)
-  return { path, loops, executors, bindings, ...(judge !== undefined ? { judge } : {}) }
+  return { path, loops, executors, bindings, skills, skillBindings, ...(judge !== undefined ? { judge } : {}) }
+}
+
+/**
+ * Normalize one skillBindings value to a name list: a single name, a
+ * comma-separated list (skill names cannot contain commas), or an array.
+ * The EXPLICIT clear is an empty ARRAY (`[]`); a non-empty string that
+ * yields only blank tokens (`""`, `","`) is a typo, not a silent clear, and
+ * is rejected — otherwise a fat-fingered value would quietly drop a step's
+ * skills.
+ */
+function parseSkillBindingValue(key: string, value: unknown, path: string): readonly string[] {
+  if (Array.isArray(value)) {
+    if (!value.every((v): v is string => typeof v === "string")) {
+      throw new ConfigError(`\`${path}\` skillBindings \`${key}\` array must contain only skill-name strings.`)
+    }
+    return value.map((v) => v.trim()).filter((v) => v.length > 0) // [] = intentional clear
+  }
+  if (typeof value === "string") {
+    if (value.trim() === "") {
+      throw new ConfigError(`\`${path}\` skillBindings \`${key}\` is empty; use an empty array \`[]\` to intentionally clear a step's skills.`)
+    }
+    const names = value.split(",").map((v) => v.trim())
+    if (names.some((v) => v.length === 0)) {
+      throw new ConfigError(`\`${path}\` skillBindings \`${key}\` has a blank skill name in \`${value}\`.`)
+    }
+    return names
+  }
+  throw new ConfigError(`\`${path}\` skillBindings \`${key}\` must map to a skill name, a comma-separated list, or an array of names.`)
 }
 
 // ----------------------------------------------------- executor resolution
