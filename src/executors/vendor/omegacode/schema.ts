@@ -2,6 +2,9 @@
 // https://github.com/SawyerHood/omegacode — MIT License, Copyright (c) 2026 Sawyer Hood.
 // See LICENSE in this directory and the repository NOTICE file.
 // Local adaptation: imports of "../dsl/types.js" point at "./types.js" (vendored subset).
+// Local semantic extension (2026-06-12): strictify enforces additionalProperties:false
+// on EVERY object-typed node, records included — see the tail of strictify and
+// toCodexOutputSchema's doc comment for the why and the lossiness.
 
 // JSON Schema → per-provider output-format shapes + client-side validation.
 //   Codex:  turn/start.outputSchema = <json schema>
@@ -44,7 +47,17 @@ export function validate(schema: JSONSchema, value: unknown): ValidationResult {
   return { ok: false, errors }
 }
 
-/** OpenAI/Codex strict json_schema requires additionalProperties:false + all keys required. */
+/**
+ * OpenAI/Codex strict json_schema requires additionalProperties:false on
+ * EVERY object node + all keys required. Lossiness, stated honestly: this
+ * dialect cannot express open maps, so a record-shaped node (type "object",
+ * no `properties` — what zod's z.record derives) is coerced to "no extra
+ * keys"; the model can emit only `{}` (or `null` when the field was
+ * optional). Loops keep record fields populated through the
+ * OutputProjection seam instead of model emission — the coding-review
+ * template's `routeRecord` is the worked example. Known un-coerced shapes
+ * with no current users: empty-schema `items` and `patternProperties`.
+ */
 export function toCodexOutputSchema(schema: JSONSchema): JSONSchema {
   return strictify(schema) as JSONSchema
 }
@@ -75,6 +88,9 @@ function strictify(node: unknown): unknown {
       out[k] = Array.isArray(v) ? v.map(strictify) : strictify(v)
     } else if (k === "additionalProperties" || k === "patternProperties") {
       // patternProperties is a name→schema map; additionalProperties may be a schema or boolean.
+      // NOTE: for object-typed nodes the tail block below OVERWRITES
+      // additionalProperties with false, discarding this recursion's result —
+      // it stays live only for the unusual non-object-typed node carrying AP.
       if (k === "patternProperties" && v && typeof v === "object" && !Array.isArray(v)) {
         const src = v as Record<string, unknown>
         const dst: Record<string, unknown> = {}
@@ -115,6 +131,18 @@ function strictify(node: unknown): unknown {
       if (!originalRequired.has(k)) properties[k] = makeNullable(properties[k])
     }
   }
+  // The dialect demands additionalProperties:false on EVERY object node, not
+  // just property-bearing ones. A record-shaped node (type "object", no
+  // `properties` — zod's z.record) used to slip through the gate above with
+  // its schema-valued additionalProperties intact, and OpenAI rejected the
+  // whole schema (`invalid_json_schema`, found live 2026-06-12). Forcing
+  // false here is the only expressible coercion: the open map collapses to
+  // {} / null, and loops repopulate record fields via OutputProjection (see
+  // toCodexOutputSchema's doc comment). Matches `type` as a string or an
+  // array containing "object" (the makeNullable shape), so re-strictifying
+  // an already-nullable record stays correct.
+  const types = Array.isArray(out.type) ? out.type : [out.type]
+  if (types.includes("object")) out.additionalProperties = false
   return out
 }
 

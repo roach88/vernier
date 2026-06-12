@@ -49,7 +49,11 @@ vernier run plan-work-review --executor route=opencode   --input '{"task":"…"}
 vernier run plan-work-review --executor agent=claude     --input '{"task":"…"}'   # both roles
 ```
 
-Honest provider notes: `implement` writes files — bind it to a provider
+Honest provider notes: codex's strict structured-output dialect cannot
+express open-record fields, so the route step's `route` record is never
+model-emitted there — it is synthesized from the decision fields by the
+`routeRecord` projection (the prompt tells the model to leave it null).
+`implement` writes files — bind it to a provider
 with enforced write boundaries (`codex`: OS sandbox derived from the effect
 scope; `claude`: acceptEdits + workspace boundary). `cursor-agent`,
 `opencode`, and `pi` fail closed on write scopes, so they can fill `route`

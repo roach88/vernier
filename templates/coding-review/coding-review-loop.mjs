@@ -37,7 +37,7 @@ import { artifactFromEffects, fsScope, noEffects, retryPolicy, sig } from "verni
 import { z } from "zod"
 
 const LOOP_ID = "plan-work-review"
-const LOOP_VERSION = "0.5.0" // 0.4.0 + a per-step Agent Skill on `implement` (dry-run-note-style)
+const LOOP_VERSION = "0.5.1" // 0.5.0 + route prompt names the `route` field explicitly (strict-mode schemas require it)
 /** The worker ROLE name: used in prompts and contracts instead of a provider name. */
 const WORKER_ROLE = "implement"
 
@@ -196,6 +196,7 @@ ${expectedArtifactPath(spec.traceId)}
 
 Return JSON fields:
 gateDecision (approve|reject), routeToWorker (boolean), worker (the literal worker role name: ${WORKER_ROLE}), reason (one sentence).
+If the output schema includes a \`route\` field, set it to null — the runner reconstructs it from the fields above.
 `
 }
 
