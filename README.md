@@ -31,6 +31,8 @@ Step = Signature (in -> out, typed)
      + Executor  (who runs it: script, CLI agent, API agent, judge, human — fungible)
      + Contract  (deterministic semantic validation of the output value)
      + Effects   (what it may touch; OBSERVED via snapshot diff, not just trusted)
+     + Skills    (optional: Agent Skills it runs with — capabilities, dictated
+                  per step and rebindable like the executor; see "Skills")
 ```
 
 The engine is a tick interpreter ([src/engine/tick.ts](src/engine/tick.ts)):
@@ -117,7 +119,10 @@ registered executor is probed for the one thing it needs (CLI executors a
 binary on PATH — claude included; judge/distill the binary of whichever
 provider backs them; in-process executors nothing — probes look
 things up, they never execute them), then every loop's steps are resolved
-through the same binding chain a run would use and judged runnable. Exit 0
+through the same binding chain a run would use and judged runnable —
+skills included: the discovered Agent Skill inventory (config > project >
+user tiers, spec-invalid skills named with the violated rule) and each
+step's resolved skills are reported the same way. Exit 0
 iff every registered loop is runnable; an unusable executor that no step
 resolves to is reported but does not fail the doctor.
 
@@ -424,7 +429,7 @@ re-embeds it (same content-derived id, last record wins).
 |---|---|---|
 | `codex` | wired | `codex` on PATH; sandbox derived from EffectScope, never full-access |
 | `cursor-agent` | wired | `cursor-agent` on PATH; read-only steps only (no hard sandbox for writes) |
-| `claude` | wired | `claude` (Claude Code >= 2.0) on PATH; effect-free steps run on a read-only toolset (`Read,Glob,Grep`, asks auto-denied), write scopes on `acceptEdits` — edits confined to the workdir by Claude Code's workspace boundary, Bash and out-of-workspace writes denied (print mode cannot grant); permission-bypass flags are never passed |
+| `claude` | wired | `claude` (Claude Code >= 2.0) on PATH; effect-free steps run on a read-only toolset (`Read,Glob,Grep`, asks auto-denied), write scopes on `acceptEdits` — edits confined to the workdir by Claude Code's workspace boundary, Bash and out-of-workspace writes denied (print mode cannot grant); permission-bypass flags are never passed; Agent Skills delivered natively (a synthesized session `--plugin-dir` plugin — see "Skills") |
 | `opencode` | wired | `opencode` (>= 1.16.2) on PATH; noEffects() steps only — the provider has no enforceable sandbox, so write scopes fail closed and effect-free steps run unconfined (read-only intent observed post-hoc, not enforced) |
 | `pi` | wired | `pi` (>= 0.79.1, `@earendil-works/pi-coding-agent`) on PATH; same posture as opencode — write scopes fail closed, effect-free steps run unconfined |
 | `hermes` | optional binding | `hermes` on PATH; a router CLI behind the same seam (`--executor route=hermes`) |
@@ -524,7 +529,10 @@ mini-language parser needed (the design doc's §7 Python risk dissolves here).
   templates now shipped in `templates/coding-review/`, and the loop
   definitions now shipped as the starter templates.
 - **New here**: the five-slot kernel types, the tick interpreter, the
-  script executor, the ledger entry types for contracts/effects/decisions
+  script executor, the Agent Skills subsystem (`src/skills/skills.ts`:
+  the agentskills.io spec parser, three-tier discovery, the skill binding
+  chain, the symlink-containment guard, snapshot delivery for both modes),
+  the ledger entry types for contracts/effects/decisions
   (the gap omegacode's journal has), the `CodexExecutor` AgentResult →
   StepResult mapping with EffectScope-derived sandboxing, the pluggable
   `EffectsObserver` seam, the resume fold + replay-by-key
@@ -542,8 +550,9 @@ mini-language parser needed (the design doc's §7 Python risk dissolves here).
   crash lands between a step_result and its effects entry, replay assumes a
   clean scope (the before-snapshot is gone). Honest, narrow, documented in
   `replayTick`.
-- Observability beyond `show`/`doctor` (run timelines, usage roll-ups);
-  config-level retriever registration (semantic recall itself shipped —
-  see "Memory & recall"; only the `vernier.config` plumbing is deferred).
+- Observability beyond `show`/`stats`/`doctor` (those already cover run
+  timelines, per-step usage, and cost roll-ups); config-level retriever
+  registration (semantic recall itself shipped — see "Memory & recall";
+  only the `vernier.config` plumbing is deferred).
 - Loop cards generated from the Loop object; deleting the Python repo
   (Tyler's call, after reviewing the trace comparison).
