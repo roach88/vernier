@@ -148,6 +148,9 @@ function parseFlags(args: readonly string[]): Flags {
     })
     if (values.help) {
       out(HELP)
+      // Safe hard exit: HELP is a few KB and fits the pipe buffer — the
+      // exit-discipline note at the bottom of this file applies to outputs
+      // that can exceed ~64KB (--json inventories, journals).
       process.exit(EXIT.ok)
     }
     return {
@@ -924,33 +927,38 @@ process.once("SIGTERM", () => process.exit(143))
 // prose; the human-readable diagnostics always go to stderr, and the exit
 // code is unchanged. --json is read from argv because the top-level catch has
 // no parsed flags (a parse failure is itself one of these errors).
+//
+// EXIT DISCIPLINE: set process.exitCode and fall off the end — NEVER
+// process.exit() after writing output. A piped stdout drains asynchronously,
+// and process.exit() truncates it at the pipe buffer (~64KB): any --json
+// output past that (a big skill inventory, a long run's `show`) would arrive
+// cut mid-document. Letting the event loop drain is the fix; nothing in the
+// CLI holds the loop open after a command returns. The SIGINT/SIGTERM
+// handlers above keep hard exits — an interactive kill must not wait.
 const wantsJson = (): boolean => process.argv.includes("--json")
-const failWith = (type: string, exitCode: number, message: string, ...extraNotes: string[]): never => {
+const failWith = (type: string, exitCode: number, message: string, ...extraNotes: string[]): void => {
   if (wantsJson()) json({ error: message, type, exitCode })
   note(`${type.replace(/_/g, " ")}: ${message}`)
   for (const line of extraNotes) note(line)
-  process.exit(exitCode)
+  process.exitCode = exitCode
 }
 
 try {
-  process.exit(await main(process.argv.slice(2)))
+  process.exitCode = await main(process.argv.slice(2))
 } catch (error) {
   if (error instanceof UsageError) {
     failWith("usage_error", EXIT.usage, error.message, "run `vernier --help` for the command surface.")
-  }
-  if (error instanceof ConfigError) {
+  } else if (error instanceof ConfigError) {
     failWith("config_error", EXIT.usage, error.message, "reminder: vernier.config code runs with this process's full privileges — only load configs you trust.")
-  }
-  if (error instanceof SkillError) {
+  } else if (error instanceof SkillError) {
     failWith("skill_error", EXIT.usage, error.message)
-  }
-  if (error instanceof LeaseHeldError) {
+  } else if (error instanceof LeaseHeldError) {
     failWith("lease_held", EXIT.leaseHeld, error.message)
-  }
-  if (error instanceof ZodError) {
+  } else if (error instanceof ZodError) {
     failWith("invalid_value", EXIT.usage, error.message)
+  } else {
+    if (wantsJson()) json({ error: error instanceof Error ? error.message : String(error), type: "error", exitCode: EXIT.failed })
+    note(error instanceof Error ? (error.stack ?? error.message) : String(error))
+    process.exitCode = EXIT.failed
   }
-  if (wantsJson()) json({ error: error instanceof Error ? error.message : String(error), type: "error", exitCode: EXIT.failed })
-  note(error instanceof Error ? (error.stack ?? error.message) : String(error))
-  process.exit(EXIT.failed)
 }
