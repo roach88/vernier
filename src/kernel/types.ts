@@ -44,7 +44,7 @@ export function sig<I, O>(input: z.ZodType<I, any>, output: z.ZodType<O, any>): 
  *
  * zod v4's native z.toJSONSchema — no third-party converter. The options pin
  * the historical shape so the codex strictify + ajv path is unchanged:
- * `target: "draft-7"` (the old default), `io: "input"` (the model emits the
+ * `target: "draft-07"` (the old default), `io: "input"` (the model emits the
  * pre-parse shape — open objects, which strictify closes for codex strict),
  * `reused: "inline"` (no $defs/$ref — the old $refStrategy:"none"). And
  * `unrepresentable: "throw"`: a type with no JSON Schema form (date, bigint,
@@ -59,30 +59,34 @@ export function sig<I, O>(input: z.ZodType<I, any>, output: z.ZodType<O, any>): 
  */
 export function derivedOutputSchema(signature: Signature<any, any>): Record<string, unknown> {
   const { $schema: _, ...schema } = z.toJSONSchema(signature.output, {
-    target: "draft-7",
+    target: "draft-07",
     io: "input",
     reused: "inline",
     unrepresentable: "throw",
   }) as Record<string, unknown>
   if (isTypelessSchema(schema)) {
     throw new Error(
-      `A structuredOutput step's output signature derives to an empty JSON Schema (${JSON.stringify(schema)}). ` +
-        `Give the step a structured output type — e.g. z.object({ … }) — not z.any()/z.unknown(): an empty schema ` +
-        `constrains nothing, so a strict provider rejects it and a permissive one emits unvalidated output.`,
+      `A structuredOutput step's output signature derives to a JSON Schema that constrains nothing (${JSON.stringify(schema)}). ` +
+        `Give the step a structured output type — e.g. z.object({ … }) — not z.any()/z.unknown(): an unconstrained ` +
+        `schema means a strict provider rejects it and a permissive one emits unvalidated output.`,
     )
   }
   return schema
 }
 
 /**
- * A derived schema that constrains nothing: no `type` and no structural
- * keyword. The {} that z.any()/z.unknown() produce (after the $schema strip)
- * is the case we refuse for a structuredOutput step; a union ({anyOf:[…]}), an
- * enum, or any typed schema is structural and passes.
+ * A derived schema that constrains nothing about the VALUE: empty, or carrying
+ * only JSON Schema annotation keywords (title/description/default/…). The {}
+ * that z.any()/z.unknown() produce — and the {description:"…"} that
+ * z.any().describe() produces — are what we refuse for a structuredOutput step;
+ * a typed schema, a union ({anyOf:[…]}), an enum, or ANY constraining keyword
+ * passes. Denylisting annotations is safer than allowlisting structural
+ * keywords: it never misclassifies a constraining schema as typeless just
+ * because a new emitter keyword (if/then, contains, …) wasn't enumerated.
  */
 function isTypelessSchema(schema: Record<string, unknown>): boolean {
-  const STRUCTURAL = ["type", "properties", "enum", "const", "$ref", "anyOf", "oneOf", "allOf", "items", "not"]
-  return !STRUCTURAL.some((keyword) => keyword in schema)
+  const ANNOTATION_ONLY = new Set(["title", "description", "default", "examples", "$comment", "readOnly", "writeOnly", "deprecated"])
+  return Object.keys(schema).every((keyword) => ANNOTATION_ONLY.has(keyword))
 }
 
 // ------------------------------------------------------------------ Effects

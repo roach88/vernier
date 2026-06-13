@@ -250,7 +250,11 @@ export const NO_SKILLS: SkillRegistry = { skills: new Map(), invalid: [] }
  * `npm install`ed, or a globally installed vernier driving a bare loop file —
  * which then resolves a DIFFERENT zod than the kernel converts with. A v3/v4
  * skew there fails schema derivation (z.toJSONSchema rejects a foreign schema).
- * Surfaced before it bites; a warning, never a doctor failure.
+ * Surfaced before it bites; a warning, never a doctor failure. NOTE: this walks
+ * from cwd, not from each loop module's own resolution path, so it can miss a
+ * global-install skew — the per-step derive-probe is the AUTHORITATIVE check
+ * (it catches a foreign-zod schema by the derivation throw, wherever the stray
+ * install sits). This is the cheaper proactive hint.
  */
 function zodSkewWarnings(installs: readonly string[]): string[] {
   if (installs.length <= 1) return []
@@ -419,6 +423,10 @@ export async function diagnose(
         const memoryBlocked =
           retrieverReport !== undefined && !retrieverReport.ok && (registered === recallExecutor || registered === rememberExecutor)
         const skillBlocked = skillReports.some((s) => !s.ok) || promptlessSkills
+        // Block priority, most fundamental first: executor unresolved/probe-failed
+        // > schema won't derive > memory retriever down > skill unresolved.
+        // schemaError is set only for structuredOutput steps, so it is vacuously
+        // absent (undefined) for every other step.
         const ok = report.ok && !schemaError && !memoryBlocked && !skillBlocked
         const why = !report.ok
           ? report.detail

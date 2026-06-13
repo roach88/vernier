@@ -16,11 +16,15 @@ const derive = (output: z.ZodType) => () => derivedOutputSchema(sig(z.object({})
 
 describe("derivedOutputSchema: fail loud on a constraintless conversion", () => {
   it("throws when the output signature is z.any() (derives to {})", () => {
-    expect(derive(z.any())).toThrow(/empty JSON Schema/)
+    expect(derive(z.any())).toThrow(/constrains nothing/)
   })
 
   it("throws when the output signature is z.unknown() (derives to {})", () => {
-    expect(derive(z.unknown())).toThrow(/empty JSON Schema/)
+    expect(derive(z.unknown())).toThrow(/constrains nothing/)
+  })
+
+  it("throws on z.any().describe() — an annotation-only schema ({description}) still constrains nothing", () => {
+    expect(derive(z.any().describe("a flexible blob"))).toThrow(/constrains nothing/)
   })
 
   it("passes a structured object through (the judge-verdict shape), optional omitted from required", () => {

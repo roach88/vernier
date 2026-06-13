@@ -366,7 +366,7 @@ describe("diagnose()", () => {
       const report = await diagnose(structuredRegistry(z.any()), undefined, allFound())
       const step = loopById(report, "structured")!.steps.find((s) => s.stepId === "emit")!
       expect(step.ok).toBe(false)
-      expect(step.why).toContain("empty JSON Schema")
+      expect(step.why).toContain("constrains nothing")
       expect(report.ok).toBe(false)
     })
 
@@ -377,12 +377,22 @@ describe("diagnose()", () => {
     })
 
     it("warns (without failing the doctor) when a second zod resolves above the project", async () => {
-      const shadowed = probes({ zodInstalls: () => ["/proj/node_modules/zod", "/Users/q/node_modules/zod"] })
+      const shadowed = probes({ zodInstalls: () => ["/proj/node_modules/zod", "/shadow/node_modules/zod"] })
       const report = await diagnose(loopRegistry(), undefined, shadowed)
       expect(report.warnings).toHaveLength(1)
-      expect(report.warnings[0]).toContain("/Users/q/node_modules/zod")
+      expect(report.warnings[0]).toContain("/shadow/node_modules/zod")
       expect(report.ok).toBe(true) // a shadow is a warning, not a failure
       expect(renderDoctor(report).join("\n")).toContain("WARNINGS")
+    })
+
+    it("surfaces a shadow warning on the normal (non-empty registry) return path too, without blocking the loop", async () => {
+      const report = await diagnose(
+        structuredRegistry(z.object({ verdict: z.string() })),
+        undefined,
+        allFound({ zodInstalls: () => ["/proj/node_modules/zod", "/shadow/node_modules/zod"] }),
+      )
+      expect(report.warnings).toHaveLength(1)
+      expect(loopById(report, "structured")!.runnable).toBe(true) // a shadow warning never blocks a loop
     })
 
     it("no warning when only the project's own zod is on the resolution path", async () => {

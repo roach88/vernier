@@ -208,6 +208,11 @@ describe("OpenAI-strict lint over every shipped structured-output surface", () =
       ).toBe(true)
     }
   })
+
+  it("lint self-test: a stray propertyNames is caught on its own (the v4 z.record tag OpenAI strict rejects)", () => {
+    const problems = lintOpenAiStrict({ type: "object", additionalProperties: false, propertyNames: { type: "string" } })
+    expect(problems.some((p) => p.includes("propertyNames"))).toBe(true)
+  })
 })
 
 describe("behavior preservation: projection runs BEFORE signature validation", () => {
