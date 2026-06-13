@@ -47,6 +47,7 @@ const allTemplatesRegistry = () => loopRegistry(ALL_TEMPLATES)
 const probes = (over: Partial<DoctorProbes> = {}): DoctorProbes => ({
   which: () => undefined,
   resolvable: () => false,
+  zodInstalls: () => [],
   ...over,
 })
 
@@ -318,6 +319,77 @@ describe("diagnose()", () => {
     const lines = renderDoctor(report).join("\n")
     expect(lines).toContain("broken-only-skill")
     expect(lines).not.toMatch(/\+ 1 more spec-valid skill/)
+  })
+
+  describe("zod-skew derive-probe + shadow warning", () => {
+    // A registered loop with ONE structuredOutput step carrying `output`, on an
+    // in-process executor that always probes ok — so schema derivation is the
+    // only thing that can block the step.
+    function structuredRegistry(output: z.ZodType): Map<string, RegisteredLoop> {
+      const exec = {
+        id: "inproc",
+        async run() {
+          return { status: "completed" as const, output: {}, evidence: [], usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, durationMs: 0 } }
+        },
+      }
+      const loop = {
+        id: "structured",
+        version: "0.0.1",
+        signature: { input: z.object({}), output },
+        steps: [
+          { id: "emit", signature: { input: z.object({}), output }, executor: "inproc", effects: { allow: [] }, prompt: () => "x", structuredOutput: true },
+        ],
+        policy: () => ({ kind: "stop", classification: "success", summary: "", notes: [], improvement: "" }),
+        trust: "dry-run",
+        ledger: {},
+      }
+      const entry: RegisteredLoop = {
+        loop: loop as RegisteredLoop["loop"],
+        signature: "{} -> ?",
+        summary: "fixture",
+        source: "test",
+        live: false,
+        defaultWorkdir: () => mkdtempSync(join(tmpdir(), "vernier-doctor-skew-")),
+        runtime: () => ({
+          deps: {
+            executors: new Map([["inproc", exec]]),
+            contracts: defaultContractRegistry(),
+            workdir: mkdtempSync(join(tmpdir(), "vernier-doctor-skew-wd-")),
+          },
+          shutdown: async () => {},
+        }),
+      }
+      return new Map([["structured", entry]])
+    }
+
+    it("blocks a structuredOutput step whose output is typeless (z.any -> {}), naming the derivation error", async () => {
+      const report = await diagnose(structuredRegistry(z.any()), undefined, allFound())
+      const step = loopById(report, "structured")!.steps.find((s) => s.stepId === "emit")!
+      expect(step.ok).toBe(false)
+      expect(step.why).toContain("empty JSON Schema")
+      expect(report.ok).toBe(false)
+    })
+
+    it("passes a structuredOutput step whose output derives cleanly", async () => {
+      const report = await diagnose(structuredRegistry(z.object({ verdict: z.string() })), undefined, allFound())
+      expect(loopById(report, "structured")!.steps.find((s) => s.stepId === "emit")!.ok).toBe(true)
+      expect(loopById(report, "structured")!.runnable).toBe(true)
+    })
+
+    it("warns (without failing the doctor) when a second zod resolves above the project", async () => {
+      const shadowed = probes({ zodInstalls: () => ["/proj/node_modules/zod", "/Users/q/node_modules/zod"] })
+      const report = await diagnose(loopRegistry(), undefined, shadowed)
+      expect(report.warnings).toHaveLength(1)
+      expect(report.warnings[0]).toContain("/Users/q/node_modules/zod")
+      expect(report.ok).toBe(true) // a shadow is a warning, not a failure
+      expect(renderDoctor(report).join("\n")).toContain("WARNINGS")
+    })
+
+    it("no warning when only the project's own zod is on the resolution path", async () => {
+      const report = await diagnose(loopRegistry(), undefined, probes({ zodInstalls: () => ["/proj/node_modules/zod"] }))
+      expect(report.warnings).toEqual([])
+      expect(renderDoctor(report).join("\n")).not.toContain("WARNINGS")
+    })
   })
 })
 
