@@ -356,6 +356,17 @@ helpers — `sig`, `until`, `retryPolicy`, `decideNextStep`,
 `defineConfig`/`defineLoop`, and the types — from `"vernier"`;
 that root export is the library surface, and it is deliberately small.
 
+**zod 4.** vernier bundles **zod v4** and derives every structured-output
+schema with its native `z.toJSONSchema` — so build your signatures with zod 4
+(`npm install zod@^4` when you bring your own). The v4 break most likely to bite
+an existing loop: `z.record` is now two-arg — `z.record(z.string(), valueType)`,
+not the single-arg `z.record(valueType)`. A signature built with a *different*
+zod than the kernel's fails schema derivation rather than degrading silently,
+and `vernier doctor` surfaces the risk at rest: a `structuredOutput` step whose
+schema won't derive is reported blocked, and a second `zod` resolvable above
+your project (the classic `~/node_modules/zod` footgun) prints a non-fatal
+warning.
+
 ## Trust
 
 Honest v1 status: the `Trust` slot is declared but minimally enforced —
