@@ -34,7 +34,7 @@
 // Exit 0 iff every registered loop is runnable; an unusable executor no
 // step resolves to is reported but does not fail the doctor.
 
-import { accessSync, constants, mkdtempSync, statSync } from "node:fs"
+import { accessSync, constants, mkdtempSync, readFileSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { ClaudeExecutor } from "../executors/claude.js"
@@ -57,14 +57,20 @@ import type { RegisteredLoop } from "./registry.js"
 
 // ------------------------------------------------------------------- probes
 
+/** A node_modules/zod install on the resolution chain: its dir and the version its package.json declares (`""` when unreadable). */
+export interface ZodInstall {
+  readonly path: string
+  readonly version: string
+}
+
 /** The two environment questions doctor asks, injectable for tests. */
 export interface DoctorProbes {
   /** PATH lookup: absolute path of the first executable match, or undefined. Never runs the binary. */
   which(bin: string): string | undefined
   /** Module presence: resolvable from vernier's own location, without importing it. */
   resolvable(specifier: string): boolean
-  /** Every node_modules/zod on the upward dir chain from cwd, nearest first — the zod-skew shadow probe. Never imports zod. */
-  zodInstalls(): readonly string[]
+  /** Every node_modules/zod on the upward dir chain from cwd, nearest first, each with its declared version — the zod-skew shadow probe. Never imports zod. */
+  zodInstalls(): readonly ZodInstall[]
 }
 
 export const defaultProbes: DoctorProbes = {
@@ -86,12 +92,13 @@ export const defaultProbes: DoctorProbes = {
     }
   },
   zodInstalls() {
-    const found: string[] = []
+    const found: ZodInstall[] = []
     let dir = process.cwd()
     for (;;) {
       const here = join(dir, "node_modules", "zod")
+      const manifest = join(here, "package.json")
       try {
-        if (statSync(join(here, "package.json")).isFile()) found.push(here)
+        if (statSync(manifest).isFile()) found.push({ path: here, version: zodVersion(manifest) })
       } catch {
         // no zod install at this level; keep climbing
       }
@@ -101,6 +108,16 @@ export const defaultProbes: DoctorProbes = {
     }
     return found
   },
+}
+
+/** A zod install's declared version; "" when its package.json is unreadable/unparseable (treated as a skew, never silently equal). */
+function zodVersion(manifest: string): string {
+  try {
+    const version = (JSON.parse(readFileSync(manifest, "utf8")) as { version?: unknown }).version
+    return typeof version === "string" ? version : ""
+  } catch {
+    return ""
+  }
 }
 
 function executable(path: string): boolean {
@@ -254,17 +271,24 @@ export const NO_SKILLS: SkillRegistry = { skills: new Map(), invalid: [] }
  * from cwd, not from each loop module's own resolution path, so it can miss a
  * global-install skew — the per-step derive-probe is the AUTHORITATIVE check
  * (it catches a foreign-zod schema by the derivation throw, wherever the stray
- * install sits). This is the cheaper proactive hint.
+ * install sits). This is the cheaper proactive hint. SAME-version installs above
+ * are not a skew (z.toJSONSchema accepts a same-version schema), so they are
+ * suppressed — only a genuine version divergence from the nearest zod is surfaced.
  */
-function zodSkewWarnings(installs: readonly string[]): string[] {
-  if (installs.length <= 1) return []
-  const [nearest, ...shadows] = installs
-  const plural = shadows.length === 1 ? "" : "s"
+function zodSkewWarnings(installs: readonly ZodInstall[]): string[] {
+  const [nearest, ...rest] = installs
+  if (!nearest || rest.length === 0) return []
+  // Only a DIFFERENT version above can fail derivation; a same-version shadow is benign.
+  // Unknown versions ("") stay in — never claim a sameness we can't prove.
+  const skews = rest.filter((s) => s.version !== nearest.version || nearest.version === "")
+  if (skews.length === 0) return []
+  const plural = skews.length === 1 ? "" : "s"
+  const list = skews.map((s) => `${s.path} (zod ${s.version || "version unknown"})`).join(", ")
   return [
-    `zod resolves here from ${nearest}, but ${shadows.length} more zod install${plural} sit above it ` +
-      `(${shadows.join(", ")}). A dependency-less dir under those — a freshly scaffolded loop run before ` +
-      `\`npm install\`, or a global vernier driving a bare loop file — resolves that zod instead, and a version ` +
-      `skew against the kernel's zod then fails schema derivation. Remove the stray install${plural}.`,
+    `zod resolves here from ${nearest.path} (zod ${nearest.version || "version unknown"}), but ${skews.length} ` +
+      `version-skewed zod install${plural} sit above it (${list}). A dependency-less dir under those — a freshly ` +
+      `scaffolded loop run before \`npm install\`, or a global vernier driving a bare loop file — resolves that zod ` +
+      `instead, and the skew against the kernel's zod then fails schema derivation. Remove the stray install${plural}.`,
   ]
 }
 

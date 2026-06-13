@@ -377,7 +377,12 @@ describe("diagnose()", () => {
     })
 
     it("warns (without failing the doctor) when a second zod resolves above the project", async () => {
-      const shadowed = probes({ zodInstalls: () => ["/proj/node_modules/zod", "/shadow/node_modules/zod"] })
+      const shadowed = probes({
+        zodInstalls: () => [
+          { path: "/proj/node_modules/zod", version: "4.0.0" },
+          { path: "/shadow/node_modules/zod", version: "3.23.0" },
+        ],
+      })
       const report = await diagnose(loopRegistry(), undefined, shadowed)
       expect(report.warnings).toHaveLength(1)
       expect(report.warnings[0]).toContain("/shadow/node_modules/zod")
@@ -389,14 +394,38 @@ describe("diagnose()", () => {
       const report = await diagnose(
         structuredRegistry(z.object({ verdict: z.string() })),
         undefined,
-        allFound({ zodInstalls: () => ["/proj/node_modules/zod", "/shadow/node_modules/zod"] }),
+        allFound({
+          zodInstalls: () => [
+            { path: "/proj/node_modules/zod", version: "4.0.0" },
+            { path: "/shadow/node_modules/zod", version: "3.23.0" },
+          ],
+        }),
       )
       expect(report.warnings).toHaveLength(1)
       expect(loopById(report, "structured")!.runnable).toBe(true) // a shadow warning never blocks a loop
     })
 
     it("no warning when only the project's own zod is on the resolution path", async () => {
-      const report = await diagnose(loopRegistry(), undefined, probes({ zodInstalls: () => ["/proj/node_modules/zod"] }))
+      const report = await diagnose(
+        loopRegistry(),
+        undefined,
+        probes({ zodInstalls: () => [{ path: "/proj/node_modules/zod", version: "4.0.0" }] }),
+      )
+      expect(report.warnings).toEqual([])
+      expect(renderDoctor(report).join("\n")).not.toContain("WARNINGS")
+    })
+
+    it("does not warn when the zod install(s) above are the SAME version (not a skew)", async () => {
+      const report = await diagnose(
+        loopRegistry(),
+        undefined,
+        probes({
+          zodInstalls: () => [
+            { path: "/proj/node_modules/zod", version: "4.0.0" },
+            { path: "/workspace/node_modules/zod", version: "4.0.0" },
+          ],
+        }),
+      )
       expect(report.warnings).toEqual([])
       expect(renderDoctor(report).join("\n")).not.toContain("WARNINGS")
     })
