@@ -53,7 +53,7 @@ function writer(files: readonly string[]): ScriptFn {
 }
 
 /** A one-step loop whose `artifacts` output is projected from effects. */
-function artifactLoop(ledgerRoot: string, projection: OutputProjection, output: z.ZodType<any, z.ZodTypeDef, any>): Loop {
+function artifactLoop(ledgerRoot: string, projection: OutputProjection, output: z.ZodType<any, any>): Loop {
   return {
     id: "multi-artifact",
     version: "0.1.0",

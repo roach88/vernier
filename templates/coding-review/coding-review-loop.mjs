@@ -312,7 +312,7 @@ const routeOutput = z.object({
   routeToWorker: z.boolean(),
   worker: z.string(),
   reason: z.string(),
-  route: z.record(z.unknown()).optional(),
+  route: z.record(z.string(), z.unknown()).optional(),
 })
 
 function isRecord(value) {
@@ -358,7 +358,7 @@ const loop = {
     },
     {
       id: "implement",
-      signature: sig(z.object({ task: z.string(), route: z.record(z.unknown()) }), implementOutput),
+      signature: sig(z.object({ task: z.string(), route: z.record(z.string(), z.unknown()) }), implementOutput),
       executor: "agent", // a binding target, not a provider — see the header
       // The loop's default Agent Skill for this step (shipped under
       // ./skills, registered by the template's vernier.config). Rebind per

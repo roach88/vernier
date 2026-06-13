@@ -12,7 +12,7 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { zodToJsonSchema } from "zod-to-json-schema"
+import { z } from "zod"
 import { bindExecutors } from "../src/cli/config.js"
 import { runLoop } from "../src/engine/tick.js"
 import { CodexExecutor } from "../src/executors/codex.js"
@@ -21,7 +21,7 @@ import { executorRegistry } from "../src/executors/script.js"
 import type { Worker, WorkerContext } from "../src/executors/vendor/omegacode/index.js"
 import type { AgentResult, AgentSpec } from "../src/executors/vendor/omegacode/types.js"
 import { ContractRegistry } from "../src/kernel/contract.js"
-import { derivedOutputSchema } from "../src/kernel/types.js"
+import { derivedOutputSchema, sig } from "../src/kernel/types.js"
 import type { Loop } from "../src/kernel/types.js"
 import { Ledger } from "../src/ledger/ledger.js"
 import { templateBindings, templateModule, templateRegistration } from "./templates.js"
@@ -29,7 +29,7 @@ import { templateBindings, templateModule, templateRegistration } from "./templa
 const registration = await templateRegistration("verified-answer", "verified-answer-loop.mjs")
 const mod = await templateModule("verified-answer", "verified-answer-loop.mjs")
 const verifiedAnswerLoop = registration.loop as Loop
-const verdictOutput = mod.verdictOutput as Parameters<typeof zodToJsonSchema>[0]
+const verdictOutput = mod.verdictOutput as z.ZodType
 const feedbackFromVerdict = mod.feedbackFromVerdict as (output: Record<string, unknown>) => string
 
 const GOAL = "Write a short note explaining why the Apollo 11 mission mattered."
@@ -132,8 +132,8 @@ describe("verified-answer template with scripted workers", () => {
     expect(grade.structuredOutput).toBe(true)
     // What the provider received is exactly the engine derivation from the signature…
     expect(judge.seen[0]!.schema).toEqual(derivedOutputSchema(grade.signature))
-    // …which is exactly the zod-to-json-schema rendering of the verdict zod object.
-    const { $schema: _, ...expected } = zodToJsonSchema(verdictOutput, { $refStrategy: "none" }) as Record<string, unknown>
+    // …which is exactly the engine's single-source derivation of the verdict zod object.
+    const expected = derivedOutputSchema(sig(z.object({}), verdictOutput))
     expect(judge.seen[0]!.schema).toEqual(expected)
     expect(expected).toMatchObject({ type: "object", required: ["passed", "feedback", "missing"] })
   })

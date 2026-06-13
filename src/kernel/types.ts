@@ -13,8 +13,7 @@
 // NOT taken from omegacode: the node:vm sandbox trunk that runs workflows
 // as untrusted code — loop-as-data makes it unnecessary.
 
-import type { z } from "zod"
-import { zodToJsonSchema } from "zod-to-json-schema"
+import { z } from "zod"
 import type { EffectObservation } from "./effects.js"
 import type { Policy } from "./policy.js"
 
@@ -29,11 +28,11 @@ import type { Policy } from "./policy.js"
  * signature IS the derivation.
  */
 export interface Signature<I = unknown, O = unknown> {
-  readonly input: z.ZodType<I, z.ZodTypeDef, any>
-  readonly output: z.ZodType<O, z.ZodTypeDef, any>
+  readonly input: z.ZodType<I, any>
+  readonly output: z.ZodType<O, any>
 }
 
-export function sig<I, O>(input: z.ZodType<I, z.ZodTypeDef, any>, output: z.ZodType<O, z.ZodTypeDef, any>): Signature<I, O> {
+export function sig<I, O>(input: z.ZodType<I, any>, output: z.ZodType<O, any>): Signature<I, O> {
   return { input, output }
 }
 
@@ -42,10 +41,48 @@ export function sig<I, O>(input: z.ZodType<I, z.ZodTypeDef, any>, output: z.ZodT
  * the ONE source of truth for structured-output steps. The engine calls
  * this when a step sets `structuredOutput: true`; nothing in this repo may
  * hand-write a second copy of a step's output schema.
+ *
+ * zod v4's native z.toJSONSchema — no third-party converter. The options pin
+ * the historical shape so the codex strictify + ajv path is unchanged:
+ * `target: "draft-7"` (the old default), `io: "input"` (the model emits the
+ * pre-parse shape — open objects, which strictify closes for codex strict),
+ * `reused: "inline"` (no $defs/$ref — the old $refStrategy:"none"). And
+ * `unrepresentable: "throw"`: a type with no JSON Schema form (date, bigint,
+ * map, …) ANYWHERE in the output is a loud error, never a silent {} sub-schema
+ * the model fills unconstrained.
+ *
+ * Fail loud on a typeless top-level conversion: z.any()/z.unknown() derive to
+ * {} — a schema that constrains nothing. A strict provider rejects it after
+ * the wiring; a permissive one silently emits unvalidated output. Either way a
+ * structuredOutput step deriving to {} is a wiring bug, caught here before the
+ * paid turn (the same pre-turn posture as assertValidSchema).
  */
 export function derivedOutputSchema(signature: Signature<any, any>): Record<string, unknown> {
-  const { $schema: _, ...schema } = zodToJsonSchema(signature.output, { $refStrategy: "none" }) as Record<string, unknown>
+  const { $schema: _, ...schema } = z.toJSONSchema(signature.output, {
+    target: "draft-7",
+    io: "input",
+    reused: "inline",
+    unrepresentable: "throw",
+  }) as Record<string, unknown>
+  if (isTypelessSchema(schema)) {
+    throw new Error(
+      `A structuredOutput step's output signature derives to an empty JSON Schema (${JSON.stringify(schema)}). ` +
+        `Give the step a structured output type — e.g. z.object({ … }) — not z.any()/z.unknown(): an empty schema ` +
+        `constrains nothing, so a strict provider rejects it and a permissive one emits unvalidated output.`,
+    )
+  }
   return schema
+}
+
+/**
+ * A derived schema that constrains nothing: no `type` and no structural
+ * keyword. The {} that z.any()/z.unknown() produce (after the $schema strip)
+ * is the case we refuse for a structuredOutput step; a union ({anyOf:[…]}), an
+ * enum, or any typed schema is structural and passes.
+ */
+function isTypelessSchema(schema: Record<string, unknown>): boolean {
+  const STRUCTURAL = ["type", "properties", "enum", "const", "$ref", "anyOf", "oneOf", "allOf", "items", "not"]
+  return !STRUCTURAL.some((keyword) => keyword in schema)
 }
 
 // ------------------------------------------------------------------ Effects
