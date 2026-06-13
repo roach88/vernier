@@ -34,9 +34,9 @@
 // Exit 0 iff every registered loop is runnable; an unusable executor no
 // step resolves to is reported but does not fail the doctor.
 
-import { accessSync, constants, mkdtempSync, statSync } from "node:fs"
+import { accessSync, constants, mkdtempSync, readFileSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { delimiter, isAbsolute, join } from "node:path"
+import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { ClaudeExecutor } from "../executors/claude.js"
 import { CodexExecutor } from "../executors/codex.js"
 import { CursorExecutor } from "../executors/cursor.js"
@@ -46,6 +46,7 @@ import { recallExecutor, rememberExecutor } from "../executors/memory.js"
 import { OpencodeExecutor } from "../executors/opencode.js"
 import { PiExecutor } from "../executors/pi.js"
 import type { ProviderId } from "../executors/vendor/omegacode/types.js"
+import { derivedOutputSchema } from "../kernel/types.js"
 import type { Executor, Step } from "../kernel/types.js"
 import { EMBEDDING_PACKAGE, EmbeddingRetriever } from "../memory/embedding.js"
 import { Memory, retrieverFromEnv } from "../memory/memory.js"
@@ -56,12 +57,20 @@ import type { RegisteredLoop } from "./registry.js"
 
 // ------------------------------------------------------------------- probes
 
+/** A node_modules/zod install on the resolution chain: its dir and the version its package.json declares (`""` when unreadable). */
+export interface ZodInstall {
+  readonly path: string
+  readonly version: string
+}
+
 /** The two environment questions doctor asks, injectable for tests. */
 export interface DoctorProbes {
   /** PATH lookup: absolute path of the first executable match, or undefined. Never runs the binary. */
   which(bin: string): string | undefined
   /** Module presence: resolvable from vernier's own location, without importing it. */
   resolvable(specifier: string): boolean
+  /** Every node_modules/zod on the upward dir chain from cwd, nearest first, each with its declared version — the zod-skew shadow probe. Never imports zod. */
+  zodInstalls(): readonly ZodInstall[]
 }
 
 export const defaultProbes: DoctorProbes = {
@@ -82,6 +91,33 @@ export const defaultProbes: DoctorProbes = {
       return false
     }
   },
+  zodInstalls() {
+    const found: ZodInstall[] = []
+    let dir = process.cwd()
+    for (;;) {
+      const here = join(dir, "node_modules", "zod")
+      const manifest = join(here, "package.json")
+      try {
+        if (statSync(manifest).isFile()) found.push({ path: here, version: zodVersion(manifest) })
+      } catch {
+        // no zod install at this level; keep climbing
+      }
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
+    return found
+  },
+}
+
+/** A zod install's declared version; "" when its package.json is unreadable/unparseable (treated as a skew, never silently equal). */
+function zodVersion(manifest: string): string {
+  try {
+    const version = (JSON.parse(readFileSync(manifest, "utf8")) as { version?: unknown }).version
+    return typeof version === "string" ? version : ""
+  } catch {
+    return ""
+  }
 }
 
 function executable(path: string): boolean {
@@ -146,6 +182,8 @@ export interface DoctorReport {
   /** The discovered skill inventory (config > project > user) plus standard-location skills that fail the spec. */
   readonly skills: readonly SkillReport[]
   readonly loops: readonly LoopReport[]
+  /** Non-fatal environment advisories — e.g. a second zod resolvable above the project (a skew shadow). Never affects `ok`. */
+  readonly warnings: readonly string[]
   /** True iff every registered loop is runnable. The doctor's exit code. */
   readonly ok: boolean
 }
@@ -222,6 +260,39 @@ function checkRetriever(retriever: Retriever, probes: DoctorProbes): ExecutorRep
 export const NO_SKILLS: SkillRegistry = { skills: new Map(), invalid: [] }
 
 /**
+ * Turn the zod-install probe into a skew advisory. The NEAREST node_modules/zod
+ * is what this project resolves (nearest wins — a correctly installed project is
+ * never shadowed). Any install ABOVE it never reaches THIS project, but it DOES
+ * catch a dependency-less dir under it — a loop scaffolded but not yet
+ * `npm install`ed, or a globally installed vernier driving a bare loop file —
+ * which then resolves a DIFFERENT zod than the kernel converts with. A v3/v4
+ * skew there fails schema derivation (z.toJSONSchema rejects a foreign schema).
+ * Surfaced before it bites; a warning, never a doctor failure. NOTE: this walks
+ * from cwd, not from each loop module's own resolution path, so it can miss a
+ * global-install skew — the per-step derive-probe is the AUTHORITATIVE check
+ * (it catches a foreign-zod schema by the derivation throw, wherever the stray
+ * install sits). This is the cheaper proactive hint. SAME-version installs above
+ * are not a skew (z.toJSONSchema accepts a same-version schema), so they are
+ * suppressed — only a genuine version divergence from the nearest zod is surfaced.
+ */
+function zodSkewWarnings(installs: readonly ZodInstall[]): string[] {
+  const [nearest, ...rest] = installs
+  if (!nearest || rest.length === 0) return []
+  // Only a DIFFERENT version above can fail derivation; a same-version shadow is benign.
+  // Unknown versions ("") stay in — never claim a sameness we can't prove.
+  const skews = rest.filter((s) => s.version !== nearest.version || nearest.version === "")
+  if (skews.length === 0) return []
+  const plural = skews.length === 1 ? "" : "s"
+  const list = skews.map((s) => `${s.path} (zod ${s.version || "version unknown"})`).join(", ")
+  return [
+    `zod resolves here from ${nearest.path} (zod ${nearest.version || "version unknown"}), but ${skews.length} ` +
+      `version-skewed zod install${plural} sit above it (${list}). A dependency-less dir under those — a freshly ` +
+      `scaffolded loop run before \`npm install\`, or a global vernier driving a bare loop file — resolves that zod ` +
+      `instead, and the skew against the kernel's zod then fails schema derivation. Remove the stray install${plural}.`,
+  ]
+}
+
+/**
  * Resolve a step's skills (config skillBindings > declared default; --skill
  * overrides do not apply at rest) and probe each against the discovered
  * registry. Shared by the runnable and broken-runtime paths so a loop whose
@@ -252,6 +323,8 @@ export async function diagnose(
 ): Promise<DoctorReport> {
   const bindings: BindingLayer[] = [config?.bindings ?? new Map<string, string>()]
   const skillBindings: SkillBindingLayer[] = [config?.skillBindings ?? new Map<string, readonly string[]>()]
+  // Environment advisory, loop-independent: a second zod resolvable above the project.
+  const warnings = zodSkewWarnings(probes.zodInstalls())
   const skillRows: SkillReport[] = [
     ...[...skills.skills.values()].map((s) => ({ name: s.name, ok: true, origin: s.origin, detail: s.dir })),
     ...skills.invalid.map((i) => ({ name: i.path, ok: false, origin: i.origin, detail: i.reason })),
@@ -292,7 +365,7 @@ export async function diagnose(
     const retrieverReport = checkRetriever(retrieverFromEnv(), probes)
     checked.set(retrieverReport.id, retrieverReport)
     for (const executor of baseline) await (executor as { shutdown?: () => Promise<void> }).shutdown?.()
-    return { executors: [...checked.values()], skills: skillRows, loops: [], ok: true }
+    return { executors: [...checked.values()], skills: skillRows, loops: [], warnings, ok: true }
   }
 
   const loops: LoopReport[] = []
@@ -355,19 +428,39 @@ export async function diagnose(
           })
         }
         const report = check(registered)
+        // Derive-probe (zod-skew / typeless / unrepresentable): a structuredOutput
+        // step's schema is derived at tick time, before the paid turn. If
+        // derivation throws here — z.any()/z.unknown() collapsing to {} (typeless),
+        // an unrepresentable type, or the loop module having built its signature
+        // with a DIFFERENT zod than the kernel converts with (skew) — the run would
+        // crash on this step. Surface it at rest instead of mid-run.
+        let schemaError: string | undefined
+        if (step.structuredOutput) {
+          try {
+            derivedOutputSchema(step.signature)
+          } catch (error) {
+            schemaError = error instanceof Error ? error.message : String(error)
+          }
+        }
         // A store op is only as usable as the store's retriever: recall and
         // remember run THROUGH it, so a failed retriever probe blocks them.
         const memoryBlocked =
           retrieverReport !== undefined && !retrieverReport.ok && (registered === recallExecutor || registered === rememberExecutor)
         const skillBlocked = skillReports.some((s) => !s.ok) || promptlessSkills
-        const ok = report.ok && !memoryBlocked && !skillBlocked
+        // Block priority, most fundamental first: executor unresolved/probe-failed
+        // > schema won't derive > memory retriever down > skill unresolved.
+        // schemaError is set only for structuredOutput steps, so it is vacuously
+        // absent (undefined) for every other step.
+        const ok = report.ok && !schemaError && !memoryBlocked && !skillBlocked
         const why = !report.ok
           ? report.detail
-          : memoryBlocked
-            ? retrieverReport!.detail
-            : promptlessSkills
-              ? "declares skills but no prompt template (skills travel through the prompt seam)"
-              : skillReports.find((s) => !s.ok)?.detail ?? "ok"
+          : schemaError
+            ? schemaError
+            : memoryBlocked
+              ? retrieverReport!.detail
+              : promptlessSkills
+                ? "declares skills but no prompt template (skills travel through the prompt seam)"
+                : skillReports.find((s) => !s.ok)?.detail ?? "ok"
         return withSkills({ stepId: step.id, declared: step.executor, resolved, ok, why })
       })
       loops.push({ loopId: entry.loop.id, source: entry.source, runnable: steps.every((s) => s.ok), steps })
@@ -380,6 +473,7 @@ export async function diagnose(
     executors: [...checked.values()],
     skills: skillRows,
     loops,
+    warnings,
     ok: loops.every((l) => l.runnable),
   }
 }
@@ -422,6 +516,10 @@ export function renderDoctor(report: DoctorReport): string[] {
         lines.push(`          skill ${sk.name}${sk.ok ? "" : `  (${sk.detail})`}`)
       }
     }
+  }
+  if (report.warnings.length > 0) {
+    lines.push("", "WARNINGS")
+    for (const w of report.warnings) lines.push(`  !!  ${w}`)
   }
   lines.push(
     "",

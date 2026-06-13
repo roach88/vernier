@@ -32,7 +32,7 @@ const routeShaped = z.object({
   routeToWorker: z.boolean(),
   worker: z.string(),
   reason: z.string(),
-  route: z.record(z.unknown()).optional(),
+  route: z.record(z.string(), z.unknown()).optional(),
 })
 
 // ------------------------------------------------------- the strict lint
@@ -55,6 +55,9 @@ function lintOpenAiStrict(schema: unknown, path = "$"): string[] {
   if (node.type === undefined && !("anyOf" in node) && !("oneOf" in node) && !("allOf" in node) && !("enum" in node) && !("const" in node) && !("$ref" in node)) {
     problems.push(`${path}: schema node with no type/anyOf/enum/const`)
   }
+  // OpenAI strict mode rejects `propertyNames` (a v4 z.toJSONSchema record tag);
+  // strictify must drop it. Without this check the lint is blind to the keyword.
+  if ("propertyNames" in node) problems.push(`${path}: \`propertyNames\` is unsupported by OpenAI strict mode`)
   if (types.includes("object") && node.properties && typeof node.properties === "object") {
     const keys = Object.keys(node.properties as Record<string, unknown>)
     const required = Array.isArray(node.required) ? (node.required as string[]) : []
@@ -87,6 +90,7 @@ describe("toCodexOutputSchema: additionalProperties:false on EVERY object node",
     const strict = toCodexOutputSchema(derivedOutputSchema(sig(z.object({}), routeShaped)))
     const route = (strict.properties as Record<string, JSONSchema>).route!
     expect(route.additionalProperties).toBe(false)
+    expect("propertyNames" in route).toBe(false) // v4 emits it on z.record; strictify drops it (OpenAI strict rejects it)
     expect(route.type).toEqual(["object", "null"]) // optional -> nullable, preserved
   })
 
@@ -203,6 +207,11 @@ describe("OpenAI-strict lint over every shipped structured-output surface", () =
         `${label}: expected a finding at ${where}, got: ${problems.join("; ")}`,
       ).toBe(true)
     }
+  })
+
+  it("lint self-test: a stray propertyNames is caught on its own (the v4 z.record tag OpenAI strict rejects)", () => {
+    const problems = lintOpenAiStrict({ type: "object", additionalProperties: false, propertyNames: { type: "string" } })
+    expect(problems.some((p) => p.includes("propertyNames"))).toBe(true)
   })
 })
 

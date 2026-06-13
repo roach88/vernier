@@ -55,8 +55,11 @@ export function validate(schema: JSONSchema, value: unknown): ValidationResult {
  * keys"; the model can emit only `{}` (or `null` when the field was
  * optional). Loops keep record fields populated through the
  * OutputProjection seam instead of model emission — the coding-review
- * template's `routeRecord` is the worked example. Known un-coerced shapes
- * with no current users: empty-schema `items` and `patternProperties`.
+ * template's `routeRecord` is the worked example. zod v4's z.toJSONSchema also
+ * tags every record with `propertyNames:{type:"string"}` — dropped here, since
+ * OpenAI strict rejects that keyword and a closed object has no open key names
+ * left to constrain. Known un-coerced shapes with no current users:
+ * empty-schema `items` and `patternProperties`.
  */
 export function toCodexOutputSchema(schema: JSONSchema): JSONSchema {
   return strictify(schema) as JSONSchema
@@ -99,6 +102,13 @@ function strictify(node: unknown): unknown {
       } else {
         out[k] = strictify(v)
       }
+    } else if (k === "propertyNames") {
+      // DROP: OpenAI strict mode rejects `propertyNames` (invalid_json_schema),
+      // and zod v4 emits it on every z.record (`{type:"string"}` — JSON keys are
+      // strings, so it is trivially always true). A strictified object is closed
+      // to additionalProperties:false regardless, so there are no open key names
+      // left to constrain. Same lossiness ledger as the open-map collapse below;
+      // v3's zod-to-json-schema never emitted it (a v4-emitter-only coercion).
     } else if (k === "anyOf" || k === "oneOf" || k === "allOf") {
       out[k] = Array.isArray(v) ? v.map(strictify) : strictify(v)
     } else if (k === "$defs" || k === "definitions") {

@@ -58,11 +58,11 @@ export const vernierConfigSchema = z
     /** Paths to executor modules; each default-exports an Executor or Executor[]. */
     executors: z.array(z.string()).optional(),
     /** Executor bindings: stepId-or-executorId -> executorId. */
-    bindings: z.record(z.string()).optional(),
+    bindings: z.record(z.string(), z.string()).optional(),
     /** Explicit Agent Skill registrations: a SKILL.md file, a skill dir, or a parent dir of skill dirs. Wins name collisions against .claude/skills discovery. */
     skills: z.array(z.string()).optional(),
     /** Skill bindings: stepId-or-executorId -> skill name(s) (a name, a comma-separated list, or an array). */
-    skillBindings: z.record(z.union([z.string(), z.array(z.string())])).optional(),
+    skillBindings: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
     /** Backing provider for the built-in judge/distill wrapper. The provider value is validated by parseJudgeBlock (see judgeProviderError). */
     judge: z.object({ provider: z.string() }).strict().optional(),
   })
