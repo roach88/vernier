@@ -51,6 +51,148 @@ artifact inside a git-observed effect scope); `verified-answer` and
 `self-improving` prove the iterate-until-verified and compounding-memory
 shapes on the same five slots.
 
+### Example: Codex routes, Cursor handles a delegated coding step
+
+There is no special "orchestrator" object. The engine is Vernier; Codex can
+play the route/orchestrator **step** because that step's executor binding
+resolves to `codex`. A second step can delegate the coding read to
+`cursor-agent`.
+
+Cursor is currently read-only in Vernier, so this is a read-only coding test
+case: Cursor inspects the repo and returns a patch plan or diff text, but it
+does not apply edits. If the coding step must write files, bind it to `codex`
+or `claude` instead.
+
+```jsonc
+// vernier.config.json
+{
+  "loops": ["./codex-cursor-readonly-loop.mjs"],
+  "bindings": {
+    "route": "codex",
+    "implement": "cursor-agent"
+  }
+}
+```
+
+The loop data stays provider-neutral. Both steps declare the role
+`agent`; the config above is what chooses Codex for routing and Cursor for
+the delegated coding step:
+
+```js
+// codex-cursor-readonly-loop.mjs
+import { z } from "zod"
+import { defineLoop, noEffects, retryPolicy, sig } from "vernier"
+
+const basePolicy = retryPolicy({ maxAttempts: 1 })
+const policy = (obs) => {
+  const decision = basePolicy(obs)
+  if (obs.stepId !== "route" || decision.kind !== "continue" || decision.classification !== "success") return decision
+  if (obs.output?.decision === "reject") {
+    return {
+      kind: "escalate",
+      classification: "no_op",
+      summary: "Codex rejected the task before delegation.",
+      notes: [String(obs.output.reason ?? "no reason recorded")],
+      improvement: "Narrow the task until it is safe to inspect.",
+    }
+  }
+  return { ...decision, summary: "route approved; continue to implement." }
+}
+
+const loop = {
+  id: "codex-cursor-readonly",
+  version: "0.1.0",
+  signature: sig(
+    z.object({ task: z.string() }),
+    z.object({ decision: z.string(), patchPlan: z.string() }),
+  ),
+  steps: [
+    {
+      id: "route",
+      executor: "agent",
+      signature: sig(
+        z.object({ task: z.string() }),
+        z.object({ decision: z.enum(["delegate", "reject"]), reason: z.string() }),
+      ),
+      structuredOutput: true,
+      effects: noEffects(),
+      prompt: (spec) =>
+        `Return decision=delegate only if this coding task is safe for a read-only repo inspection.\n\nTask: ${spec.inputs.task}`,
+    },
+    {
+      id: "implement",
+      executor: "agent",
+      signature: sig(
+        z.object({ task: z.string(), decision: z.string(), reason: z.string() }),
+        z.object({ patchPlan: z.string() }),
+      ),
+      effects: noEffects(),
+      prompt: (spec) =>
+        `Read the repository and propose the smallest safe patch. Do not edit files.\n\nTask: ${spec.inputs.task}`,
+    },
+  ],
+  policy,
+  trust: "dry-run",
+  ledger: {},
+}
+
+export default defineLoop({
+  loop,
+  live: true,
+  summary: "Codex gates a read-only coding task, Cursor proposes the patch plan.",
+  signature: "task:string -> decision:string, patchPlan:string",
+})
+```
+
+Run the live test case:
+
+```sh
+vernier doctor
+vernier run codex-cursor-readonly \
+  --input '{"task":"Inspect src/cache.ts and propose the smallest safe patch. Return a plan only."}'
+vernier show <runId>
+```
+
+Representative `vernier show` output, with paths and token counts varying
+by machine and provider:
+
+```
+run       codex-cursor-readonly-20260615-021422-a91c4e
+loop      codex-cursor-readonly@0.1.0
+status    done
+journal   .vernier/runs/codex-cursor-readonly-20260615-021422-a91c4e/journal.jsonl
+--- timeline (9 events) ---
+ +0.00s  ◷ run start — codex-cursor-readonly@0.1.0 (trust=dry-run, keys=loop-v2)
+ +0.00s  ▶ route#1.1 started (codex)
+ +5.84s  ✔ route#1.1 completed — in=1,184 out=147 · 5.8s
+ +5.84s  ± route#1.1 effects: 0 files changed (allowed)
+ +5.84s  → route#1.1 continue/success — route approved; continue to implement.
+ +5.85s  ▶ implement#1.1 started (cursor-agent)
++18.20s  ✔ implement#1.1 completed — in=8,942 out=612 · 12.3s
++18.20s  ± implement#1.1 effects: 0 files changed (allowed)
++18.20s  ■ implement#1.1 stop/success — patch plan returned; no files changed.
+--- per-step usage ---
+step       execs  tok-in  tok-out  time
+route      1      1,184   147      5.8s
+implement  1      8,942   612      12.3s
+```
+
+The underlying `journal.jsonl` is the source of truth. Abridged entries show
+the same loop-as-data story as append-only facts:
+
+```jsonl
+{"type":"step_started","stepId":"route","iteration":1,"attempt":1,"executorId":"codex"}
+{"type":"decision","stepId":"route","decision":{"kind":"continue","classification":"success"}}
+{"type":"step_started","stepId":"implement","iteration":1,"attempt":1,"executorId":"cursor-agent"}
+{"type":"step_result","stepId":"implement","status":"completed","output":{"patchPlan":"..."},"outputValid":true}
+{"type":"effects","stepId":"implement","observation":{"changed":[],"allowed":true,"unexpected":[]}}
+{"type":"decision","stepId":"implement","decision":{"kind":"stop","classification":"success"}}
+```
+
+That is the point of a loop as data: the step ids, signatures, effects, and
+policy are stable declarative facts; provider choice is a binding layer, and
+the ledger proves which executor actually ran each step.
+
 ## Install
 
 Not yet on npm — the name (`vernier`) is settled; the publish itself is the
