@@ -94,7 +94,9 @@ from it without re-executing completed steps. Nothing is ever rewritten.
 
 ## 2. Install & preflight
 
-Not yet on npm; install from a checkout:
+Vernier requires Node 22+. Once it is published, install it in a project with
+`npm install -D vernier` and run the CLI with `npx vernier`. Until then,
+install from a checkout:
 
 ```sh
 git clone https://github.com/roach88/vernier && cd vernier

@@ -5,11 +5,85 @@ An agent-orchestration kernel. Not a framework.
 > The loop is data; the step is typed; the executor is fungible;
 > the policy is pure; the ledger is append-only.
 
-New here? Start with [docs/walkthrough.md](docs/walkthrough.md) — the guided tour, zero to mastery.
+## Start here
 
-Current architecture and operator notes live in this README,
-[docs/walkthrough.md](docs/walkthrough.md), and [HANDOFF.md](HANDOFF.md).
-Older rationale is archived under `docs/archive/`.
+If you want to use Vernier inside an existing codebase, start in that
+codebase. Vernier keeps loops, config, and ledgers project-local; the CLI can
+be global, but the work happens wherever you run it.
+
+Prerequisite: **Node 22+**.
+
+Once Vernier is published, the normal project install is:
+
+```sh
+npm install -D vernier
+npx vernier init smoke
+npx vernier run control-plane-smoke-test --json
+npx vernier show <runId>
+```
+
+Today, install from this checkout, then run the same CLI from your target repo:
+
+```sh
+git clone https://github.com/roach88/vernier && cd vernier
+npm install
+npm run build
+npm link
+
+cd /path/to/your/codebase
+vernier init smoke
+vernier run control-plane-smoke-test --json
+vernier show <runId>
+```
+
+`vernier init smoke` scaffolds a deterministic starter into the current
+directory: `vernier.config.json`, a loop module, and a README. It needs no
+agent credentials. Run journals land under `./.vernier/runs/<runId>/`, with
+`journal.jsonl` as the source of truth.
+
+For a real agent-backed starter:
+
+```sh
+vernier init coding-review
+vernier doctor
+vernier run plan-work-review --input '{"task":"Write one scoped dry-run note artifact."}'
+```
+
+Pick one provider CLI and make sure it is on PATH before binding agent steps:
+
+| provider | use when | setup |
+|---|---|---|
+| `codex` | read-only and workspace-write steps | `codex` on PATH |
+| `claude` | read-only and workspace-write steps with Claude Code | `claude` on PATH |
+| `cursor-agent` | read-only and workspace-write steps with Cursor | Cursor `agent` or `cursor-agent` on PATH, or `VERNIER_CURSOR_BIN`; set `VERNIER_CURSOR_MODEL=composer-2.5` to choose Composer 2.5 |
+| `opencode` / `pi` | effect-free agent steps | CLI on PATH; write-scoped steps fail closed |
+
+`vernier doctor` reports every discovered provider and then checks whether the
+loops registered in the current repo are runnable. Missing providers are fine
+until a registered step is actually bound to them.
+
+## Working on Vernier itself
+
+For contributing to this repo:
+
+```sh
+git clone https://github.com/roach88/vernier && cd vernier
+npm install
+npm test
+npm run build
+npm run typecheck
+```
+
+`bin/vernier.js` prefers `dist/` when it exists and falls back to running the
+TypeScript through tsx. After editing source, rebuild or remove `dist/` before
+trusting the compiled bin.
+
+New here and want the long tour? Read
+[docs/walkthrough.md](docs/walkthrough.md). Provider details live in
+[docs/provider-executors.md](docs/provider-executors.md), and runnable example
+modules live under [examples/getting-started](examples/getting-started).
+Current architecture and operator notes live in this README and
+[HANDOFF.md](HANDOFF.md). Older rationale is archived under `docs/archive/`.
 
 ## The five-slot model
 
@@ -194,45 +268,13 @@ That is the point of a loop as data: the step ids, signatures, effects, and
 policy are stable declarative facts; provider choice is a binding layer, and
 the ledger proves which executor actually ran each step.
 
-## Install
-
-Not yet on npm — the name (`vernier`) is settled; the publish itself is the
-remaining step. Install from a checkout:
-
-```sh
-git clone https://github.com/roach88/vernier && cd vernier
-npm install
-npm run build     # tsc -> dist/ (ESM + .d.ts); bin/vernier.js then runs under PLAIN node
-npm link          # optional: a global `vernier` on PATH
-```
-
-Agent providers are CLIs on PATH — `codex`, `claude` (Claude Code),
-Cursor's `agent` or `cursor-agent`, `opencode`, `pi` — and none is required to install or to
-run the test suite: `vernier doctor` tells you which are usable on this
-machine, and any of them can fill any role. Memory recall uses the built-in
-lexical BM25 ranker by default; custom retrievers are opt-in code.
-
-## Quickstart
-
-```sh
-vernier doctor                                # which executors are usable; which loops are runnable
-vernier init                                  # list the starter templates
-vernier init smoke                            # scaffold the deterministic starter into . (no agent, no auth)
-vernier run control-plane-smoke-test --json   # the scaffolded smoke loop end-to-end
-vernier loops                                 # everything registered (your config — vernier ships no builtins)
-```
-
-## Dev flows (no build needed)
+## Dev flows
 
 ```sh
 npm test                   # vitest: all fake/deterministic — no auth, no network
 npm run vernier -- loops    # the CLI from source through tsx
 VERNIER_LIVE=1 npm test -- coding-review.live   # gated: the coding-review template on real agents
 ```
-
-`bin/vernier.js` prefers `dist/` when it exists and falls back to running
-the TypeScript through tsx — after editing source, rebuild (or remove
-`dist/`) before trusting the compiled bin.
 
 ## The CLI
 
@@ -336,7 +378,7 @@ files), and the scaffold is yours to edit:
 | template | loop id | teaches | needs |
 |---|---|---|---|
 | `smoke` | `control-plane-smoke-test` | the whole five-slot lifecycle, hand-rolled, nothing hidden | nothing — no agent, no auth |
-| `coding-review` | `plan-work-review` | an LLM route gate + a contract-checked artifact in a bounded fs scope; `implement` carries a per-step Agent Skill | any wired agent (bindings ship on codex; `implement` needs codex or claude for enforced writes) |
+| `coding-review` | `plan-work-review` | an LLM route gate + a contract-checked artifact in a bounded fs scope; `implement` carries a per-step Agent Skill | any wired agent (bindings ship on codex; write-scoped `implement` works on codex, claude, or cursor-agent) |
 | `verified-answer` | `verified-answer` | independent judging + `until` iteration with feedback threading | any wired agent for `answer`; the judge runs on codex unless the config's `judge` block says otherwise |
 | `self-improving` | `compounding-answer` | recall → answer → grade → distill → remember; memory compounds across runs | any wired agent for `answer`; judge/distill on codex by default (rebind via the `judge` block) |
 
@@ -344,18 +386,18 @@ The agent templates name NO provider in the loop data: steps declare the
 binding target `agent`, and each scaffolded `vernier.config.json` carries
 the binding (`"bindings": { "answer": "codex" }`) — visible data you point
 at codex, claude, cursor-agent, opencode, or pi (`vernier doctor` says
-which are usable; providers without enforced write boundaries fail closed
-on write-scoped steps). Each template's README spells out its bindings and
-its honest provider caveats.
+which are usable; providers without enforced write boundaries, currently
+opencode and pi, fail closed on write-scoped steps). Each template's README
+spells out its bindings and its honest provider caveats.
 
 ## Write your own loop
 
 The point of v1: your loops live in **your** repo, not this one. A config
 file registers loop modules, executor modules, and bindings; the CLI
-discovers it and merges it into the registry. The executable version of
-everything below lives in
-[test/fixtures/user-config](test/fixtures/user-config) — the test suite
-runs it, so it cannot rot.
+discovers it and merges it into the registry. The repo test suite keeps this
+pattern covered in fixtures; installed users can also inspect the packaged
+[examples/getting-started](examples/getting-started) modules for a runnable
+small-loop setup.
 
 Three files in your own directory. First, `vernier.config.json`:
 
@@ -475,12 +517,12 @@ Default `codex` when absent; values speak the executor vocabulary
 (`claude`, not the internal worker id). One wrapper instance serves every
 step that names `judge` — the self-improving template's `grade` AND
 `distill` both ride it (per-role splits remain the job of `bindings`).
-Only `codex` and `claude` can back it: opencode and pi refuse the pinned
-read-only sandbox (their workers expose no enforceable sandbox — a judge
-that can write is not a judge), and cursor-agent has no per-run config
-plumbing to pin one yet; anything else arrives as an injected `worker` in a
-`defineLoop` runtime. `vernier doctor` probes whichever binary the block
-names.
+Only `codex` and `claude` can back the config-level wrapper today: opencode
+and pi refuse the pinned read-only sandbox (their workers expose no
+enforceable sandbox — a judge that can write is not a judge), and Cursor is
+not yet wired as a constructible judge backend. Anything else arrives as an
+injected `worker` in a `defineLoop` runtime. `vernier doctor` probes
+whichever binary the block names.
 
 Dependency lending, named honestly: a loop module's bare specifiers (`zod`
 above, and `"vernier"` itself in the scaffolded templates) resolve from
@@ -491,8 +533,8 @@ with no install step. The project's node_modules always wins (the fallback
 fires only when default resolution fails); the flip side is that a
 bare-dir template runs against the `zod` version vernier bundles until you
 `npm install` your own. Mechanism: a `module.register()` resolve hook,
-`bin/lend-deps-hooks.mjs`. Once vernier is published, prefer importing the
-helpers — `sig`, `until`, `retryPolicy`, `decideNextStep`,
+`bin/lend-deps-hooks.mjs`. When Vernier is installed as a dependency, prefer
+importing the helpers — `sig`, `until`, `retryPolicy`, `decideNextStep`,
 `fsScope`/`noEffects`, `artifactFromEffects`, `scriptExecutor`,
 `defineConfig`/`defineLoop`, and the types — from `"vernier"`;
 that root export is the library surface, and it is deliberately small.
@@ -520,8 +562,9 @@ with this process's full privileges** — loading a config or any module it
 names executes that code, exactly the trust you extend to any npm script.
 Effect scopes bound what a STEP may touch (observed, and for codex
 OS-sandboxed; for claude enforced through Claude Code's permission modes
-and toolset restriction; cursor, opencode, and pi fail
-closed on write scopes); they do not sandbox the config itself. Do not point vernier at a config you would not `node` yourself.
+and toolset restriction; for cursor-agent contained by Cursor's sandbox;
+opencode and pi fail closed on write scopes); they do not sandbox the config
+itself. Do not point vernier at a config you would not `node` yourself.
 
 ## Memory & recall
 

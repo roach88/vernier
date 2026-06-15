@@ -22,7 +22,10 @@
   "files": [
     "dist",
     "bin",
+    "docs",
+    "examples",
     "templates",
+    "HANDOFF.md",
     "NOTICE",
     "src/executors/vendor/omegacode/LICENSE"
   ],
