@@ -144,7 +144,7 @@ function frontmatterFields(text: string, file: string): Map<string, string> {
     if (colon <= 0) throw new SkillError(`\`${file}\`: frontmatter line ${i + 2} is not \`key: value\`: \`${line}\`.`)
     const key = line.slice(0, colon).trim()
     const value = line.slice(colon + 1).trim()
-    if (value === "" || value.startsWith(">") || value.startsWith("|")) {
+    if (value === "" || /^[>|][+\-]?\d*$/.test(value)) {
       throw new SkillError(`\`${file}\`: frontmatter line ${i + 2} must use a simple one-line value.`)
     }
     if (

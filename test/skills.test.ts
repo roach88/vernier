@@ -135,6 +135,20 @@ describe("parseSkillFile: the agentskills.io frontmatter rules", () => {
     })
   })
 
+  it("allows plain one-line values that begin with block-scalar marker characters", () => {
+    const greater = writeSkill(scratch("leading-greater"), {
+      name: "leading-greater",
+      frontmatter: "---\nname: leading-greater\ndescription: > 99% reliable. Use when testing punctuation.\n---\n",
+    })
+    const pipe = writeSkill(scratch("leading-pipe"), {
+      name: "leading-pipe",
+      frontmatter: "---\nname: leading-pipe\ndescription: | command output. Use when testing punctuation.\n---\n",
+    })
+
+    expect(parseSkillFile(greater)).toEqual({ name: "leading-greater", description: "> 99% reliable. Use when testing punctuation." })
+    expect(parseSkillFile(pipe)).toEqual({ name: "leading-pipe", description: "| command output. Use when testing punctuation." })
+  })
+
   it("parses a SKILL.md prefixed with a UTF-8 BOM and skillBody returns BOM-free content", () => {
     const file = writeSkill(scratch("bom"), {
       name: "bommed",
