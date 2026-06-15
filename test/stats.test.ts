@@ -192,7 +192,7 @@ describe("buildTimeline", () => {
       [
         JSON.stringify(meta("plan-work-review", "legacy-1", { keyVersion: "loop-v1" })),
         // Pre-loop-v2 entries: no `iteration`; this one also carries no usage.
-        '{"type":"step_started","key":"k1","stepId":"route","attempt":1,"executorId":"hermes","at":"2026-06-10T00:00:01.000Z"}',
+        '{"type":"step_started","key":"k1","stepId":"route","attempt":1,"executorId":"legacy-agent","at":"2026-06-10T00:00:01.000Z"}',
         '{"type":"step_result","key":"k1","stepId":"route","attempt":1,"status":"completed","output":{},"outputValid":true,"evidence":[],"at":"2026-06-10T00:00:02.000Z"}',
         '{"type":"telemetry","payload":"a future entry type"}',
         '{"type":"decision","key":"k1","stepId":"route","attempt":1,"decision":{"kind":"stop","classification":"success","summary":"done","notes":[],"improvement":"none"},"at":"2026-06-10T00:00:03.000Z"}',

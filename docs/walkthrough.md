@@ -74,7 +74,7 @@ name), and each step's input schema picks what it needs from that plane.
 `run(spec, ctx) -> StepResult`: a deterministic script, the codex CLI, the
 claude CLI, an LLM judge, a human at a keyboard. Steps name an executor
 *id*, and the binding is resolved at run time — so any agent can fill any
-role (`--executor route=hermes`), and swapping providers is a rebind, not
+role (`--executor implement=claude`), and swapping providers is a rebind, not
 a rewrite.
 
 **The policy is pure.** After every step the engine builds an Observation —
@@ -150,10 +150,8 @@ EXECUTORS
   ok  opencode                     `opencode` on PATH (/Users/tyler/.opencode/bin/opencode)
   ok  pi                           `pi` on PATH (/Users/tyler/.bun/bin/pi)
   ok  judge                        `codex` on PATH (/Users/tyler/.local/bin/codex)
-  ok  hermes                       `hermes` on PATH (/Users/tyler/.local/bin/hermes)
   ok  recall                       in-process executor (module loaded)
   ok  remember                     in-process executor (module loaded)
-  ok  memory:lexical               in-process retriever (no external dependency)
 
 LOOPS
   none registered — nothing is broken, and nothing can run yet.
@@ -432,9 +430,8 @@ rejected gate goes straight to `needs_human`.
 vernier run plan-work-review --input '{"task":"Create docs/agent-workflows/runner-dry-runs/<traceId>.md as a harmless dry-run note. Do not edit any other file."}'
 ```
 
-Real run, 2026-06-10 (rendered as described above; this run was made on
-loop v0.2.0, whose route step defaulted to hermes — see the binding note
-below):
+Real run, 2026-06-10 (rendered as described above; this legacy ledger used
+an older route binding):
 
 ```
 run       plan-work-review-20260610-095138
@@ -446,7 +443,7 @@ workdir   <not recorded>
 journal   .looper/runs/plan-work-review-20260610-095138/journal.jsonl
 --- timeline (11 events) ---
  +0.00s  ◷ run start — plan-work-review@0.2.0 (trust=active, keys=loop-v1)
- +0.00s  ▶ route#1.1 started (hermes)
+ +0.00s  ▶ route#1.1 started (legacy-router)
 +10.01s  ✔ route#1.1 completed — in=0 out=0 · 10.0s
 +10.01s  ✔ route#1.1 contract route-decision.v1 passed
 +10.01s  ± route#1.1 effects: 0 files changed (allowed)
@@ -505,12 +502,11 @@ everywhere it appears). Today's plan-work-review (v0.5.1, the template)
 names NO provider at all: both steps declare the binding target `agent`,
 and the scaffolded `vernier.config.json` binds both roles to codex —
 visible data you edit, not a default baked into the loop. One wired agent
-suffices, and it does not have to be codex; the run above is what
-`--executor route=hermes` produces — the orchestrator role itself is just
-a binding, hermes optional:
+suffices, and it does not have to be codex; the orchestrator role itself
+is just a binding:
 
 ```sh
-vernier run plan-work-review --executor route=hermes --input '{"task":"…"}'   # route on hermes (this is the historical configuration)
+vernier run plan-work-review --executor route=claude --input '{"task":"…"}'     # route on claude
 vernier run plan-work-review --executor implement=claude --input '{"task":"…"}'  # codex gates, claude implements
 ```
 
@@ -757,13 +753,10 @@ verified lesson was in the store. That is compounding, and every link in
 the chain — the failed verdict, the distilled rule, the store id, the
 recall, the better first draft — is in the ledgers.
 
-How recall *ranks* the store is pluggable (the Retriever seam). The
-default is BM25 lexical — deterministic, dependency-free. Set
-`VERNIER_RETRIEVER=embedding` (plus `npm install @huggingface/transformers`)
-for the optional semantic tier: vectors computed at remember time, stored
-on the record, versioned by model id, with lexical fallback for anything
-un-embedded. `vernier doctor` probes whichever tier is selected. See
-README "Memory & recall" for the honest determinism caveats.
+How recall *ranks* the store is pluggable (the Retriever seam). The built-in
+ranker is BM25 lexical — deterministic, dependency-free. Keep that until
+measured recall quality needs a custom vector retriever. See README
+"Memory & recall" for the honest determinism caveats.
 
 ---
 
@@ -1403,10 +1396,8 @@ The real gotchas, in the order you will hit them:
   table, memory/recall details, provenance.
 - [HANDOFF](../HANDOFF.md) — current state, conventions, the deliberately
   deferred list, known rough edges.
-- [docs/orchestration-direction.md](orchestration-direction.md) — the
-  design story: why loop-as-data, why the Step is the unit, why the
-  executor is a seam, what was taken from omegacode/loom/Ax and what was
-  deliberately left behind.
+- `docs/archive/` — historical rationale and superseded plans, kept for
+  archaeology rather than current guidance.
 - **The test suite as executable documentation.** The fastest way to learn
   a seam is its tests: `test/tick.test.ts` (the interpreter, replay),
   `test/resume.test.ts` (the decision fold, torn ticks),

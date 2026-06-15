@@ -35,14 +35,13 @@
 //             non-interactive turn has no later "activation" moment, so
 //             activation is the turn itself).
 //
-// The frontmatter parser below handles the YAML SUBSET the spec defines:
-// flat `key: value` scalars (quoted or plain), `key: >`/`|` block scalars,
-// one-level nested maps (`metadata:`), and comments. It does not aspire to
-// be a YAML parser; a SKILL.md the subset cannot read is reported as
-// invalid with the reason.
+// The frontmatter parser below is deliberately tiny: vernier reads only
+// simple one-line `name:` and `description:` fields. Full YAML needs a real
+// parser; this code does not maintain a private subset.
 
 import { cpSync, existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { basename, join } from "node:path"
+import { bindLoopSteps, resolveLayeredBinding, type BindingLayer as GenericBindingLayer } from "../kernel/bindings.js"
 import type { Loop, StepSkill } from "../kernel/types.js"
 
 /** Skill problems are usage/config problems: the CLI maps this to exit 2 with the message verbatim. */
@@ -130,12 +129,7 @@ export function skillBody(file: string): string {
   return text.slice(end).trim()
 }
 
-/**
- * Top-level frontmatter fields as strings. Nested blocks (`metadata:`) and
- * unknown keys are tolerated and skipped — the spec only obliges vernier to
- * read `name` and `description`, and being liberal here keeps skills with
- * newer optional fields loadable.
- */
+/** Top-level simple `key: value` fields as strings. */
 function frontmatterFields(text: string, file: string): Map<string, string> {
   const end = frontmatterEnd(text, file) // validates both fences exist
   const all = text.slice(0, end).split("\n")
@@ -145,25 +139,19 @@ function frontmatterFields(text: string, file: string): Map<string, string> {
   for (let i = 0; i < lines.length; i++) {
     const line = (lines[i] ?? "").replace(/\r$/, "")
     if (line.trim() === "" || line.trimStart().startsWith("#")) continue
-    if (/^\s/.test(line)) continue // nested content (metadata map, block-scalar lines): consumed by its key or skipped
+    if (/^\s/.test(line)) throw new SkillError(`\`${file}\`: frontmatter line ${i + 2} is indented; only simple \`key: value\` lines are supported.`)
     const colon = line.indexOf(":")
     if (colon <= 0) throw new SkillError(`\`${file}\`: frontmatter line ${i + 2} is not \`key: value\`: \`${line}\`.`)
     const key = line.slice(0, colon).trim()
-    let value = line.slice(colon + 1).trim()
-    if (value === ">" || value === ">-" || value === "|" || value === "|-") {
-      // Block scalar: gather the following more-indented lines. `>` folds
-      // with spaces, `|` keeps newlines; the trailing-newline chomp
-      // distinction does not matter for name/description validation.
-      const block: string[] = []
-      while (i + 1 < lines.length && (/^\s/.test(lines[i + 1] ?? "") || (lines[i + 1] ?? "").trim() === "")) {
-        block.push((lines[++i] ?? "").trim())
-      }
-      value = block.join(value.startsWith(">") ? " " : "\n").trim()
-    } else if (
+    const value = line.slice(colon + 1).trim()
+    if (value === "" || /^[>|][+\-]?\d*$/.test(value)) {
+      throw new SkillError(`\`${file}\`: frontmatter line ${i + 2} must use a simple one-line value.`)
+    }
+    if (
       (value.startsWith('"') && value.endsWith('"') && value.length >= 2) ||
       (value.startsWith("'") && value.endsWith("'") && value.length >= 2)
     ) {
-      value = value.slice(1, -1)
+      throw new SkillError(`\`${file}\`: frontmatter line ${i + 2} uses quoted YAML; use a plain one-line value.`)
     }
     fields.set(key, value)
   }
@@ -274,7 +262,7 @@ export function discoverSkills(opts: SkillDiscoveryOpts): SkillRegistry {
 // --------------------------------------------------------------- resolution
 
 /** One layer of skill bindings: stepId-or-executorId -> skill names. Same key vocabulary as executor bindings. */
-export type SkillBindingLayer = ReadonlyMap<string, readonly string[]>
+export type SkillBindingLayer = GenericBindingLayer<readonly string[]>
 
 /**
  * The resolution chain for one step — the executor chain, verbatim: layers
@@ -288,11 +276,7 @@ export function resolveSkillNames(
   step: { readonly id: string; readonly executor: string; readonly skills?: readonly string[] },
   layers: readonly SkillBindingLayer[],
 ): readonly string[] {
-  for (const layer of layers) {
-    const bound = layer.get(step.id) ?? layer.get(step.executor)
-    if (bound !== undefined) return bound
-  }
-  return step.skills ?? []
+  return resolveLayeredBinding(step, layers, step.skills ?? [])
 }
 
 /**
@@ -303,16 +287,13 @@ export function resolveSkillNames(
  * keys strictly.
  */
 export function bindSkills(loop: Loop, layers: readonly SkillBindingLayer[]): Loop {
-  if (layers.every((layer) => layer.size === 0)) return loop
-  let changed = false
-  const steps = loop.steps.map((step) => {
-    const skills = resolveSkillNames(step, layers)
-    const declared = step.skills ?? []
-    if (skills.length === declared.length && skills.every((name, i) => declared[i] === name)) return step
-    changed = true
-    return { ...step, skills }
-  })
-  return changed ? { ...loop, steps } : loop
+  return bindLoopSteps<Loop, Loop["steps"][number], readonly string[]>(
+    loop,
+    layers,
+    (step) => step.skills ?? [],
+    (a, b) => a.length === b.length && a.every((name, i) => b[i] === name),
+    (step, skills) => ({ ...step, skills }),
+  )
 }
 
 // ----------------------------------------------------------------- delivery

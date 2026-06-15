@@ -19,7 +19,6 @@ import type { EngineDeps } from "../engine/tick.js"
 import { ClaudeExecutor } from "../executors/claude.js"
 import { CodexExecutor } from "../executors/codex.js"
 import { CursorExecutor } from "../executors/cursor.js"
-import { HermesExecutor } from "../executors/hermes.js"
 import { JudgeExecutor, type JudgeProvider } from "../executors/judge.js"
 import { recallExecutor, rememberExecutor } from "../executors/memory.js"
 import { OpencodeExecutor } from "../executors/opencode.js"
@@ -110,7 +109,7 @@ function userEntry(reg: LoopRegistration, source: string, judgeProvider: JudgePr
       // Registration executors merge OVER the builtins (the user's module
       // is closest to the user's intent — same rule as config executors).
       const executors = new Map<string, Executor>(
-        executorRegistry(...providers.executors, judge, new HermesExecutor(), recallExecutor, rememberExecutor),
+        executorRegistry(...providers.executors, judge, recallExecutor, rememberExecutor),
       )
       for (const executor of reg.executors ?? []) executors.set(executor.id, executor)
       return {

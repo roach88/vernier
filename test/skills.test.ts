@@ -62,19 +62,16 @@ describe("parseSkillFile: the agentskills.io frontmatter rules", () => {
     expect(parseSkillFile(file)).toEqual({ name: "pdf-processing", description: "Extract PDF text. Use when handling PDFs." })
   })
 
-  it("tolerates quoted values, unknown fields, comments, and a nested metadata map", () => {
+  it("tolerates comments and unknown simple one-line fields", () => {
     const file = writeSkill(scratch("opt"), {
       name: "with-extras",
       frontmatter: [
         "---",
         "# a comment",
-        'name: "with-extras"',
-        "description: 'Does extra things. Use when testing extras.'",
+        "name: with-extras",
+        "description: Does extra things. Use when testing extras.",
         "license: Apache-2.0",
         "compatibility: Requires nothing",
-        "metadata:",
-        "  author: example-org",
-        '  version: "1.0"',
         "allowed-tools: Bash(git:*) Read",
         "---",
         "",
@@ -83,20 +80,73 @@ describe("parseSkillFile: the agentskills.io frontmatter rules", () => {
     expect(parseSkillFile(file)).toEqual({ name: "with-extras", description: "Does extra things. Use when testing extras." })
   })
 
-  it("folds a `>` block-scalar description", () => {
-    const file = writeSkill(scratch("fold"), {
-      name: "folded",
-      frontmatter: "---\nname: folded\ndescription: >\n  Line one\n  line two.\n---\n",
-    })
-    expect(parseSkillFile(file).description).toBe("Line one line two.")
+  it("rejects quoted YAML, block scalars, and nested maps instead of owning a YAML subset", () => {
+    expect(() =>
+      parseSkillFile(
+        writeSkill(scratch("quoted"), {
+          name: "quoted",
+          frontmatter: '---\nname: "quoted"\ndescription: quoted values are YAML.\n---\n',
+        }),
+      ),
+    ).toThrow(/quoted YAML/)
+    expect(() =>
+      parseSkillFile(
+        writeSkill(scratch("fold"), {
+          name: "folded",
+          frontmatter: "---\nname: folded\ndescription: >\n  Line one\n---\n",
+        }),
+      ),
+    ).toThrow(/simple one-line value/)
+    expect(() =>
+      parseSkillFile(
+        writeSkill(scratch("nested"), {
+          name: "nested",
+          frontmatter: "---\nname: nested\ndescription: Plain description.\nmetadata:\n  author: example-org\n---\n",
+        }),
+      ),
+    ).toThrow(/simple one-line value/)
+    expect(() =>
+      parseSkillFile(
+        writeSkill(scratch("block-variant"), {
+          name: "block-variant",
+          frontmatter: "---\nname: block-variant\ndescription: |2\n  Line one\n---\n",
+        }),
+      ),
+    ).toThrow(/simple one-line value/)
+    expect(() =>
+      parseSkillFile(
+        writeSkill(scratch("single-quoted"), {
+          name: "single-quoted",
+          frontmatter: "---\nname: single-quoted\ndescription: 'quoted values are YAML.'\n---\n",
+        }),
+      ),
+    ).toThrow(/quoted YAML/)
   })
 
-  it("keeps newlines in a `|` literal block-scalar description", () => {
-    const file = writeSkill(scratch("literal"), {
-      name: "literal",
-      frontmatter: "---\nname: literal\ndescription: |\n  Line one\n  line two.\n---\n",
+  it("allows plain one-line values that begin with apostrophes", () => {
+    const file = writeSkill(scratch("leading-apostrophe"), {
+      name: "leading-apostrophe",
+      frontmatter: "---\nname: leading-apostrophe\ndescription: 'twas a plain description. Use when testing punctuation.\n---\n",
     })
-    expect(parseSkillFile(file).description).toBe("Line one\nline two.")
+
+    expect(parseSkillFile(file)).toEqual({
+      name: "leading-apostrophe",
+      description: "'twas a plain description. Use when testing punctuation.",
+    })
+  })
+
+  it("allows plain one-line values that begin with block-scalar marker characters", () => {
+    const greater = writeSkill(scratch("leading-greater"), {
+      name: "leading-greater",
+      frontmatter: "---\nname: leading-greater\ndescription: > 99% reliable. Use when testing punctuation.\n---\n",
+    })
+    const pipe = writeSkill(scratch("leading-pipe"), {
+      name: "leading-pipe",
+      frontmatter: "---\nname: leading-pipe\ndescription: | command output. Use when testing punctuation.\n---\n",
+    })
+
+    expect(parseSkillFile(greater)).toEqual({ name: "leading-greater", description: "> 99% reliable. Use when testing punctuation." })
+    expect(parseSkillFile(pipe)).toEqual({ name: "leading-pipe", description: "| command output. Use when testing punctuation." })
   })
 
   it("parses a SKILL.md prefixed with a UTF-8 BOM and skillBody returns BOM-free content", () => {

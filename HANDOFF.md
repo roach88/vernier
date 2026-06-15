@@ -4,7 +4,8 @@ _Last updated: 2026-06-11 · remote: `roach88/vernier` (private)_
 
 Working handoff for the next person/agent: where the project is after the
 two v1 units, the conventions that have held, and what is deliberately
-deferred. Full design rationale: [`docs/orchestration-direction.md`](docs/orchestration-direction.md).
+deferred. Current architecture is in the README and walkthrough; superseded
+planning rationale is archived under `docs/archive/`.
 
 ---
 
@@ -33,7 +34,7 @@ special-casing**. That generality is the whole point; protect it.
 | Step | Commit | What landed |
 |---|---|---|
 | 1 | `c8f7c72` | Five-slot kernel, `tick()`, append-only ledger, script executor, Pilot-0 |
-| 2 | `2acb2a8` | Vendored omegacode codex worker behind the `Executor` seam, hermes router as a step, git-aware effect attribution, live Pilot-1 |
+| 2 | `2acb2a8` | Vendored omegacode codex worker behind the `Executor` seam, router as a step, git-aware effect attribution, live Pilot-1 |
 | — | `e995e65` | Hardening: artifact from effect attribution, retry-hint threading, composed abort |
 | 3 | `dd9e080` | `until` combinator + generic loop-back, independent LLM-judge executor, live Pilot-2 |
 | 4 | `e56f9d8` | Memory as steps + distill, live Pilot-3 (compounding across runs) |
@@ -44,10 +45,10 @@ special-casing**. That generality is the whole point; protect it.
 
 | Unit | Commit | What landed |
 |---|---|---|
-| 1 | `a7fb042` | Out-of-tree loops (`vernier.config.{ts,js,mjs,json}`, discovery + `$VERNIER_CONFIG`), any-agent-any-role executor bindings (`--executor` > config `bindings` > loop default), multi-file artifacts (`artifactsFromEffects`) |
+| 1 | `a7fb042` | Out-of-tree loops (`vernier.config.{ts,js,mjs,json}`, discovery + `$VERNIER_CONFIG`), any-agent-any-role executor bindings (`--executor` > config `bindings` > loop default), effect-derived artifact output (`artifactFromEffects`) |
 | 2 | `9f6f1b1` | Shippability: build pipeline (tsc → `dist/`, compiled bin under plain node), `vernier` package surface (root export + types, files/exports), MIT LICENSE, `vernier doctor`, claude executor wired (lazy optional-peer SDK), README tutorial |
 | 3 | `26f4c9d` | Breadth: opencode + pi executors wired (write scopes fail closed — the providers expose no enforceable sandbox; effect-free steps run on their only mode), vendored factory flipped to the real workers, doctor probes both binaries |
-| B | `544e280` | Semantic recall: pluggable `Retriever` seam on Memory — BM25 lexical default (ranked, tiny-store-safe), optional embedding tier (`VERNIER_RETRIEVER=embedding`, `@huggingface/transformers` as a lazy optional peer, remember-time vectors versioned on the JSONL record, lexical fallback for un-embedded records), custom retrievers via the exported interface + Memory constructor; doctor probes the selected tier |
+| B | `544e280` | Semantic recall: pluggable `Retriever` seam on Memory — BM25 lexical default (ranked, tiny-store-safe), custom retrievers via the exported interface + Memory constructor |
 | C | `d6241f8` | Observability: `vernier show` renders run timelines (relative offsets, contract/effects/decision events, retry↔iterate transitions explicit, per-STEP usage attribution, closing summary) and new `vernier stats` rolls up usage per run + per loop (`--loop`/`--last` filters, cost ONLY from explicit `--price-in/--price-out` USD-per-1M-token prices — tokens are the honest unit); pure derivations over the ledger in `src/ledger/stats.ts`, legacy/torn journals degrade gracefully |
 | — | `43744f0` | **Rebrand: looper → vernier** (Tyler's call; npm name `vernier` verified free). Clean break, no fallbacks: package `vernier` (`private` removed), bin `vernier`, env `VERNIER_*` (was `LOOPER_*`), config `vernier.config.{ts,js,mjs,json}`, default state dir `./.vernier`, public API `VernierConfig`/`vernierConfigSchema`. Loop ids, the `loop-v2` resume-key version, journal shapes, NOTICE, LICENSE, vendored sources, and historical docs unchanged. Old runs under `./.looper` are not listed unless `VERNIER_HOME` points there. |
 | — | `8f7f519` | **claude = the Claude Code CLI on PATH** (Tyler's call: every provider is a CLI; the SDK detour is gone). `ClaudeExecutor` now wraps vernier's own `ClaudeCliWorker` (`claude -p --output-format stream-json`, prompt on stdin, real `--json-schema` structured output, posture: read-only toolset for effect-free steps / `acceptEdits` for write scopes, never a bypass flag). `@anthropic-ai/claude-agent-sdk` removed from devDeps + optional peers, the `overrides` zod pin removed with it (that rough edge is GONE), the vendored SDK worker deleted (NOTICE updated). JudgeExecutor de-privileged: the backing provider is a constructor binding (`provider: "codex" \| "claude-code"`, or any injected worker), carried on the AgentSpec and reported honestly by doctor. Docs normalized: tests are auth-free, agents are fungible, codex is a transcript default — not a requirement. |
@@ -65,11 +66,11 @@ install or test. Compiled-bin smoke: `vernier init smoke` in a scratch dir →
 the judge row.
 
 ### Code map
-- `src/kernel/` — `types.ts` (the five-slot model), `policy.ts` (`decideNextStep`, `retryPolicy`, `until`), `contract.ts`, `effects.ts` (hash observer + `artifactsFromEffects`), `git-effects.ts`
+- `src/kernel/` — `types.ts` (the five-slot model), `policy.ts` (`decideNextStep`, `retryPolicy`, `until`), `contract.ts`, `effects.ts` (hash observer + `artifactFromEffects`), `git-effects.ts`
 - `src/engine/` — `tick.ts` (the interpreter + replay-by-key), `resume.ts` (decision-fold reconstruction), `lease.ts` (file-based run lease)
 - `src/ledger/ledger.ts` — append-only `journal.jsonl`; resume key `loop-v2`; `stats.ts` — pure timeline + usage/cost roll-up derivations (`vernier show`/`stats` render these)
-- `src/memory/` — `memory.ts` (append-only rule store; retriever-ranked recall), `retriever.ts` (the pluggable Retriever seam + BM25 lexical default), `embedding.ts` (optional embedding tier behind the lazy-optional-peer pattern)
-- `src/executors/` — `script`, `codex`, `cursor` (read-only steps), `claude` (the Claude Code CLI: read-only toolset for effect-free steps, `acceptEdits` for write scopes), `opencode` / `pi` (effect-free steps only; writes fail closed), `hermes`, `judge` (provider-bindable; codex default), `memory`, `evidence`; `vendor/omegacode/` (MIT — see `NOTICE`)
+- `src/memory/` — `memory.ts` (append-only rule store; retriever-ranked recall), `retriever.ts` (the pluggable Retriever seam + BM25 lexical default)
+- `src/executors/` — `script`, `codex`, `cursor` (read-only steps), `claude` (the Claude Code CLI: read-only toolset for effect-free steps, `acceptEdits` for write scopes), `opencode` / `pi` (effect-free steps only; writes fail closed), `judge` (provider-bindable; codex default), `memory`, `evidence`; `vendor/omegacode/` (MIT — see `NOTICE`)
 - `src/cli/` — `main.ts` (commands, incl. `init` template scaffolding), `registry.ts` (ships EMPTY; user entries only — `wiredProviders()` registers codex/cursor/claude/opencode/pi in every config loop's runtime), `config.ts` (out-of-tree registration + binding resolution), `doctor.ts` (probes + per-loop runnability; zero loops → baseline probe, exit 0)
 - `src/index.ts` — the library surface (`vernier` root export, deliberately small)
 - `bin/vernier.js` — prefers `dist/` (plain node); falls back to tsx for unbuilt checkouts
@@ -121,11 +122,10 @@ npm test                                   # auth-free suite
   the `npm publish` call itself (plus the GitHub repo rename). The package
   surface is already verified via `npm pack` + consumer-install smoke.
 - **Config-level retriever registration** — semantic recall itself SHIPPED
-  (Retriever seam, BM25 default, optional embedding tier; see README
-  "Memory & recall"); what remains deferred is a `retriever` key in
-  `vernier.config` — today the tiers are selected by `VERNIER_RETRIEVER`
-  (or a custom retriever via the Memory constructor in a `runtime`
-  factory), which covers every current use without new config plumbing.
+  (Retriever seam, BM25 default; see README "Memory & recall"); what
+  remains deferred is a `retriever` key in `vernier.config` — today a
+  custom retriever is constructed via the Memory constructor in a `runtime`
+  factory, which covers every current use without new config plumbing.
 
 ---
 
@@ -167,25 +167,14 @@ npm test                                   # auth-free suite
   controls. Verified against claude 2.1.173; the worker preflights a 2.0
   minimum version. If a future CLI changes print-mode permission
   semantics, the posture needs re-verifying.
-- **`HermesExecutor` ignores `ctx.signal`** (its subprocess has its own
-  timeout; no caller passes a signal yet).
-- **doctor's memory claim covers the builtins only:** the retriever probe
-  covers the builtin `Memory` + recall/remember executors — a custom
-  MemoryStore or custom store executors make no doctor claim. (The judge
-  used to share this caveat's shape; the `judge` config block landed, and
+- **doctor's memory claim covers the builtins only:** the builtin
+  recall/remember executors are in-process — a custom MemoryStore or custom
+  store executors make no doctor claim. (The judge used to share this
+  caveat's shape; the `judge` config block landed, and
   doctor now probes whichever provider the config names. opencode/pi
   still cannot back the judge by construction — their workers refuse a
   read-only sandbox — and cursor still needs per-run config plumbing;
   inject a worker via a custom runtime if you must.)
-- **Embedding recall is model-version sensitive:** vectors are compared
-  only within one model id (stored per record); switching models silently
-  demotes old records to the lexical tier until they are re-remembered.
-  And the tier's default is rank-don't-filter (`minSimilarity: 0`,
-  `topK: 5`) — right for today's tiny stores, but once a store grows past
-  topK the floor needs raising, and no one has measured real-model cosine
-  floors yet (BGE/MiniLM similarity scores run high and clustered; 0.6 on
-  one model is not 0.6 on another).
-
 ---
 
 ## TL;DR for whoever picks this up

@@ -7,10 +7,9 @@ An agent-orchestration kernel. Not a framework.
 
 New here? Start with [docs/walkthrough.md](docs/walkthrough.md) — the guided tour, zero to mastery.
 
-Design doc: [docs/orchestration-direction.md](docs/orchestration-direction.md)
-(authoritative — this repo is its "smallest first step on the TS path").
-The Python `agent_workflows` repo remains the frozen executable spec until
-the TS plan-work-review trace output matches it.
+Current architecture and operator notes live in this README,
+[docs/walkthrough.md](docs/walkthrough.md), and [HANDOFF.md](HANDOFF.md).
+Older rationale is archived under `docs/archive/`.
 
 ## The five-slot model
 
@@ -67,9 +66,8 @@ npm link          # optional: a global `vernier` on PATH
 Agent providers are CLIs on PATH — `codex`, `claude` (Claude Code),
 `cursor-agent`, `opencode`, `pi` — and none is required to install or to
 run the test suite: `vernier doctor` tells you which are usable on this
-machine, and any of them can fill any role. The embedding memory retriever
-(`VERNIER_RETRIEVER=embedding`) needs `@huggingface/transformers`, an
-optional peer dependency — see "Memory & recall".
+machine, and any of them can fill any role. Memory recall uses the built-in
+lexical BM25 ranker by default; custom retrievers are opt-in code.
 
 ## Quickstart
 
@@ -352,7 +350,7 @@ bare-dir template runs against the `zod` version vernier bundles until you
 `npm install` your own. Mechanism: a `module.register()` resolve hook,
 `bin/lend-deps-hooks.mjs`. Once vernier is published, prefer importing the
 helpers — `sig`, `until`, `retryPolicy`, `decideNextStep`,
-`fsScope`/`noEffects`, `artifactsFromEffects`, `scriptExecutor`,
+`fsScope`/`noEffects`, `artifactFromEffects`, `scriptExecutor`,
 `defineConfig`/`defineLoop`, and the types — from `"vernier"`;
 that root export is the library surface, and it is deliberately small.
 
@@ -390,7 +388,7 @@ Self-improving loops compound through a durable rule store
 `remember` step is only reachable after a passing grade, by loop shape. From the loop's
 perspective `recall`/`remember` stay deterministic store operations; HOW
 recall ranks the store is pluggable — the **Retriever** seam on `Memory`,
-three tiers:
+with one built-in tier:
 
 - **lexical (the default)** — BM25 over each record's topic + rule +
   evidence text ([src/memory/retriever.ts](src/memory/retriever.ts)).
@@ -399,17 +397,6 @@ three tiers:
   recalled iff it shares ≥ 1 query keyword), and the +1 idf variant keeps
   tiny stores recalling — a 1-rule store still surfaces its rule on a
   related goal instead of being score-filtered to nothing.
-- **embedding (optional)** — cosine similarity over vectors computed at
-  REMEMBER time and stored on the JSONL record, versioned with the model
-  id ([src/memory/embedding.ts](src/memory/embedding.ts)). Select it with
-  `VERNIER_RETRIEVER=embedding` (read where the registry constructs
-  Memory). Needs `@huggingface/transformers`, an optional peer —
-  `npm install @huggingface/transformers`, and
-  `vernier doctor` probes it. After the one-time model download every
-  embed is local: no network at query time. Records without a comparable
-  embedding (every pre-embedding store, or vectors from a different
-  model) stay retrievable through the lexical tier — hybrid fallback,
-  never a hard cutover.
 - **yours** — implement `Retriever` (exported from the root) and construct
   the store with it in a `defineLoop` runtime:
 
@@ -427,12 +414,9 @@ three tiers:
   Config-level retriever registration (a `retriever` key in
   `vernier.config`) is deferred; the constructor seam is the supported path.
 
-Determinism, stated honestly: an embedding lookup is deterministic given
-the store contents and the **model version** — a different model version is
-a different vector space. That is why the model id is stored on each
-record, and a mismatch demotes the record to lexical retrieval instead of
-comparing incomparable vectors; re-remembering a rule under the new model
-re-embeds it (same content-derived id, last record wins).
+Determinism, stated honestly: the built-in retriever is lexical BM25 over
+the JSONL store contents. If you need vectors, supply a custom
+`Retriever` and own its model/version semantics in that implementation.
 
 ## Providers
 
@@ -443,7 +427,6 @@ re-embeds it (same content-derived id, last record wins).
 | `claude` | wired | `claude` (Claude Code >= 2.0) on PATH; effect-free steps run on a read-only toolset (`Read,Glob,Grep`, asks auto-denied), write scopes on `acceptEdits` — edits confined to the workdir by Claude Code's workspace boundary, Bash and out-of-workspace writes denied (print mode cannot grant); permission-bypass flags are never passed; Agent Skills delivered natively (a synthesized session `--plugin-dir` plugin — see "Skills") |
 | `opencode` | wired | `opencode` (>= 1.16.2) on PATH; noEffects() steps only — the provider has no enforceable sandbox, so write scopes fail closed and effect-free steps run unconfined (read-only intent observed post-hoc, not enforced) |
 | `pi` | wired | `pi` (>= 0.79.1, `@earendil-works/pi-coding-agent`) on PATH; same posture as opencode — write scopes fail closed, effect-free steps run unconfined |
-| `hermes` | optional binding | `hermes` on PATH; a router CLI behind the same seam (`--executor route=hermes`) |
 | `judge` / `distill` | wired | independent structured-output grading on whichever provider backs it — codex by default, claude via `"judge": { "provider": "claude" }` in vernier.config (or `new JudgeExecutor({ provider: "claude-code" })` in a custom runtime), anything else via an injected worker; `vernier doctor` reports the bound provider's binary |
 
 ## Skills
@@ -533,8 +516,7 @@ mini-language parser needed (the design doc's §7 Python risk dissolves here).
   tests), `LoopRetryPolicy` → the `retryPolicy` combinator, the contracts
   registry + `run-trace.v1` (`src/kernel/contract.ts`), the hash snapshot +
   change attribution → `src/kernel/effects.ts`, `GitSnapshotter` semantics →
-  the git-aware observer (`src/kernel/git-effects.ts`), `HermesCli` + route
-  parsing → `src/executors/hermes.ts`, `dry-run-note.v1` + the inline route
+  the git-aware observer (`src/kernel/git-effects.ts`), `dry-run-note.v1` + the inline route
   approval check and the Pilot-1 prompts
   (`rendering/prompts.py`, `build_retry_prompt`) → the contracts and prompt
   templates now shipped in `templates/coding-review/`, and the loop

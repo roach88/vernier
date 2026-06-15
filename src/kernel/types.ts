@@ -265,39 +265,20 @@ export interface RuleRecord {
   readonly sourceRunId: string
   readonly loopId: string
   readonly at: string
-  /**
-   * Attached at REMEMBER time by an embedding retriever (memory/embedding.ts);
-   * absent on lexical stores and on every pre-embedding store — such records
-   * stay readable and retrievable through the lexical tier.
-   */
-  readonly embedding?: RuleEmbedding
-}
-
-/**
- * A rule's stored embedding, versioned twice over: `v` guards this record
- * shape; `model` names the embedder (package:model) that produced the
- * vector — vectors from different models live in different spaces and are
- * NEVER compared (a mismatched record falls back to lexical retrieval).
- */
-export interface RuleEmbedding {
-  readonly v: 1
-  readonly model: string
-  readonly vector: readonly number[]
 }
 
 /**
  * The memory seam (Ax's primitives): deterministic store ops, no LLM.
  * `recall(topic) -> rules[]` is a read; `remember(rule, evidence)` is an
- * append. Either may be async — an embedding retriever embeds the query
- * topic at recall time and the rule at remember time — but both stay
- * DETERMINISTIC given the store contents and the embedding model version.
+ * append. Either may be async when a custom retriever chooses to do async
+ * work, but both stay deterministic for a given store and retriever.
  * The JSONL implementation lives in memory/memory.ts; executors reach it
  * through RunContext.memory, injected via EngineDeps exactly as contracts
  * and executors are.
  */
 export interface MemoryStore {
   recall(topic: string): readonly RuleRecord[] | Promise<readonly RuleRecord[]>
-  remember(record: Omit<RuleRecord, "id" | "at" | "embedding">): RuleRecord | Promise<RuleRecord>
+  remember(record: Omit<RuleRecord, "id" | "at">): RuleRecord | Promise<RuleRecord>
 }
 
 // ----------------------------------------------------------------- Executor

@@ -13,7 +13,6 @@
 // proof of the delta lives in self-improving-template.test.ts.
 
 import { mkdtempSync } from "node:fs"
-import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { bindExecutors } from "../src/cli/config.js"
 import { runLoop } from "../src/engine/tick.js"

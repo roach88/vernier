@@ -37,16 +37,7 @@
     "ajv": "^8.20.0",
     "zod": "^4.4.3"
   },
-  "peerDependencies": {
-    "@huggingface/transformers": ">=3.0.0"
-  },
-  "peerDependenciesMeta": {
-    "@huggingface/transformers": {
-      "optional": true
-    }
-  },
   "devDependencies": {
-    "@huggingface/transformers": "^4.2.0",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

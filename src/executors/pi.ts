@@ -32,14 +32,11 @@
 // refusal is unreachable from here. (pi supports effort/instructions; vernier
 // does not set those either.)
 
-import { mkdirSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
-import type { ArtifactRef, Executor, RunContext, StepResult, StepSpec } from "../kernel/types.js"
-import { zeroUsage } from "../kernel/types.js"
-import { evidencePrefix } from "./evidence.js"
-import { AgentError, AgentInterrupted, type Worker, type WorkerProgress } from "./vendor/omegacode/index.js"
+import type { Executor, RunContext, StepResult, StepSpec } from "../kernel/types.js"
+import type { Worker } from "./vendor/omegacode/index.js"
 import { PiWorker } from "./vendor/omegacode/pi.js"
-import type { AgentResult, AgentSpec } from "./vendor/omegacode/types.js"
+import type { AgentSpec } from "./vendor/omegacode/types.js"
+import { beginWorkerStep, requirePrompt, runWorkerStep, unsupportedSandboxResult } from "./worker-step.js"
 
 export interface PiExecutorOpts {
   /** Injectable worker (tests pass scripted workers). Default: a real PiWorker. */
@@ -47,10 +44,6 @@ export interface PiExecutorOpts {
   /** pi binary when constructing the default worker. Defaults to "pi". */
   readonly bin?: string
   readonly model?: string
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
 }
 
 export class PiExecutor implements Executor {
@@ -66,53 +59,21 @@ export class PiExecutor implements Executor {
   }
 
   async run(spec: StepSpec, ctx: RunContext): Promise<StepResult> {
-    if (!spec.prompt) {
-      throw new Error(`Step \`${spec.stepId}\` reached executor \`${this.id}\` without a rendered prompt.`)
-    }
-
-    const startedAt = Date.now()
-    const prefix = evidencePrefix(spec)
-    mkdirSync(spec.runDir, { recursive: true })
-    const promptPath = join(spec.runDir, `${prefix}pi-prompt.md`)
-    writeFileSync(promptPath, spec.prompt, "utf8")
+    const prompt = requirePrompt(this.id, spec)
+    const evidence = beginWorkerStep(spec, "pi", prompt)
 
     if (spec.effects.allow.length > 0) {
       const message =
         `pi has no enforceable sandbox (tool allowlists are not OS confinement; bash is unrestricted), ` +
         `so vernier refuses to hand it write scope(s): ${spec.effects.allow.join(", ")} — use noEffects() ` +
         `steps with pi, or bind this step to codex/claude, which enforce scoped writes`
-      const preflightPath = join(spec.runDir, `${prefix}pi-preflight.json`)
-      writeFileSync(
-        preflightPath,
-        JSON.stringify(
-          {
-            provider: this.id,
-            code: "unsupported_sandbox",
-            retryable: false,
-            stepId: spec.stepId,
-            effects: spec.effects.allow,
-            message,
-          },
-          null,
-          2,
-        ) + "\n",
-        "utf8",
-      )
-      return {
-        status: "failed",
-        output: { error: message, code: "unsupported_sandbox", retryable: false },
-        evidence: [
-          { role: "worker-prompt", path: promptPath },
-          { role: "pi-preflight", path: preflightPath },
-        ],
-        usage: zeroUsage(Date.now() - startedAt),
-      }
+      return unsupportedSandboxResult({ spec, evidence, provider: this.id, role: "pi-preflight", message })
     }
 
     // Effect-free steps only reach here. The worker accepts exactly one
     // sandbox value (see header); the gate above is what keeps this honest.
     const agentSpec: AgentSpec = {
-      prompt: spec.prompt,
+      prompt,
       provider: "pi",
       cwd: ctx.workdir,
       sandbox: "danger-full-access",
@@ -120,70 +81,18 @@ export class PiExecutor implements Executor {
       ...(this.model ? { model: this.model } : {}),
       ...(spec.outputSchema ? { schema: spec.outputSchema } : {}),
     }
-
-    const events: string[] = []
-    const onProgress = (e: WorkerProgress): void => {
-      events.push(JSON.stringify({ at: new Date().toISOString(), ...e }))
-    }
-    // Per-step timeout COMPOSED with any caller signal: either may abort the turn.
-    const timeout = AbortSignal.timeout(spec.timeoutMs)
-    const signal = ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout
-
-    let result: AgentResult
-    try {
-      result = await this.worker.runAgent(agentSpec, { signal, onProgress })
-    } catch (error) {
-      const evidence = this.writeEvidence(spec, prefix, promptPath, events, errorText(error))
-      const durationMs = Date.now() - startedAt
-      if (error instanceof AgentInterrupted) {
-        return { status: "interrupted", output: { error: error.message }, evidence, usage: zeroUsage(durationMs) }
-      }
-      if (error instanceof AgentError) {
-        return {
-          status: "failed",
-          output: { error: error.message, code: error.code, retryable: error.retryable },
-          evidence,
-          // Failed turns still bill (the error taxonomy carries the usage).
-          usage: error.usage ? { ...error.usage, durationMs } : zeroUsage(durationMs),
-        }
-      }
-      throw error
-    }
-
-    const durationMs = Date.now() - startedAt
-    const evidence = this.writeEvidence(spec, prefix, promptPath, events, result.text)
-    const output = isRecord(result.structured) ? result.structured : { text: result.text }
-    return {
-      status: result.status,
-      output,
+    return runWorkerStep({
+      executorId: this.id,
+      spec,
+      ctx,
+      worker: this.worker,
+      agentSpec,
       evidence,
-      usage: { ...result.usage, durationMs },
-    }
+      final: { kind: "text", stem: "pi" },
+    })
   }
 
   shutdown(): Promise<void> {
     return this.worker.shutdown()
   }
-
-  private writeEvidence(
-    spec: StepSpec,
-    prefix: string,
-    promptPath: string,
-    events: readonly string[],
-    finalText: string,
-  ): ArtifactRef[] {
-    const eventsPath = join(spec.runDir, `${prefix}pi-events.jsonl`)
-    const finalPath = join(spec.runDir, `${prefix}pi-final.md`)
-    writeFileSync(eventsPath, events.join("\n") + (events.length ? "\n" : ""), "utf8")
-    writeFileSync(finalPath, finalText, "utf8")
-    return [
-      { role: "worker-prompt", path: promptPath },
-      { role: "worker-events", path: eventsPath },
-      { role: "worker-final", path: finalPath },
-    ]
-  }
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error)
 }

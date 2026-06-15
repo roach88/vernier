@@ -46,7 +46,8 @@ block rebinds the ONE wrapper instance both steps ride
 The store lives under the vernier root (`$VERNIER_HOME`, else `./.vernier`)
 at `memory/rules.jsonl` — shared across CLI invocations, which is the
 compounding seam. How recall RANKS the store is pluggable (BM25 lexical by
-default; `VERNIER_RETRIEVER=embedding` for the optional semantic tier).
+default; construct `Memory` with a custom retriever only after measured
+recall quality needs it).
 
 ## Run it
 

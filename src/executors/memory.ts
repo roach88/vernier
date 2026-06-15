@@ -11,9 +11,8 @@
 // `remember` stores VERIFIED rules only — enforced not here but by loop
 // shape: it is only reachable after a passing grade (see the
 // self-improving template's loop).
-// Both ops are awaited: a store with an embedding retriever embeds at the
-// seam, which is async but still deterministic given store + model version
-// — retrieval quality is a Memory concern, never a loop concern.
+// Both ops are awaited: a custom retriever may do async work at the seam,
+// but retrieval quality remains a Memory concern, never a loop concern.
 
 import type { Executor, MemoryStore, RunContext, StepSpec } from "../kernel/types.js"
 import { scriptExecutor } from "./script.js"
