@@ -27,12 +27,6 @@ export interface Worker {
   shutdown(): Promise<void>
 }
 
-/** Lazily constructs and caches one worker per provider. */
-export interface WorkerFactory {
-  get(id: ProviderId): Worker
-  shutdownAll(): Promise<void>
-}
-
 /** A worker raised this when a turn failed for a provider reason (after retries). */
 export class AgentError extends Error {
   readonly provider: ProviderId

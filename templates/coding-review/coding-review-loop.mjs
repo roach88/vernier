@@ -22,7 +22,7 @@
 // with enforced write boundaries (codex: OS sandbox derived from the effect
 // scope; claude: acceptEdits + workspace boundary). cursor-agent, opencode,
 // and pi fail closed on write scopes — they can fill `route` (effect-free),
-// not `implement`. `hermes` is also wired as a route binding if you have it.
+// not `implement`.
 //
 // Where the original pinned the worker to `codex` (in the route contract and
 // the prompts), this template names the worker by ROLE — the literal string

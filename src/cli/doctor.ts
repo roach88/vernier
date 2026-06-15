@@ -12,25 +12,20 @@
 //              other provider; judge/distill the binary of whichever
 //              provider actually backs them), in-process executors nothing
 //              (loading the module that declared them already proved
-//              them). The memory RETRIEVER is probed here too (one
-//              `memory:<tier>` row per selected tier): the embedding tier
-//              needs its optional package; the lexical default needs
-//              nothing.
+//              them).
 //   loops      per registered loop, every step's executor binding resolved
 //              through the same chain a run would use (config bindings >
 //              the step's declared default — doctor reports the at-rest
 //              state, so CLI --executor overrides do not apply), and judged
 //              runnable iff the resolved executor is registered AND its
 //              probe passed. A step on the builtin recall/remember
-//              executors is additionally blocked when the runtime's memory
-//              retriever probe failed (a custom memory executor makes no
-//              such claim — same caveat as the judge probe).
+//              executors only needs the in-process store op to be registered.
 //
 // Truth over declaration: doctor enumerates executors by building each
 // entry's REAL runtime in a throwaway scratch dir (construction is lazy —
 // nothing spawns), so the report can never drift from what `vernier run`
 // would resolve. Probes never execute the probed thing: binaries are
-// looked up on PATH, optional packages are resolved but not imported.
+// looked up on PATH; nothing is executed.
 // Exit 0 iff every registered loop is runnable; an unusable executor no
 // step resolves to is reported but does not fail the doctor.
 
@@ -40,7 +35,6 @@ import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { ClaudeExecutor } from "../executors/claude.js"
 import { CodexExecutor } from "../executors/codex.js"
 import { CursorExecutor } from "../executors/cursor.js"
-import { HermesExecutor } from "../executors/hermes.js"
 import { JudgeExecutor } from "../executors/judge.js"
 import { recallExecutor, rememberExecutor } from "../executors/memory.js"
 import { OpencodeExecutor } from "../executors/opencode.js"
@@ -48,9 +42,6 @@ import { PiExecutor } from "../executors/pi.js"
 import type { ProviderId } from "../executors/vendor/omegacode/types.js"
 import { derivedOutputSchema } from "../kernel/types.js"
 import type { Executor, Step } from "../kernel/types.js"
-import { EMBEDDING_PACKAGE, EmbeddingRetriever } from "../memory/embedding.js"
-import { Memory, retrieverFromEnv } from "../memory/memory.js"
-import type { Retriever } from "../memory/retriever.js"
 import { resolveSkillNames, type SkillBindingLayer, type SkillOrigin, type SkillRegistry } from "../skills/skills.js"
 import { judgeBackingProvider, resolveExecutorId, type BindingLayer, type LoadedConfig } from "./config.js"
 import type { RegisteredLoop } from "./registry.js"
@@ -67,8 +58,6 @@ export interface ZodInstall {
 export interface DoctorProbes {
   /** PATH lookup: absolute path of the first executable match, or undefined. Never runs the binary. */
   which(bin: string): string | undefined
-  /** Module presence: resolvable from vernier's own location, without importing it. */
-  resolvable(specifier: string): boolean
   /** Every node_modules/zod on the upward dir chain from cwd, nearest first, each with its declared version — the zod-skew shadow probe. Never imports zod. */
   zodInstalls(): readonly ZodInstall[]
 }
@@ -82,14 +71,6 @@ export const defaultProbes: DoctorProbes = {
       if (executable(candidate)) return candidate
     }
     return undefined
-  },
-  resolvable(specifier) {
-    try {
-      import.meta.resolve(specifier)
-      return true
-    } catch {
-      return false
-    }
   },
   zodInstalls() {
     const found: ZodInstall[] = []
@@ -134,7 +115,7 @@ function executable(path: string): boolean {
 export interface ExecutorReport {
   readonly id: string
   readonly ok: boolean
-  /** What the probe checked: a binary name, an optional-package specifier (the embedding retriever), or null for in-process executors. */
+  /** What the probe checked: a binary name, or null for in-process executors. */
   readonly requires: string | null
   readonly detail: string
 }
@@ -218,9 +199,7 @@ function checkExecutor(executor: Executor, fromConfig: boolean, probes: DoctorPr
               ? "opencode"
               : executor instanceof PiExecutor
                 ? "pi"
-                : executor instanceof HermesExecutor
-                  ? "hermes"
-                  : null
+                : null
   if (bin !== null) {
     const found = probes.which(bin)
     return {
@@ -233,27 +212,6 @@ function checkExecutor(executor: Executor, fromConfig: boolean, probes: DoctorPr
   // Anything else exists in-process (a script step, a store op, a loop
   // module's own executor) — the module that declared it already loaded.
   return { id, ok: true, requires: null, detail: "in-process executor (module loaded)" }
-}
-
-/**
- * Probe the memory retriever for the one thing it needs — the embedding
- * tier its optional package (the one remaining optional-peer probe); every
- * other tier is in-process. Classification is by implementation, not id string.
- */
-function checkRetriever(retriever: Retriever, probes: DoctorProbes): ExecutorReport {
-  const id = `memory:${retriever.id}`
-  if (retriever instanceof EmbeddingRetriever) {
-    const ok = probes.resolvable(EMBEDDING_PACKAGE)
-    return {
-      id,
-      ok,
-      requires: EMBEDDING_PACKAGE,
-      detail: ok
-        ? `${EMBEDDING_PACKAGE} resolvable`
-        : `${EMBEDDING_PACKAGE} not installed (optional peer) — npm install ${EMBEDDING_PACKAGE}`,
-    }
-  }
-  return { id, ok: true, requires: null, detail: "in-process retriever (no external dependency)" }
 }
 
 /** The empty skill registry: what diagnose assumes when the caller skipped discovery. */
@@ -343,8 +301,8 @@ export async function diagnose(
   // ZERO LOOPS REGISTERED: there is no runtime to enumerate executors from,
   // but the environment question is still worth answering — probe the set
   // every config-registered loop's default runtime would get (the wired
-  // providers, the judge, hermes, the store ops, the selected memory
-  // retriever), so a fresh install learns what this machine could run.
+  // providers, the judge, and the store ops), so a fresh install
+  // learns what this machine could run.
   // No loops means nothing is blocked: the doctor exits 0.
   if (registry.size === 0) {
     const baseline: Executor[] = [
@@ -356,14 +314,11 @@ export async function diagnose(
       // The baseline judge honors the config's `judge` block too — a config
       // with a judge block but zero loops still reports the right binary.
       new JudgeExecutor({ provider: judgeBackingProvider(config) }),
-      new HermesExecutor(),
       recallExecutor,
       rememberExecutor,
     ]
     for (const executor of baseline) check(executor)
     for (const executor of config?.executors ?? []) check(executor)
-    const retrieverReport = checkRetriever(retrieverFromEnv(), probes)
-    checked.set(retrieverReport.id, retrieverReport)
     for (const executor of baseline) await (executor as { shutdown?: () => Promise<void> }).shutdown?.()
     return { executors: [...checked.values()], skills: skillRows, loops: [], warnings, ok: true }
   }
@@ -396,15 +351,6 @@ export async function diagnose(
       const executors = new Map(runtime.deps.executors)
       for (const executor of config?.executors ?? []) executors.set(executor.id, executor)
       for (const executor of executors.values()) check(executor)
-
-      // The runtime's memory retriever, probed like any executor (the
-      // builtin Memory only — a user's own MemoryStore makes no claim).
-      const memory = runtime.deps.memory
-      let retrieverReport: ExecutorReport | undefined
-      if (memory instanceof Memory) {
-        retrieverReport = checked.get(`memory:${memory.retriever.id}`) ?? checkRetriever(memory.retriever, probes)
-        checked.set(retrieverReport.id, retrieverReport)
-      }
 
       const steps: StepReport[] = entry.loop.steps.map((step) => {
         // The step's skills, through the SAME chain a run would use at rest
@@ -442,25 +388,19 @@ export async function diagnose(
             schemaError = error instanceof Error ? error.message : String(error)
           }
         }
-        // A store op is only as usable as the store's retriever: recall and
-        // remember run THROUGH it, so a failed retriever probe blocks them.
-        const memoryBlocked =
-          retrieverReport !== undefined && !retrieverReport.ok && (registered === recallExecutor || registered === rememberExecutor)
         const skillBlocked = skillReports.some((s) => !s.ok) || promptlessSkills
         // Block priority, most fundamental first: executor unresolved/probe-failed
-        // > schema won't derive > memory retriever down > skill unresolved.
+        // > schema won't derive > skill unresolved.
         // schemaError is set only for structuredOutput steps, so it is vacuously
         // absent (undefined) for every other step.
-        const ok = report.ok && !schemaError && !memoryBlocked && !skillBlocked
+        const ok = report.ok && !schemaError && !skillBlocked
         const why = !report.ok
           ? report.detail
           : schemaError
             ? schemaError
-            : memoryBlocked
-              ? retrieverReport!.detail
-              : promptlessSkills
-                ? "declares skills but no prompt template (skills travel through the prompt seam)"
-                : skillReports.find((s) => !s.ok)?.detail ?? "ok"
+            : promptlessSkills
+              ? "declares skills but no prompt template (skills travel through the prompt seam)"
+              : skillReports.find((s) => !s.ok)?.detail ?? "ok"
         return withSkills({ stepId: step.id, declared: step.executor, resolved, ok, why })
       })
       loops.push({ loopId: entry.loop.id, source: entry.source, runnable: steps.every((s) => s.ok), steps })

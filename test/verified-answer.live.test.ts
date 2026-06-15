@@ -12,7 +12,6 @@
 // also pass at once, so iteration count is reported, not asserted.
 
 import { mkdtempSync } from "node:fs"
-import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { bindExecutors } from "../src/cli/config.js"
 import { runLoop } from "../src/engine/tick.js"

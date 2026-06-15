@@ -10,19 +10,17 @@
 // through a passing grade (the self-improving template's loop shape).
 //
 // HOW the store is ranked at recall time is pluggable (the Retriever seam,
-// memory/retriever.ts): the default is the deterministic, dependency-free
-// BM25 lexical ranker; an embedding tier (memory/embedding.ts) is selected
-// with VERNIER_RETRIEVER=embedding where registry runtimes construct Memory;
-// a custom retriever is constructed in directly. Persistence is none of the
-// retriever's business — append, dedupe-by-id, and torn-line tolerance all
-// live here, identically for every tier.
+// memory/retriever.ts): the built-in tier is the deterministic,
+// dependency-free BM25 lexical ranker; a custom retriever is constructed in
+// directly. Persistence is none of the retriever's business — append,
+// dedupe-by-id, and torn-line tolerance all live here, identically for every
+// tier.
 
 import { createHash } from "node:crypto"
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import type { MemoryStore, RuleRecord } from "../kernel/types.js"
 import { canonical } from "../ledger/ledger.js"
-import { EmbeddingRetriever } from "./embedding.js"
 import { lexicalRetriever, type Retriever } from "./retriever.js"
 
 export { topicTokens } from "./retriever.js"
@@ -42,16 +40,14 @@ export function rulesPath(root: string): string {
 }
 
 /**
- * The retriever-selection knob for registry-built runtimes:
- * VERNIER_RETRIEVER=lexical (the default) or embedding. Construction is
- * cheap either way — the embedding tier never touches its optional package
- * until a recall/remember actually needs vectors.
+ * The retriever-selection knob for registry-built runtimes. Only lexical is
+ * built in; construct Memory with a custom Retriever when measured recall
+ * quality needs a different ranker.
  */
 export function retrieverFromEnv(env: NodeJS.ProcessEnv = process.env): Retriever {
   const choice = env.VERNIER_RETRIEVER?.trim() ?? ""
   if (choice === "" || choice === "lexical") return lexicalRetriever()
-  if (choice === "embedding") return new EmbeddingRetriever()
-  throw new Error(`Unknown VERNIER_RETRIEVER \`${choice}\`; valid values: lexical (default), embedding.`)
+  throw new Error(`Unknown VERNIER_RETRIEVER \`${choice}\`; valid value: lexical (default).`)
 }
 
 export class Memory implements MemoryStore {
@@ -69,10 +65,10 @@ export class Memory implements MemoryStore {
    * Append one verified rule. The id is content-derived (hash of
    * topic + rule), so re-remembering the same rule appends a new record but
    * keeps one identity — recall dedupes by id, last record wins. A
-   * retriever with an `onRemember` hook (the embedding tier) enriches the
-   * record before it lands — which is why the return may be a promise.
+   * retriever with an `onRemember` hook can enrich the record before it
+   * lands — which is why the return may be a promise.
    */
-  remember(record: Omit<RuleRecord, "id" | "at" | "embedding">): RuleRecord | Promise<RuleRecord> {
+  remember(record: Omit<RuleRecord, "id" | "at">): RuleRecord | Promise<RuleRecord> {
     if (!record.rule.trim()) throw new Error("Memory.remember: refusing to store an empty rule.")
     const id = createHash("sha256").update(canonical({ topic: record.topic, rule: record.rule })).digest("hex").slice(0, 16)
     const full: RuleRecord = { ...record, id, at: new Date().toISOString() }
@@ -84,7 +80,7 @@ export class Memory implements MemoryStore {
    * The live store (deduped by id, last record wins), ranked by the
    * retriever — best first. Reads the file fresh on every call — no cache —
    * so two runs (or two processes) sharing one path always see each other's
-   * appends. May be a promise: an embedding retriever embeds the query.
+   * appends. May be a promise because custom retrievers may do async work.
    */
   recall(topic: string): readonly RuleRecord[] | Promise<readonly RuleRecord[]> {
     return this.retriever.retrieve(topic, this.liveRecords())

@@ -32,7 +32,6 @@ export {
   type OutputProjection,
   type MemoryStore,
   type RuleRecord,
-  type RuleEmbedding,
   type StepSkill,
   type SkillDelivery,
 } from "./kernel/types.js"
@@ -53,8 +52,6 @@ export {
 // Deterministic output projection from observed effects (the diff is the report).
 export {
   artifactFromEffects,
-  artifactsFromEffects,
-  type ArtifactProjectionOpts,
   type EffectObservation,
 } from "./kernel/effects.js"
 
@@ -69,15 +66,7 @@ export { defineConfig, defineLoop, type VernierConfig, type LoopRegistration } f
 export { scriptExecutor, type ScriptFn, type ScriptOutcome } from "./executors/script.js"
 
 // The Memory seam: the durable rule store and its pluggable Retriever.
-// Semantic recall is a retriever choice, never a loop change — construct
-// Memory with the tier you want (lexical BM25 default, the optional
-// embedding tier, or your own implementation of Retriever).
+// Lexical BM25 is the built-in default; construct Memory with your own
+// Retriever only after measured recall quality needs a different ranker.
 export { Memory, resolveMemoryRoot, retrieverFromEnv, rulesPath, type MemorySpec } from "./memory/memory.js"
 export { LexicalRetriever, lexicalRetriever, topicTokens, type Retriever } from "./memory/retriever.js"
-export {
-  DEFAULT_EMBEDDING_MODEL,
-  EMBEDDING_PACKAGE,
-  EmbeddingRetriever,
-  type Embedder,
-  type EmbeddingRetrieverOpts,
-} from "./memory/embedding.js"

@@ -61,58 +61,37 @@ export function assessChanges(before: Snapshot, after: Snapshot, scope: EffectSc
 }
 
 /**
- * Tiny glob for artifact filtering: `*` matches within a path segment,
- * `**` across segments (`docs/**` matches everything under docs;
- * `notes/**\/*.md` matches .md files at any depth under notes, including
- * `notes/a.md`). Deliberately small — not a full glob engine.
- */
-export function globMatch(pattern: string, path: string): boolean {
-  const regex = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*\*\//g, "\u0001") // `**/` = zero or more whole segments
-    .replace(/\*\*/g, "\u0002") // `**`  = anything, across segments
-    .replace(/\*/g, "[^/]*") // `*`   = anything within a segment
-    .replace(/\u0001/g, "(?:.*/)?")
-    .replace(/\u0002/g, ".*")
-  return new RegExp(`^${regex}$`).test(path)
-}
-
-export interface ArtifactProjectionOpts {
-  /** Glob filtering which changed-and-allowed files count as the artifact (e.g. `docs/**\/*.md`). Default: all of them. */
-  readonly pattern?: string
-  /**
-   * "one" (default): exactly one matching file -> a string field; zero or
-   * several -> no field, so signature/contract validation fails
-   * deterministically and the policy decides (retry/escalate).
-   * "many": one or more matching files -> a sorted string[] field; zero ->
-   * no field (the same deterministic failure path).
-   */
-  readonly arity?: "one" | "many"
-}
-
-/**
  * OutputProjection: derive path-valued output field(s) from effect
  * attribution. The observer already knows, deterministically, which files
  * the step changed — so the artifact paths are taken from the diff, not
  * from a model self-report (which would cost a second structured-output
  * turn). Candidates are the changed-and-allowed files, optionally filtered
- * by `pattern`; `arity` decides whether the field is one path or all of
- * them (see ArtifactProjectionOpts for the exact zero/one/many semantics).
+ * by an exact path or `dir/**`; exactly one match projects a string field.
+ * Zero or several matches project no field, so signature/contract
+ * validation fails deterministically and the policy decides.
  */
-export function artifactsFromEffects(field: string, opts: ArtifactProjectionOpts = {}): OutputProjection {
-  const { pattern, arity = "one" } = opts
+export function artifactFromEffects(field: string, pattern?: string): OutputProjection {
+  if (pattern !== undefined) assertArtifactPattern(pattern)
   return (_result, effects) => {
     const candidates = effects.changed.filter(
-      (path) => !effects.unexpected.includes(path) && (pattern === undefined || globMatch(pattern, path)),
+      (path) => !effects.unexpected.includes(path) && (pattern === undefined || artifactPatternMatch(pattern, path)),
     )
-    if (arity === "many") return candidates.length > 0 ? { [field]: [...candidates].sort() } : {}
     return candidates.length === 1 ? { [field]: candidates[0] } : {}
   }
 }
 
-/** The exactly-one form (Pilot 1's contract pins one note file). `pattern` narrows which changed files count. */
-export function artifactFromEffects(field: string, pattern?: string): OutputProjection {
-  return artifactsFromEffects(field, pattern === undefined ? {} : { pattern })
+function assertArtifactPattern(pattern: string): void {
+  if (pattern.endsWith("/**")) return
+  if (!pattern.includes("*")) return
+  throw new Error(`artifactFromEffects supports exact paths or dir/** only, got \`${pattern}\`.`)
+}
+
+function artifactPatternMatch(pattern: string, path: string): boolean {
+  if (pattern.endsWith("/**")) {
+    const prefix = pattern.slice(0, -3)
+    return path === prefix || path.startsWith(prefix + "/")
+  }
+  return path === pattern
 }
 
 // ----------------------------------------------------------------- Observer

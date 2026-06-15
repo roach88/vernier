@@ -4,8 +4,7 @@
 // Local adaptation: imports of "../dsl/types.js" point at "./types.js" (vendored subset).
 
 import { setTimeout as delayAsync } from "node:timers/promises"
-import { AgentError, AgentInterrupted, type Worker } from "./index.js"
-import type { ProviderId } from "./types.js"
+import { AgentError, AgentInterrupted } from "./index.js"
 
 export interface RetryOptions {
   attempts?: number
@@ -42,14 +41,4 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return delayAsync(ms, undefined, { signal }).catch(() => {
     throw new AgentInterrupted()
   })
-}
-
-export function notImplemented(provider: ProviderId): Worker {
-  return {
-    id: provider,
-    async runAgent() {
-      throw new AgentError({ provider, code: "not_implemented", message: `${provider} worker is not implemented yet` })
-    },
-    async shutdown() {},
-  }
 }

@@ -26,6 +26,7 @@ import { ZodError } from "zod"
 import { acquireLease, LeaseHeldError } from "../engine/lease.js"
 import { resumeRun, summarizeJournal, type JournalSummary } from "../engine/resume.js"
 import { driveRun, finalOutput, newRunId, startRun, tick, type EngineDeps, type Run, type TickOutcome } from "../engine/tick.js"
+import { bindingVocabulary } from "../kernel/bindings.js"
 import type { Executor, Loop } from "../kernel/types.js"
 import { journalPath, Ledger, resolveLedgerRoot, type LedgerEntry } from "../ledger/ledger.js"
 import { buildTimeline, computedCostUsd, renderStats, renderTimeline, rollupByLoop, runStatsRow, type PriceModel, type RunStatsRow } from "../ledger/stats.js"
@@ -178,25 +179,16 @@ function parseFlags(args: readonly string[]): Flags {
  * where they match.)
  */
 function parseExecutorOverrides(pairs: readonly string[], loop: Loop): BindingLayer {
-  const map = new Map<string, string>()
-  if (pairs.length === 0) return map
-  const stepIds = [...new Set(loop.steps.map((s) => s.id))]
-  const executorIds = [...new Set(loop.steps.map((s) => s.executor))]
-  for (const pair of pairs) {
-    const eq = pair.indexOf("=")
-    if (eq <= 0 || eq === pair.length - 1) {
-      throw new UsageError(`--executor expects <stepIdOrExecutorId>=<executorId>, got \`${pair}\`.`)
-    }
-    const key = pair.slice(0, eq)
-    const value = pair.slice(eq + 1)
-    if (!stepIds.includes(key) && !executorIds.includes(key)) {
-      throw new UsageError(
-        `--executor \`${key}\` names no step or executor in \`${loop.id}\` (steps: ${stepIds.join(", ")}; executors: ${executorIds.join(", ")}).`,
-      )
-    }
-    map.set(key, value)
-  }
-  return map
+  return parseLoopBindingOverrides({
+    pairs,
+    loop,
+    flag: "--executor",
+    expects: "<stepIdOrExecutorId>=<executorId>",
+    allowEmptyValue: false,
+    set(map, key, raw) {
+      map.set(key, raw)
+    },
+  })
 }
 
 /** Layered bindings for one invocation: CLI overrides first, then config bindings. */
@@ -212,42 +204,62 @@ function bindingLayers(flags: Flags, loop: Loop, config: LoadedConfig | undefine
  * clears that step's skills.
  */
 function parseSkillOverrides(pairs: readonly string[], loop: Loop): SkillBindingLayer {
-  const map = new Map<string, readonly string[]>()
-  if (pairs.length === 0) return map
-  const stepIds = [...new Set(loop.steps.map((s) => s.id))]
-  const executorIds = [...new Set(loop.steps.map((s) => s.executor))]
-  for (const pair of pairs) {
+  return parseLoopBindingOverrides({
+    pairs,
+    loop,
+    flag: "--skill",
+    expects: "<stepIdOrExecutorId>=<skillName[,skillName...]>",
+    allowEmptyValue: true,
+    set(map, key, raw, pair) {
+      // An EMPTY value (`step=`) is an explicit clear, and it WINS over any
+      // earlier accumulation for this key — `--skill s=a --skill s=` clears.
+      if (raw.trim() === "") {
+        map.set(key, [])
+        return
+      }
+      // A non-empty value must be real skill names. A value that splits to
+      // blank tokens (`step=,` / `step=a,,b`) is a typo, not a silent clear —
+      // and an invalid name fails HERE, not later, with the grammar named.
+      const names = raw.split(",").map((name) => name.trim())
+      const bad = names.find((name) => name.length === 0 || !SKILL_NAME_PATTERN.test(name))
+      if (bad !== undefined) {
+        throw new UsageError(
+          `--skill \`${pair}\`: \`${bad}\` is not a valid skill name (lowercase letters, numbers, and hyphens). ` +
+            `Use \`--skill ${key}=\` with no value to clear a step's skills.`,
+        )
+      }
+      // Accumulate, de-duping both against earlier flags for this key AND
+      // within this flag's own comma list (`s=a,a` is one `a`, not two).
+      const merged = [...(map.get(key) ?? [])]
+      for (const name of names) if (!merged.includes(name)) merged.push(name)
+      map.set(key, merged)
+    },
+  })
+}
+
+function parseLoopBindingOverrides<T>(args: {
+  readonly pairs: readonly string[]
+  readonly loop: Loop
+  readonly flag: "--executor" | "--skill"
+  readonly expects: string
+  readonly allowEmptyValue: boolean
+  readonly set: (map: Map<string, T>, key: string, raw: string, pair: string) => void
+}): Map<string, T> {
+  const map = new Map<string, T>()
+  if (args.pairs.length === 0) return map
+  const { stepIds, executorIds } = bindingVocabulary(args.loop)
+  for (const pair of args.pairs) {
     const eq = pair.indexOf("=")
-    if (eq <= 0) throw new UsageError(`--skill expects <stepIdOrExecutorId>=<skillName[,skillName...]>, got \`${pair}\`.`)
+    if (eq <= 0 || (!args.allowEmptyValue && eq === pair.length - 1)) {
+      throw new UsageError(`${args.flag} expects ${args.expects}, got \`${pair}\`.`)
+    }
     const key = pair.slice(0, eq)
     if (!stepIds.includes(key) && !executorIds.includes(key)) {
       throw new UsageError(
-        `--skill \`${key}\` names no step or executor in \`${loop.id}\` (steps: ${stepIds.join(", ")}; executors: ${executorIds.join(", ")}).`,
+        `${args.flag} \`${key}\` names no step or executor in \`${args.loop.id}\` (steps: ${stepIds.join(", ")}; executors: ${executorIds.join(", ")}).`,
       )
     }
-    const raw = pair.slice(eq + 1)
-    // An EMPTY value (`step=`) is an explicit clear, and it WINS over any
-    // earlier accumulation for this key — `--skill s=a --skill s=` clears.
-    if (raw.trim() === "") {
-      map.set(key, [])
-      continue
-    }
-    // A non-empty value must be real skill names. A value that splits to
-    // blank tokens (`step=,` / `step=a,,b`) is a typo, not a silent clear —
-    // and an invalid name fails HERE, not later, with the grammar named.
-    const names = raw.split(",").map((name) => name.trim())
-    const bad = names.find((name) => name.length === 0 || !SKILL_NAME_PATTERN.test(name))
-    if (bad !== undefined) {
-      throw new UsageError(
-        `--skill \`${pair}\`: \`${bad}\` is not a valid skill name (lowercase letters, numbers, and hyphens). ` +
-          `Use \`--skill ${key}=\` with no value to clear a step's skills.`,
-      )
-    }
-    // Accumulate, de-duping both against earlier flags for this key AND
-    // within this flag's own comma list (`s=a,a` is one `a`, not two).
-    const merged = [...(map.get(key) ?? [])]
-    for (const name of names) if (!merged.includes(name)) merged.push(name)
-    map.set(key, merged)
+    args.set(map, key, pair.slice(eq + 1), pair)
   }
   return map
 }

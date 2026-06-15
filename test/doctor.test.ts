@@ -18,11 +18,10 @@ import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "n
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { afterEach, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import { z } from "zod"
 import { JudgeExecutor } from "../src/executors/judge.js"
 import { defaultContractRegistry } from "../src/kernel/contract.js"
-import { EMBEDDING_PACKAGE } from "../src/memory/embedding.js"
 import { diagnose, renderDoctor, type DoctorProbes, type DoctorReport } from "../src/cli/doctor.js"
 import { discoverSkills } from "../src/skills/skills.js"
 import type { LoadedConfig } from "../src/cli/config.js"
@@ -46,13 +45,12 @@ const allTemplatesRegistry = () => loopRegistry(ALL_TEMPLATES)
 
 const probes = (over: Partial<DoctorProbes> = {}): DoctorProbes => ({
   which: () => undefined,
-  resolvable: () => false,
   zodInstalls: () => [],
   ...over,
 })
 
 const allFound = (over: Partial<DoctorProbes> = {}): DoctorProbes =>
-  probes({ which: (bin) => `/fake/bin/${bin}`, resolvable: () => true, ...over })
+  probes({ which: (bin) => `/fake/bin/${bin}`, ...over })
 
 const config = (over: Partial<LoadedConfig>): LoadedConfig => ({
   path: "/scratch/vernier.config.json",
@@ -134,7 +132,7 @@ describe("diagnose()", () => {
     }
     expect(executorById(report, "judge")).toMatchObject({ ok: false, requires: "codex" })
     expect(executorById(report, "recall")).toMatchObject({ ok: true, requires: null })
-    expect(executorById(report, "memory:lexical")).toMatchObject({ ok: true, requires: null })
+    expect(executorById(report, "memory:lexical")).toBeUndefined()
   })
 
   it("config bindings are resolved exactly as a run would resolve them, and the missing piece is named", async () => {
@@ -210,34 +208,12 @@ describe("diagnose()", () => {
     expect(step.why).toContain("script:control-plane-smoke")
   })
 
-  describe("memory retriever probe", () => {
-    afterEach(() => {
-      delete process.env.VERNIER_RETRIEVER
-    })
-
-    it("the lexical default needs nothing: probed in-process, memory loops unaffected", async () => {
+  describe("memory retriever", () => {
+    it("lexical memory is just the store-op executors; no separate optional-package probe exists", async () => {
       const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, allFound(), ALL_TEMPLATE_SKILLS)
-      expect(executorById(report, "memory:lexical")).toMatchObject({ ok: true, requires: null })
-      expect(loopById(report, "compounding-answer")?.runnable).toBe(true)
-    })
-
-    it("VERNIER_RETRIEVER=embedding without the package blocks exactly the store-op steps, actionably", async () => {
-      process.env.VERNIER_RETRIEVER = "embedding"
-      const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, allFound({ resolvable: (s) => s !== EMBEDDING_PACKAGE }), ALL_TEMPLATE_SKILLS)
-      expect(executorById(report, "memory:embedding")).toMatchObject({ ok: false, requires: EMBEDDING_PACKAGE })
-      expect(executorById(report, "memory:embedding")?.detail).toContain(`npm install ${EMBEDDING_PACKAGE}`)
-      const loop = loopById(report, "compounding-answer")!
-      expect(loop.runnable).toBe(false)
-      expect(loop.steps.find((s) => s.stepId === "recall")).toMatchObject({ ok: false })
-      expect(loop.steps.find((s) => s.stepId === "remember")?.why).toContain(EMBEDDING_PACKAGE)
-      expect(loop.steps.find((s) => s.stepId === "answer")?.ok).toBe(true) // only the store ops are blocked
-      expect(report.ok).toBe(false)
-    })
-
-    it("VERNIER_RETRIEVER=embedding with the package resolvable keeps memory loops runnable", async () => {
-      process.env.VERNIER_RETRIEVER = "embedding"
-      const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, allFound(), ALL_TEMPLATE_SKILLS)
-      expect(executorById(report, "memory:embedding")).toMatchObject({ ok: true, requires: EMBEDDING_PACKAGE })
+      expect(executorById(report, "recall")).toMatchObject({ ok: true, requires: null })
+      expect(executorById(report, "remember")).toMatchObject({ ok: true, requires: null })
+      expect(executorById(report, "memory:lexical")).toBeUndefined()
       expect(loopById(report, "compounding-answer")?.runnable).toBe(true)
     })
   })
@@ -541,7 +517,7 @@ describe("vernier doctor (CLI)", () => {
     expect(report.loops).toEqual([])
     expect(executorById(report, "codex")).toMatchObject({ ok: true, detail: expect.stringContaining(shims) })
     expect(executorById(report, "claude")?.ok).toBe(false)
-    expect(executorById(report, "memory:lexical")?.ok).toBe(true)
+    expect(executorById(report, "memory:lexical")).toBeUndefined()
 
     const human = await cli({ home: home(), path: basePath(shims) }, "doctor")
     expect(human.code).toBe(0)

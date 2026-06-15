@@ -60,6 +60,7 @@ import {
   DEFAULT_STALL_TIMEOUT_MS,
   type SpawnProcess,
 } from "./vendor/omegacode/subprocess-jsonl.js"
+import { errorText, isRecord } from "./worker-step.js"
 
 const PROVIDER = "claude-code" as const
 
@@ -318,10 +319,6 @@ export interface ClaudeExecutorOpts {
   readonly model?: string
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-}
-
 export class ClaudeExecutor implements Executor {
   readonly id = "claude"
   /** Native Agent Skill delivery: the engine passes StepSpec.skills instead of embedding bodies in the prompt. */
@@ -458,8 +455,4 @@ export class ClaudeExecutor implements Executor {
       ...(pluginDir !== undefined ? [{ role: "skills-plugin", path: pluginDir }] : []),
     ]
   }
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error)
 }

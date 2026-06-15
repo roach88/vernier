@@ -36,6 +36,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { z } from "zod"
 import type { JudgeProvider } from "../executors/judge.js"
+import { bindLoopSteps, resolveLayeredBinding, type BindingLayer as GenericBindingLayer } from "../kernel/bindings.js"
 import type { Contract } from "../kernel/contract.js"
 import type { Executor, Loop } from "../kernel/types.js"
 import type { SkillBindingLayer } from "../skills/skills.js"
@@ -381,7 +382,7 @@ function parseSkillBindingValue(key: string, value: unknown, path: string): read
 // ----------------------------------------------------- executor resolution
 
 /** One layer of executor bindings: stepId-or-executorId -> executorId. */
-export type BindingLayer = ReadonlyMap<string, string>
+export type BindingLayer = GenericBindingLayer<string>
 
 /**
  * The resolution chain for one step, layers ordered highest precedence
@@ -390,11 +391,7 @@ export type BindingLayer = ReadonlyMap<string, string>
  * layer and finally to the step's own declared executor — the loop default.
  */
 export function resolveExecutorId(step: { readonly id: string; readonly executor: string }, layers: readonly BindingLayer[]): string {
-  for (const layer of layers) {
-    const bound = layer.get(step.id) ?? layer.get(step.executor)
-    if (bound !== undefined) return bound
-  }
-  return step.executor
+  return resolveLayeredBinding(step, layers, step.executor)
 }
 
 /**
@@ -405,13 +402,11 @@ export function resolveExecutorId(step: { readonly id: string; readonly executor
  * across loops. The CLI validates its own --executor keys strictly.
  */
 export function bindExecutors(loop: Loop, layers: readonly BindingLayer[]): Loop {
-  if (layers.every((layer) => layer.size === 0)) return loop
-  let changed = false
-  const steps = loop.steps.map((step) => {
-    const executor = resolveExecutorId(step, layers)
-    if (executor === step.executor) return step
-    changed = true
-    return { ...step, executor }
-  })
-  return changed ? { ...loop, steps } : loop
+  return bindLoopSteps(
+    loop,
+    layers,
+    (step) => step.executor,
+    (a, b) => a === b,
+    (step, executor) => ({ ...step, executor }),
+  )
 }

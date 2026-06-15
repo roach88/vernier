@@ -2,12 +2,10 @@
 // retriever concern; THAT recall is a deterministic store read is a Memory
 // concern, and the loop never sees either. Memory hands every live record
 // (deduped, last-wins) to its retriever; the retriever returns them ranked
-// best-first. Three tiers share this seam:
+// best-first. Two tiers share this seam:
 //
 //   lexical    (default, this file)      BM25 over topic + rule + evidence —
 //                                        no deps, no auth, fully deterministic
-//   embedding  (memory/embedding.ts)     cosine over remember-time vectors,
-//                                        lazy optional dependency
 //   yours      (anything implementing    constructed into Memory directly:
 //               Retriever)               new Memory(path, myRetriever)
 //
@@ -26,9 +24,8 @@ import type { RuleRecord } from "../kernel/types.js"
 
 /**
  * Rank the store against a query topic, best first. `retrieve` may be async
- * (embedding tiers embed the query); `onRemember` lets a tier enrich a
- * record before it is appended (e.g. attach an embedding) — it must
- * preserve the record's identity fields.
+ * (custom tiers may do async work); `onRemember` lets a tier enrich a record
+ * before it is appended — it must preserve the record's identity fields.
  */
 export interface Retriever {
   readonly id: string

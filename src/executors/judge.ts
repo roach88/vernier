@@ -41,14 +41,12 @@
 // Evidence under StepSpec.runDir: <id>-prompt.md, <id>-events.jsonl,
 // <id>-verdict.json — outside the workdir, like every runner-managed file.
 
-import { mkdirSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
-import type { ArtifactRef, Executor, RunContext, StepResult, StepSpec } from "../kernel/types.js"
-import { evidencePrefix } from "./evidence.js"
-import { AgentError, AgentInterrupted, type Worker, type WorkerProgress } from "./vendor/omegacode/index.js"
+import type { Executor, RunContext, StepResult, StepSpec } from "../kernel/types.js"
+import type { Worker } from "./vendor/omegacode/index.js"
 import { CodexWorker } from "./vendor/omegacode/codex.js"
-import type { AgentResult, AgentSpec, ProviderId } from "./vendor/omegacode/types.js"
+import type { AgentSpec, ProviderId } from "./vendor/omegacode/types.js"
 import { ClaudeCliWorker } from "./claude.js"
+import { beginWorkerStep, isRecord, requirePrompt, runWorkerStep } from "./worker-step.js"
 
 /** Providers this executor can construct a default worker for. Both honor a
  *  pinned read-only sandbox. Any other backend: inject `worker`. */
@@ -75,10 +73,6 @@ function defaultJudgeWorker(provider: JudgeProvider, bin: string | undefined): W
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-}
-
 export class JudgeExecutor implements Executor {
   readonly id: string
   /** The provider id the verdict turn runs on — `vernier doctor` probes THIS
@@ -97,9 +91,7 @@ export class JudgeExecutor implements Executor {
   }
 
   async run(spec: StepSpec, ctx: RunContext): Promise<StepResult> {
-    if (!spec.prompt) {
-      throw new Error(`Step \`${spec.stepId}\` reached executor \`${this.id}\` without a rendered prompt.`)
-    }
+    const prompt = requirePrompt(this.id, spec)
     if (!spec.outputSchema) {
       throw new Error(
         `Step \`${spec.stepId}\` reached executor \`${this.id}\` without an outputSchema. ` +
@@ -107,7 +99,7 @@ export class JudgeExecutor implements Executor {
       )
     }
     const agentSpec: AgentSpec = {
-      prompt: spec.prompt,
+      prompt,
       provider: this.provider,
       cwd: ctx.workdir,
       sandbox: "read-only", // pinned: judges read, never write
@@ -115,80 +107,28 @@ export class JudgeExecutor implements Executor {
       schema: spec.outputSchema,
       ...(this.model ? { model: this.model } : {}),
     }
-
-    const prefix = evidencePrefix(spec)
-    mkdirSync(spec.runDir, { recursive: true })
-    const promptPath = join(spec.runDir, `${prefix}${this.id}-prompt.md`)
-    writeFileSync(promptPath, spec.prompt, "utf8")
-
-    const events: string[] = []
-    const onProgress = (e: WorkerProgress): void => {
-      events.push(JSON.stringify({ at: new Date().toISOString(), ...e }))
-    }
-    const timeout = AbortSignal.timeout(spec.timeoutMs)
-    const signal = ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout
-
-    const startedAt = Date.now()
-    let result: AgentResult
-    try {
-      result = await this.worker.runAgent(agentSpec, { signal, onProgress })
-    } catch (error) {
-      const evidence = this.writeEvidence(spec, prefix, promptPath, events, null)
-      const durationMs = Date.now() - startedAt
-      if (error instanceof AgentInterrupted) {
-        return { status: "interrupted", output: { error: error.message }, evidence, usage: zero(durationMs) }
-      }
-      if (error instanceof AgentError) {
-        return {
-          status: "failed",
-          output: { error: error.message, code: error.code, retryable: error.retryable },
-          evidence,
-          usage: error.usage ? { ...error.usage, durationMs } : zero(durationMs),
-        }
-      }
-      throw error
-    }
-
-    const durationMs = Date.now() - startedAt
-    const usage = { ...result.usage, durationMs }
-    if (!isRecord(result.structured)) {
-      const evidence = this.writeEvidence(spec, prefix, promptPath, events, null)
-      return {
-        status: "failed",
-        output: { error: `Judge returned no structured verdict despite the output schema (text: ${truncate(result.text)})` },
-        evidence,
-        usage,
-      }
-    }
-    const evidence = this.writeEvidence(spec, prefix, promptPath, events, result.structured)
-    return { status: result.status, output: result.structured, evidence, usage }
+    return runWorkerStep({
+      executorId: this.id,
+      spec,
+      ctx,
+      worker: this.worker,
+      agentSpec,
+      evidence: beginWorkerStep(spec, this.id, prompt),
+      final: {
+        kind: "json",
+        stem: this.id,
+        roles: { prompt: `${this.id}-prompt`, events: `${this.id}-events`, final: `${this.id}-verdict` },
+        value: (result) => (isRecord(result.structured) ? result.structured : null),
+        missingOutput: (result) => ({ error: `Judge returned no structured verdict despite the output schema (text: ${truncate(result.text)})` }),
+      },
+    })
   }
 
   /** Tear down the underlying provider process. */
   shutdown(): Promise<void> {
     return this.worker.shutdown()
   }
-
-  private writeEvidence(
-    spec: StepSpec,
-    prefix: string,
-    promptPath: string,
-    events: readonly string[],
-    verdict: Record<string, unknown> | null,
-  ): ArtifactRef[] {
-    const eventsPath = join(spec.runDir, `${prefix}${this.id}-events.jsonl`)
-    const verdictPath = join(spec.runDir, `${prefix}${this.id}-verdict.json`)
-    writeFileSync(eventsPath, events.join("\n") + (events.length ? "\n" : ""), "utf8")
-    writeFileSync(verdictPath, JSON.stringify(verdict, null, 2) + "\n", "utf8")
-    return [
-      { role: `${this.id}-prompt`, path: promptPath },
-      { role: `${this.id}-events`, path: eventsPath },
-      { role: `${this.id}-verdict`, path: verdictPath },
-    ]
-  }
 }
-
-const zero = (durationMs: number) => ({ inputTokens: 0, outputTokens: 0, costUsd: 0, durationMs })
 
 function truncate(text: string): string {
   return text.length > 200 ? text.slice(0, 199) + "…" : text

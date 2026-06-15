@@ -3,7 +3,7 @@
 // ops behind the Executor seam). Recall ranks through the store's retriever
 // (lexical BM25 default — ranking proofs live in test/retriever.test.ts);
 // this suite owns persistence, identity, and the executor seam. Store ops
-// are awaited everywhere: the seam is possibly-async (embedding tiers).
+// are awaited everywhere: the seam remains possibly-async for custom retrievers.
 
 import { mkdtempSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
