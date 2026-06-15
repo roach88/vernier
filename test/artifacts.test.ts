@@ -11,9 +11,9 @@ import { z } from "zod"
 import { runLoop, type EngineDeps } from "../src/engine/tick.js"
 import { executorRegistry, scriptExecutor, type ScriptFn } from "../src/executors/script.js"
 import { ContractRegistry } from "../src/kernel/contract.js"
-import { artifactFromEffects } from "../src/kernel/effects.js"
+import { artifactFromEffects, isAllowed } from "../src/kernel/effects.js"
 import { retryPolicy } from "../src/kernel/policy.js"
-import { fsScope, sig, type Loop, type OutputProjection } from "../src/kernel/types.js"
+import { fsScope, sig, type Loop, type OutputProjection, type StepResult } from "../src/kernel/types.js"
 
 function setup() {
   const root = mkdtempSync(join(tmpdir(), "vernier-artifacts-"))
@@ -58,6 +58,17 @@ function deps(workdir: string, fn: ScriptFn): EngineDeps {
 }
 
 describe("artifactFromEffects", () => {
+  it("treats dir/** as descendants, not the bare directory path", () => {
+    expect(isAllowed("notes/a.md", fsScope("notes/**"))).toBe(true)
+    expect(isAllowed("notes", fsScope("notes/**"))).toBe(false)
+    expect(isAllowed("notes", fsScope("notes"))).toBe(true)
+
+    const projection = artifactFromEffects("artifact", "notes/**")
+    const result = {} as StepResult
+    expect(projection(result, { changed: ["notes"], allowed: true, unexpected: [] })).toEqual({})
+    expect(projection(result, { changed: ["notes/a.md"], allowed: true, unexpected: [] })).toEqual({ artifact: "notes/a.md" })
+  })
+
   it("projects one changed-and-allowed file when exactly one candidate exists", async () => {
     const { workdir, ledgerRoot } = setup()
     const loop = artifactLoop(ledgerRoot, artifactFromEffects("artifact"))

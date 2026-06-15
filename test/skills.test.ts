@@ -115,12 +115,24 @@ describe("parseSkillFile: the agentskills.io frontmatter rules", () => {
     ).toThrow(/simple one-line value/)
     expect(() =>
       parseSkillFile(
-        writeSkill(scratch("unmatched-quote"), {
-          name: "unmatched-quote",
-          frontmatter: "---\nname: unmatched-quote\ndescription: 'still yaml-ish\n---\n",
+        writeSkill(scratch("single-quoted"), {
+          name: "single-quoted",
+          frontmatter: "---\nname: single-quoted\ndescription: 'quoted values are YAML.'\n---\n",
         }),
       ),
     ).toThrow(/quoted YAML/)
+  })
+
+  it("allows plain one-line values that begin with apostrophes", () => {
+    const file = writeSkill(scratch("leading-apostrophe"), {
+      name: "leading-apostrophe",
+      frontmatter: "---\nname: leading-apostrophe\ndescription: 'twas a plain description. Use when testing punctuation.\n---\n",
+    })
+
+    expect(parseSkillFile(file)).toEqual({
+      name: "leading-apostrophe",
+      description: "'twas a plain description. Use when testing punctuation.",
+    })
   })
 
   it("parses a SKILL.md prefixed with a UTF-8 BOM and skillBody returns BOM-free content", () => {

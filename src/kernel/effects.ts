@@ -39,13 +39,7 @@ export function changedFiles(before: Snapshot, after: Snapshot): string[] {
 
 /** Exact path, or `dir/**` prefix. Deliberately tiny; grow only when a third loop needs more. */
 export function isAllowed(path: string, scope: EffectScope): boolean {
-  return scope.allow.some((pattern) => {
-    if (pattern.endsWith("/**")) {
-      const prefix = pattern.slice(0, -3)
-      return path === prefix || path.startsWith(prefix + "/")
-    }
-    return path === pattern
-  })
+  return scope.allow.some((pattern) => pathMatchesPattern(pattern, path))
 }
 
 export interface EffectObservation {
@@ -87,9 +81,13 @@ function assertArtifactPattern(pattern: string): void {
 }
 
 function artifactPatternMatch(pattern: string, path: string): boolean {
+  return pathMatchesPattern(pattern, path)
+}
+
+function pathMatchesPattern(pattern: string, path: string): boolean {
   if (pattern.endsWith("/**")) {
     const prefix = pattern.slice(0, -3)
-    return path === prefix || path.startsWith(prefix + "/")
+    return path.startsWith(prefix + "/")
   }
   return path === pattern
 }

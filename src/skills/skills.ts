@@ -147,7 +147,10 @@ function frontmatterFields(text: string, file: string): Map<string, string> {
     if (value === "" || value.startsWith(">") || value.startsWith("|")) {
       throw new SkillError(`\`${file}\`: frontmatter line ${i + 2} must use a simple one-line value.`)
     }
-    if (value.startsWith('"') || value.startsWith("'")) {
+    if (
+      (value.startsWith('"') && value.endsWith('"') && value.length >= 2) ||
+      (value.startsWith("'") && value.endsWith("'") && value.length >= 2)
+    ) {
       throw new SkillError(`\`${file}\`: frontmatter line ${i + 2} uses quoted YAML; use a plain one-line value.`)
     }
     fields.set(key, value)
