@@ -55,9 +55,9 @@ model-emitted there — it is synthesized from the decision fields by the
 `routeRecord` projection (the prompt tells the model to leave it null).
 `implement` writes files — bind it to a provider
 with enforced write boundaries (`codex`: OS sandbox derived from the effect
-scope; `claude`: acceptEdits + workspace boundary). `cursor-agent`,
-`opencode`, and `pi` fail closed on write scopes, so they can fill `route`
-(effect-free) but not `implement`.
+scope; `claude`: acceptEdits + workspace boundary; `cursor-agent`: Cursor
+sandbox plus Vernier's post-run diff). `opencode` and `pi` fail closed on
+write scopes, so they can fill `route` (effect-free) but not `implement`.
 
 ## Run it
 

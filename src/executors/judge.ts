@@ -22,7 +22,8 @@
 // reports which binary actually backs judge/distill. opencode/pi are not
 // constructible defaults because their workers refuse a read-only sandbox
 // (nothing enforceable behind it — a judge that can write is not a judge);
-// cursor needs per-run config plumbing. Both remain reachable via `worker`.
+// Cursor is not wired into this constructor yet. Both remain reachable via
+// `worker`.
 // Config-level judge binding is the `judge` block in vernier.config
 // (`"judge": { "provider": "codex" | "claude" }` — the user-facing executor
 // vocabulary, mapped onto this constructor's provider by cli/config.ts);

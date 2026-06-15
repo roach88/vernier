@@ -22,6 +22,9 @@
   "files": [
     "dist",
     "bin",
+    "docs/walkthrough.md",
+    "docs/provider-executors.md",
+    "examples",
     "templates",
     "NOTICE",
     "src/executors/vendor/omegacode/LICENSE"

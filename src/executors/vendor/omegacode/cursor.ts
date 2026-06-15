@@ -1,14 +1,16 @@
 // CursorWorker - drives Cursor Agent CLI print mode one shot at a time.
 //
-// Safety surface: Cursor Agent does not provide Codex-style OS confinement, so this worker only
-// accepts read-only specs. The vernier-facing CursorExecutor fails write scopes before a subprocess
-// is spawned; this worker repeats the check for direct factory use.
+// Safety surface: Vernier maps read-only specs to Cursor Ask mode and workspace-write specs to
+// Cursor Agent mode, always with Cursor's sandbox switch enabled. Cursor requires --force for
+// print-mode writes, so only workspace-write work turns receive it. Exact EffectScope enforcement
+// remains Vernier's post-run diff/ledger layer, not Cursor's mode flag.
 
 import { mkdirSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { addUsage, emptyUsage, type AgentResult, type AgentSpec, type AgentUsage } from "./types.js"
 import { AgentError, AgentInterrupted, type Worker, type WorkerContext, type WorkerProgress } from "./index.js"
+import { resolveCursorBin } from "../../cursor-bin.js"
 import { assertValidSchema, parseJsonLoose, stripNullOptionals, validate } from "./schema.js"
 import {
   DEFAULT_STALL_TIMEOUT_MS,
@@ -37,6 +39,8 @@ interface TurnOutcome {
   usage: AgentUsage
 }
 
+type CursorMode = "ask" | "agent"
+
 const ALLOW_ENV_KEYS = ["PATH", "HOME", "SHELL", "TMPDIR", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "CURSOR_API_KEY"]
 
 export function cursorEnv(base: NodeJS.ProcessEnv = process.env, configDir?: string): NodeJS.ProcessEnv {
@@ -58,7 +62,7 @@ export class CursorWorker implements Worker {
   private readonly envBase: NodeJS.ProcessEnv | undefined
 
   constructor(opts: CursorWorkerOpts = {}) {
-    this.bin = opts.bin ?? "cursor-agent"
+    this.bin = resolveCursorBin({ ...(opts.bin !== undefined ? { explicitBin: opts.bin } : {}), ...(opts.env !== undefined ? { env: opts.env } : {}) }).bin
     this.spawnProcess = opts.spawnProcess
     this.stallTimeoutMs = opts.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS
     this.configDir = opts.configDir ?? mkdtempSync(join(tmpdir(), "omegacode-cursor-config-"))
@@ -88,11 +92,11 @@ export class CursorWorker implements Worker {
         message: "cursor-agent effort mapping is not wired yet; omit effort for provider \"cursor-agent\"",
       })
     }
-    if (spec.sandbox !== "read-only") {
+    if (spec.sandbox !== "read-only" && spec.sandbox !== "workspace-write") {
       throw new AgentError({
         provider: PROVIDER,
         code: "unsupported_option",
-        message: `cursor-agent cannot enforce a "${spec.sandbox}" sandbox in Step 6A; use read-only/noEffects() or a provider with a hard sandbox`,
+        message: `cursor-agent cannot enforce a "${spec.sandbox}" sandbox; use read-only or workspace-write`,
       })
     }
     if (spec.approval !== "never") {
@@ -103,10 +107,10 @@ export class CursorWorker implements Worker {
       })
     }
 
-    const working = await this.runTurn(spec, withInstructions(spec, spec.prompt), ctx, true)
+    const working = await this.runTurn(spec, withInstructions(spec, spec.prompt), ctx, true, modeForSandbox(spec.sandbox))
     if (!spec.schema) return { text: working.text, status: "completed", usage: working.usage }
 
-    const extraction = await this.runTurn(spec, withInstructions(spec, extractionPrompt(spec, working.text)), ctx, false)
+    const extraction = await this.runTurn(spec, withInstructions(spec, extractionPrompt(spec, working.text)), ctx, false, "ask")
     let parsed: unknown
     try {
       parsed = parseJsonLoose(extraction.text)
@@ -140,12 +144,16 @@ export class CursorWorker implements Worker {
     // Spawn-per-call: nothing persistent to tear down.
   }
 
-  private args(spec: AgentSpec, prompt: string): string[] {
+  private args(spec: AgentSpec, prompt: string, mode: CursorMode): string[] {
     return [
       "-p",
       "--output-format",
       "stream-json",
       "--stream-partial-output",
+      `--mode=${mode}`,
+      "--sandbox",
+      "enabled",
+      ...(mode === "agent" ? ["--force"] : []),
       ...(spec.model ? ["--model", spec.model] : []),
       prompt,
     ]
@@ -156,7 +164,13 @@ export class CursorWorker implements Worker {
     return cursorEnv(this.envBase ?? process.env, this.configDir)
   }
 
-  private async runTurn(spec: AgentSpec, prompt: string, ctx: WorkerContext, forwardProgress: boolean): Promise<TurnOutcome> {
+  private async runTurn(
+    spec: AgentSpec,
+    prompt: string,
+    ctx: WorkerContext,
+    forwardProgress: boolean,
+    mode: CursorMode,
+  ): Promise<TurnOutcome> {
     let fallbackText = ""
     let resultText: string | undefined
     let usage = emptyUsage()
@@ -168,7 +182,7 @@ export class CursorWorker implements Worker {
     const exit = await runJsonlSubprocess({
       provider: PROVIDER,
       bin: this.bin,
-      args: this.args(spec, prompt),
+      args: this.args(spec, prompt, mode),
       cwd: spec.cwd,
       env: this.env(),
       signal: ctx.signal,
@@ -243,6 +257,10 @@ export class CursorWorker implements Worker {
     }
     return { text, usage }
   }
+}
+
+function modeForSandbox(sandbox: "read-only" | "workspace-write"): CursorMode {
+  return sandbox === "workspace-write" ? "agent" : "ask"
 }
 
 function withInstructions(spec: AgentSpec, prompt: string): string {

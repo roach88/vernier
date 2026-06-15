@@ -12,7 +12,7 @@ import { promisify } from "node:util"
 import { describe, expect, it } from "vitest"
 import { z } from "zod"
 import { defineConfig, type LoadedConfig } from "../src/cli/config.js"
-import { loopRegistry } from "../src/cli/registry.js"
+import { loopRegistry, wiredProviders } from "../src/cli/registry.js"
 import { JudgeExecutor } from "../src/executors/judge.js"
 import type { Loop } from "../src/kernel/types.js"
 import { journalPath } from "../src/ledger/ledger.js"
@@ -257,6 +257,20 @@ describe("vernier.config: the judge block", () => {
       } finally {
         await runtime.shutdown()
       }
+    }
+  })
+
+  it("default wired Cursor executor picks up VERNIER_CURSOR_MODEL", async () => {
+    const prev = process.env.VERNIER_CURSOR_MODEL
+    process.env.VERNIER_CURSOR_MODEL = "composer-2.5"
+    const providers = wiredProviders()
+    try {
+      const cursor = providers.executors.find((e) => e.id === "cursor-agent") as unknown as { model?: string }
+      expect(cursor.model).toBe("composer-2.5")
+    } finally {
+      if (prev === undefined) delete process.env.VERNIER_CURSOR_MODEL
+      else process.env.VERNIER_CURSOR_MODEL = prev
+      await providers.shutdown()
     }
   })
 

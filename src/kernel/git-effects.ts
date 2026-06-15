@@ -4,9 +4,9 @@
 // snapshot before, run the step, diff after, attribute the changed files,
 // and check them against the Step's EffectScope — "what changed AND was
 // it allowed". This replaces the hash-all-files observer for real-edit
-// loops: instead of re-hashing the world it asks git, via a throwaway
-// index, for the working tree's tree hash (so .gitignore is honored and
-// the diff is git's own attribution, not ours).
+// loops: it asks git, via a throwaway index, for the working tree's tree
+// hash, then unions that with Vernier's filesystem hash observer so ignored
+// files under the workdir still participate in exact EffectScope checks.
 //
 // The Python GitSnapshotter additionally excluded runner-managed files
 // (codex-events.jsonl etc.) from worker attribution by name. Here that
@@ -18,7 +18,7 @@ import { execFileSync } from "node:child_process"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { isAllowed, type EffectsObserver } from "./effects.js"
+import { changedFiles, isAllowed, snapshotDir, type EffectsObserver, type Snapshot } from "./effects.js"
 
 function git(workdir: string, args: string[], env?: NodeJS.ProcessEnv): string {
   return execFileSync("git", args, {
@@ -59,13 +59,23 @@ export function gitStatus(workdir: string): string {
   return git(workdir, ["status", "--short"])
 }
 
+interface GitObserverSnapshot {
+  readonly tree: string
+  readonly files: Snapshot
+}
+
 /** The git-aware observer for loops whose workdir is a git repository. */
 export const gitObserver: EffectsObserver = {
   async snapshot(workdir) {
-    return gitTreeSnapshot(workdir)
+    return { tree: gitTreeSnapshot(workdir), files: snapshotDir(workdir) }
   },
   async assess(workdir, before, scope) {
-    const changed = gitChangedFiles(workdir, String(before), gitTreeSnapshot(workdir))
+    const prior = before as GitObserverSnapshot
+    const afterTree = gitTreeSnapshot(workdir)
+    const afterFiles = snapshotDir(workdir)
+    const gitChanged = gitChangedFiles(workdir, prior.tree, afterTree)
+    const fsChanged = changedFiles(prior.files, afterFiles)
+    const changed = [...new Set([...gitChanged, ...fsChanged])].sort()
     const unexpected = changed.filter((path) => !isAllowed(path, scope))
     return { changed, allowed: unexpected.length === 0, unexpected }
   },

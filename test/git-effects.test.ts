@@ -1,7 +1,7 @@
 // The git-aware effects observer against a real git repo in a temp dir:
 // snapshot -> change -> assess attributes adds/edits/deletes, checks them
-// against the EffectScope, and honors .gitignore (the reason this observer
-// exists instead of hash-everything).
+// against the EffectScope, and catches ignored-file writes without touching
+// the real index.
 
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -53,7 +53,7 @@ describe("git-aware effects observer", () => {
     expect(obs.unexpected).toEqual([])
   })
 
-  it("honors .gitignore — ignored churn is not attributed (unlike the hash observer)", async () => {
+  it("attributes ignored file changes while still skipping heavy internal dirs", async () => {
     const dir = gitRepo()
     writeFileSync(join(dir, ".gitignore"), "*.log\nnode_modules/\n")
     const before = await gitObserver.snapshot(dir)
@@ -61,8 +61,9 @@ describe("git-aware effects observer", () => {
     mkdirSync(join(dir, "node_modules", "x"), { recursive: true })
     writeFileSync(join(dir, "node_modules", "x", "index.js"), "noise\n")
     const obs = await gitObserver.assess(dir, before, fsScope())
-    expect(obs.changed).toEqual([])
-    expect(obs.allowed).toBe(true)
+    expect(obs.changed).toEqual(["debug.log"])
+    expect(obs.allowed).toBe(false)
+    expect(obs.unexpected).toEqual(["debug.log"])
   })
 
   it("never touches the real index (the throwaway-GIT_INDEX_FILE invariant)", async () => {

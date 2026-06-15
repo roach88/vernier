@@ -45,6 +45,7 @@ const allTemplatesRegistry = () => loopRegistry(ALL_TEMPLATES)
 
 const probes = (over: Partial<DoctorProbes> = {}): DoctorProbes => ({
   which: () => undefined,
+  env: () => ({}),
   zodInstalls: () => [],
   ...over,
 })
@@ -70,7 +71,7 @@ describe("diagnose()", () => {
     const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, probes(), ALL_TEMPLATE_SKILLS)
 
     expect(executorById(report, "codex")).toMatchObject({ ok: false, requires: "codex" })
-    expect(executorById(report, "cursor-agent")).toMatchObject({ ok: false, requires: "cursor-agent" })
+    expect(executorById(report, "cursor-agent")).toMatchObject({ ok: false, requires: "agent" })
     expect(executorById(report, "opencode")).toMatchObject({ ok: false, requires: "opencode" })
     expect(executorById(report, "pi")).toMatchObject({ ok: false, requires: "pi" })
     // claude is a CLI provider like every other: probed as a binary on PATH, never an SDK.
@@ -104,6 +105,45 @@ describe("diagnose()", () => {
     expect(report.ok).toBe(true) // the shipped bindings point at codex, not claude
   })
 
+  it("probes Cursor through the shared agent then cursor-agent fallback", async () => {
+    const onlyAgent = await diagnose(
+      loopRegistry(),
+      undefined,
+      probes({ which: (bin) => (bin === "agent" ? "/fake/bin/agent" : undefined) }),
+      ALL_TEMPLATE_SKILLS,
+    )
+    expect(executorById(onlyAgent, "cursor-agent")).toMatchObject({ ok: true, requires: "agent", detail: expect.stringContaining("/fake/bin/agent") })
+
+    const onlyCursorAgent = await diagnose(
+      loopRegistry(),
+      undefined,
+      probes({ which: (bin) => (bin === "cursor-agent" ? "/fake/bin/cursor-agent" : undefined) }),
+      ALL_TEMPLATE_SKILLS,
+    )
+    expect(executorById(onlyCursorAgent, "cursor-agent")).toMatchObject({
+      ok: true,
+      requires: "cursor-agent",
+      detail: expect.stringContaining("/fake/bin/cursor-agent"),
+    })
+  })
+
+  it("honors VERNIER_CURSOR_BIN in Cursor doctor probing", async () => {
+    const report = await diagnose(
+      loopRegistry(),
+      undefined,
+      probes({
+        env: () => ({ VERNIER_CURSOR_BIN: "custom-cursor" }),
+        which: (bin) => (bin === "custom-cursor" ? "/fake/bin/custom-cursor" : undefined),
+      }),
+      ALL_TEMPLATE_SKILLS,
+    )
+    expect(executorById(report, "cursor-agent")).toMatchObject({
+      ok: true,
+      requires: "custom-cursor",
+      detail: expect.stringContaining("VERNIER_CURSOR_BIN=`custom-cursor`"),
+    })
+  })
+
   it("reports each step's resolved skills against the discovered registry; a config skillBindings layer rebinds at rest and a missing name blocks", async () => {
     const report = await diagnose(allTemplatesRegistry(), ALL_TEMPLATES, allFound(), ALL_TEMPLATE_SKILLS)
     const loop = loopById(report, "plan-work-review")!
@@ -128,7 +168,7 @@ describe("diagnose()", () => {
     expect(report.ok).toBe(true) // nothing registered = nothing broken
     // The environment question is still answered: what could this machine run?
     for (const id of ["codex", "cursor-agent", "claude", "opencode", "pi"]) {
-      expect(executorById(report, id)).toMatchObject({ ok: false, requires: id === "claude" ? "claude" : id })
+      expect(executorById(report, id)).toMatchObject({ ok: false, requires: id === "cursor-agent" ? "agent" : id })
     }
     expect(executorById(report, "judge")).toMatchObject({ ok: false, requires: "codex" })
     expect(executorById(report, "recall")).toMatchObject({ ok: true, requires: null })

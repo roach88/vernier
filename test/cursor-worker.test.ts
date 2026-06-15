@@ -1,11 +1,12 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { EventEmitter } from "node:events"
-import { mkdtempSync } from "node:fs"
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
 import { describe, expect, it } from "vitest"
 import { AgentError, AgentInterrupted, type WorkerProgress } from "../src/executors/vendor/omegacode/index.js"
+import { resolveCursorBin } from "../src/executors/cursor-bin.js"
 import { CursorWorker, cursorEnv } from "../src/executors/vendor/omegacode/cursor.js"
 import type { AgentSpec } from "../src/executors/vendor/omegacode/types.js"
 import type { SpawnProcess } from "../src/executors/vendor/omegacode/subprocess-jsonl.js"
@@ -96,15 +97,27 @@ describe("CursorWorker", () => {
       ],
     })
     const { ctx, progress } = context()
-    const result = await new CursorWorker({ spawnProcess, stallTimeoutMs: 0 }).runAgent(spec(), ctx)
+    const result = await new CursorWorker({ spawnProcess, stallTimeoutMs: 0, env: { PATH: "" } }).runAgent(spec(), ctx)
 
     expect(result).toMatchObject({ status: "completed", text: "Done." })
     expect(progress).toEqual([{ kind: "text", text: "Working..." }])
-    expect(calls[0]!.bin).toBe("cursor-agent")
-    expect(calls[0]!.args.slice(0, 4)).toEqual(["-p", "--output-format", "stream-json", "--stream-partial-output"])
+    expect(calls[0]!.bin).toBe("agent")
+    expect(calls[0]!.args.slice(0, 7)).toEqual(["-p", "--output-format", "stream-json", "--stream-partial-output", "--mode=ask", "--sandbox", "enabled"])
     expect(calls[0]!.args).not.toContain("--force")
     expect(calls[0]!.args.at(-1)).toBe("Tell me about this repo.")
     expect(calls[0]!.opts.env?.CURSOR_CONFIG_DIR).toContain("omegacode-cursor-config-")
+  })
+
+  it("runs workspace-write turns in Cursor agent mode with sandbox enabled", async () => {
+    const { spawnProcess, calls } = scriptedSpawn({ stdout: [{ type: "result", result: "Done.", is_error: false }] })
+    const { ctx } = context()
+    const result = await new CursorWorker({ spawnProcess, stallTimeoutMs: 0, env: { PATH: "" } }).runAgent(spec({ sandbox: "workspace-write" }), ctx)
+
+    expect(result).toMatchObject({ status: "completed", text: "Done." })
+    expect(calls[0]!.args).toContain("--mode=agent")
+    expect(calls[0]!.args).toContain("--sandbox")
+    expect(calls[0]!.args).toContain("enabled")
+    expect(calls[0]!.args).toContain("--force")
   })
 
   it("forwards tool call and result events as normalized progress", async () => {
@@ -130,8 +143,9 @@ describe("CursorWorker", () => {
       { stdout: [{ type: "result", result: JSON.stringify({ passed: true }), is_error: false }] },
     )
     const { ctx } = context()
-    const result = await new CursorWorker({ spawnProcess, stallTimeoutMs: 0 }).runAgent(
+    const result = await new CursorWorker({ spawnProcess, stallTimeoutMs: 0, env: { PATH: "" } }).runAgent(
       spec({
+        sandbox: "workspace-write",
         schema: {
           type: "object",
           properties: { passed: { type: "boolean" } },
@@ -144,9 +158,40 @@ describe("CursorWorker", () => {
 
     expect(result.structured).toEqual({ passed: true })
     expect(calls).toHaveLength(2)
-    expect(calls[0]!.args).not.toContain("--force")
+    expect(calls[0]!.args).toContain("--force")
+    expect(calls[0]!.args).toContain("--mode=agent")
     expect(calls[1]!.args).not.toContain("--force")
+    expect(calls[1]!.args).toContain("--mode=ask")
+    expect(calls[1]!.args).toContain("--sandbox")
+    expect(calls[1]!.args).toContain("enabled")
     expect(calls[1]!.args.at(-1)).toContain("Output ONLY the JSON")
+  })
+
+  it("keeps read-only structured output in Ask mode for both turns", async () => {
+    const { spawnProcess, calls } = scriptedSpawn(
+      { stdout: [{ type: "result", result: "The answer is yes.", is_error: false }] },
+      { stdout: [{ type: "result", result: JSON.stringify({ passed: true }), is_error: false }] },
+    )
+    const { ctx } = context()
+    const result = await new CursorWorker({ spawnProcess, stallTimeoutMs: 0, env: { PATH: "" } }).runAgent(
+      spec({
+        sandbox: "read-only",
+        schema: {
+          type: "object",
+          properties: { passed: { type: "boolean" } },
+          required: ["passed"],
+          additionalProperties: false,
+        },
+      }),
+      ctx,
+    )
+
+    expect(result.structured).toEqual({ passed: true })
+    expect(calls).toHaveLength(2)
+    expect(calls[0]!.args).toContain("--mode=ask")
+    expect(calls[0]!.args).not.toContain("--force")
+    expect(calls[1]!.args).toContain("--mode=ask")
+    expect(calls[1]!.args).not.toContain("--force")
   })
 
   it("rejects invalid structured extraction before returning AgentResult.structured", async () => {
@@ -174,6 +219,7 @@ describe("CursorWorker", () => {
     const configDir = mkdtempSync(join(tmpdir(), "vernier-cursor-config-"))
     const { ctx } = context()
     await new CursorWorker({
+      bin: "cursor-agent",
       spawnProcess,
       stallTimeoutMs: 0,
       configDir,
@@ -216,8 +262,48 @@ describe("CursorWorker", () => {
     })
   })
 
-  it("rejects unsupported write scopes inside the worker as a second safety check", async () => {
+  it("resolves Cursor binaries through env and PATH fallback", () => {
+    expect(resolveCursorBin({ env: {}, which: (bin) => (bin === "agent" ? "/bin/agent" : undefined) })).toMatchObject({
+      ok: true,
+      bin: "/bin/agent",
+      requires: "agent",
+    })
+    expect(resolveCursorBin({ env: {}, which: (bin) => (bin === "cursor-agent" ? "/bin/cursor-agent" : undefined) })).toMatchObject({
+      ok: true,
+      bin: "/bin/cursor-agent",
+      requires: "cursor-agent",
+    })
+    expect(
+      resolveCursorBin({
+        explicitBin: "cursor-agent",
+        env: { VERNIER_CURSOR_BIN: "agent" },
+        which: (bin) => (bin === "cursor-agent" ? "/bin/cursor-agent" : bin === "agent" ? "/bin/agent" : undefined),
+      }),
+    ).toMatchObject({
+      ok: true,
+      bin: "cursor-agent",
+      requires: "cursor-agent",
+      source: "explicit",
+      found: "/bin/cursor-agent",
+    })
+    expect(resolveCursorBin({ env: { VERNIER_CURSOR_BIN: "custom-cursor" }, which: () => undefined })).toMatchObject({
+      ok: false,
+      bin: "custom-cursor",
+      requires: "custom-cursor",
+    })
+  })
+
+  it("does not resolve Cursor defaults from relative PATH entries", () => {
+    const dir = mkdtempSync(join(tmpdir(), "vernier-cursor-relative-path-"))
+    writeFileSync(join(dir, "agent"), "#!/bin/sh\nexit 0\n", "utf8")
+    chmodSync(join(dir, "agent"), 0o755)
+
+    expect(resolveCursorBin({ env: { PATH: dir } })).toMatchObject({ ok: true, bin: join(dir, "agent") })
+    expect(resolveCursorBin({ env: { PATH: "." } })).toMatchObject({ ok: false, requires: "agent" })
+  })
+
+  it("rejects danger-full-access inside the worker as a second safety check", async () => {
     const { spawnProcess } = scriptedSpawn({ stdout: [{ type: "result", result: "ok", is_error: false }] })
-    await expect(new CursorWorker({ spawnProcess }).runAgent(spec({ sandbox: "workspace-write" }), context().ctx)).rejects.toBeInstanceOf(AgentError)
+    await expect(new CursorWorker({ spawnProcess }).runAgent(spec({ sandbox: "danger-full-access" }), context().ctx)).rejects.toBeInstanceOf(AgentError)
   })
 })
