@@ -95,24 +95,19 @@ describe("CursorExecutor", () => {
     })
   })
 
-  it("fails closed for write scopes with preflight evidence and never invokes the worker", async () => {
-    let invoked = false
-    const worker: Worker = {
-      id: "cursor-agent",
-      async runAgent() {
-        invoked = true
-        return { text: "unexpected", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } }
-      },
-      async shutdown() {},
-    }
+  it("hands workspace-write Cursor AgentSpec to the worker for write scopes", async () => {
+    const { worker, seen } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
+    const wd = workdir()
     const s = spec({ effects: fsScope("docs/**") })
-    const result = await new CursorExecutor({ worker }).run(s, { workdir: workdir() })
+    const result = await new CursorExecutor({ worker }).run(s, { workdir: wd })
 
-    expect(invoked).toBe(false)
-    expect(result.status).toBe("failed")
-    expect(result.output).toMatchObject({ code: "unsupported_sandbox", retryable: false })
-    expect(result.evidence.map((e) => e.role)).toEqual(["worker-prompt", "cursor-preflight"])
-    expect(readFileSync(join(s.runDir, "cursor-preflight.json"), "utf8")).toContain("docs/**")
+    expect(result.status).toBe("completed")
+    expect(seen[0]).toMatchObject({
+      provider: "cursor-agent",
+      cwd: wd,
+      sandbox: "workspace-write",
+      approval: "never",
+    })
   })
 
   it("labels retry-attempt evidence with the same retry prefix as other executors", async () => {

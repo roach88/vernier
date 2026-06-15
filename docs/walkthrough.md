@@ -1369,10 +1369,11 @@ The real gotchas, in the order you will hit them:
   enforceable sandbox, so vernier fails CLOSED on write-scoped steps (they
   refuse to run at all) and runs effect-free steps on the providers' only
   mode — OS-unconfined, with read-only *intent* observed post-hoc by
-  effect attribution, never enforced up front. `cursor-agent` is the same
-  for writes (fail closed; read-only steps only). Bind codex (OS sandbox
-  derived from the EffectScope) or claude (permission-mode + toolset gate)
-  where enforcement matters.
+  effect attribution, never enforced up front. `cursor-agent` supports
+  read-only and workspace-write via Cursor's sandboxed Ask/Agent modes;
+  Vernier still enforces the declared `EffectScope` after the turn through
+  effect attribution. Bind codex or claude when you need their provider-native
+  sandbox semantics specifically.
 - **claude executor setup:** the `claude` CLI (Claude Code >= 2.0) on
   PATH, like every other provider — no SDK, no extra package;
   `vernier doctor` says whether it is found. Effect-free steps run on a

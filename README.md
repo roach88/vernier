@@ -55,18 +55,18 @@ shapes on the same five slots.
 
 There is no special "orchestrator" object. The engine is Vernier; Codex can
 play the route/orchestrator **step** because that step's executor binding
-resolves to `codex`. A second step can delegate the coding read to
+resolves to `codex`. A second step can delegate scoped implementation work to
 `cursor-agent`.
 
-Cursor is currently read-only in Vernier, so this is a read-only coding test
-case: Cursor inspects the repo and returns a patch plan or diff text, but it
-does not apply edits. If the coding step must write files, bind it to `codex`
-or `claude` instead.
+Cursor supports both read-only and workspace-write steps in Vernier. Cursor's
+CLI sandbox provides workspace-level containment; Vernier still records and
+checks the actual file effects after the turn. Out-of-scope writes are
+journaled and escalated by policy rather than silently accepted.
 
 ```jsonc
 // vernier.config.json
 {
-  "loops": ["./codex-cursor-readonly-loop.mjs"],
+  "loops": ["./codex-cursor-write-loop.mjs"],
   "bindings": {
     "route": "codex",
     "implement": "cursor-agent"
@@ -79,9 +79,9 @@ The loop data stays provider-neutral. Both steps declare the role
 the delegated coding step:
 
 ```js
-// codex-cursor-readonly-loop.mjs
+// codex-cursor-write-loop.mjs
 import { z } from "zod"
-import { defineLoop, noEffects, retryPolicy, sig } from "vernier"
+import { artifactFromEffects, defineLoop, fsScope, noEffects, retryPolicy, sig } from "vernier"
 
 const basePolicy = retryPolicy({ maxAttempts: 1 })
 const policy = (obs) => {
@@ -100,11 +100,11 @@ const policy = (obs) => {
 }
 
 const loop = {
-  id: "codex-cursor-readonly",
+  id: "codex-cursor-write",
   version: "0.1.0",
   signature: sig(
     z.object({ task: z.string() }),
-    z.object({ decision: z.string(), patchPlan: z.string() }),
+    z.object({ decision: z.string(), artifactPath: z.string() }),
   ),
   steps: [
     {
@@ -117,18 +117,19 @@ const loop = {
       structuredOutput: true,
       effects: noEffects(),
       prompt: (spec) =>
-        `Return decision=delegate only if this coding task is safe for a read-only repo inspection.\n\nTask: ${spec.inputs.task}`,
+        `Return decision=delegate only if this coding task can be implemented by writing one docs/agent-workflows file.\n\nTask: ${spec.inputs.task}`,
     },
     {
       id: "implement",
       executor: "agent",
       signature: sig(
         z.object({ task: z.string(), decision: z.string(), reason: z.string() }),
-        z.object({ patchPlan: z.string() }),
+        z.object({ artifactPath: z.string() }),
       ),
-      effects: noEffects(),
+      effects: fsScope("docs/agent-workflows/**"),
+      outputFrom: artifactFromEffects("artifactPath", "docs/agent-workflows/**"),
       prompt: (spec) =>
-        `Read the repository and propose the smallest safe patch. Do not edit files.\n\nTask: ${spec.inputs.task}`,
+        `Implement the approved task by writing exactly one file under docs/agent-workflows/. Do not edit anything else.\n\nTask: ${spec.inputs.task}`,
     },
   ],
   policy,
@@ -139,8 +140,8 @@ const loop = {
 export default defineLoop({
   loop,
   live: true,
-  summary: "Codex gates a read-only coding task, Cursor proposes the patch plan.",
-  signature: "task:string -> decision:string, patchPlan:string",
+  summary: "Codex gates a coding task, Cursor writes one scoped artifact.",
+  signature: "task:string -> decision:string, artifactPath:string",
 })
 ```
 
@@ -148,8 +149,8 @@ Run the live test case:
 
 ```sh
 vernier doctor
-vernier run codex-cursor-readonly \
-  --input '{"task":"Inspect src/cache.ts and propose the smallest safe patch. Return a plan only."}'
+vernier run codex-cursor-write \
+  --input '{"task":"Write a short note explaining the cache invalidation strategy."}'
 vernier show <runId>
 ```
 
@@ -157,20 +158,20 @@ Representative `vernier show` output, with paths and token counts varying
 by machine and provider:
 
 ```
-run       codex-cursor-readonly-20260615-021422-a91c4e
-loop      codex-cursor-readonly@0.1.0
+run       codex-cursor-write-20260615-021422-a91c4e
+loop      codex-cursor-write@0.1.0
 status    done
-journal   .vernier/runs/codex-cursor-readonly-20260615-021422-a91c4e/journal.jsonl
+journal   .vernier/runs/codex-cursor-write-20260615-021422-a91c4e/journal.jsonl
 --- timeline (9 events) ---
- +0.00s  ◷ run start — codex-cursor-readonly@0.1.0 (trust=dry-run, keys=loop-v2)
+ +0.00s  ◷ run start — codex-cursor-write@0.1.0 (trust=dry-run, keys=loop-v2)
  +0.00s  ▶ route#1.1 started (codex)
  +5.84s  ✔ route#1.1 completed — in=1,184 out=147 · 5.8s
  +5.84s  ± route#1.1 effects: 0 files changed (allowed)
  +5.84s  → route#1.1 continue/success — route approved; continue to implement.
  +5.85s  ▶ implement#1.1 started (cursor-agent)
 +18.20s  ✔ implement#1.1 completed — in=8,942 out=612 · 12.3s
-+18.20s  ± implement#1.1 effects: 0 files changed (allowed)
-+18.20s  ■ implement#1.1 stop/success — patch plan returned; no files changed.
++18.20s  ± implement#1.1 effects: 1 file changed (allowed)
++18.20s  ■ implement#1.1 stop/success — scoped artifact returned.
 --- per-step usage ---
 step       execs  tok-in  tok-out  time
 route      1      1,184   147      5.8s
@@ -184,8 +185,8 @@ the same loop-as-data story as append-only facts:
 {"type":"step_started","stepId":"route","iteration":1,"attempt":1,"executorId":"codex"}
 {"type":"decision","stepId":"route","decision":{"kind":"continue","classification":"success"}}
 {"type":"step_started","stepId":"implement","iteration":1,"attempt":1,"executorId":"cursor-agent"}
-{"type":"step_result","stepId":"implement","status":"completed","output":{"patchPlan":"..."},"outputValid":true}
-{"type":"effects","stepId":"implement","observation":{"changed":[],"allowed":true,"unexpected":[]}}
+{"type":"step_result","stepId":"implement","status":"completed","output":{"artifactPath":"docs/agent-workflows/cache-note.md"},"outputValid":true}
+{"type":"effects","stepId":"implement","observation":{"changed":["docs/agent-workflows/cache-note.md"],"allowed":true,"unexpected":[]}}
 {"type":"decision","stepId":"implement","decision":{"kind":"stop","classification":"success"}}
 ```
 
@@ -206,7 +207,7 @@ npm link          # optional: a global `vernier` on PATH
 ```
 
 Agent providers are CLIs on PATH — `codex`, `claude` (Claude Code),
-`cursor-agent`, `opencode`, `pi` — and none is required to install or to
+Cursor's `agent` or `cursor-agent`, `opencode`, `pi` — and none is required to install or to
 run the test suite: `vernier doctor` tells you which are usable on this
 machine, and any of them can fill any role. Memory recall uses the built-in
 lexical BM25 ranker by default; custom retrievers are opt-in code.
@@ -565,7 +566,7 @@ the JSONL store contents. If you need vectors, supply a custom
 | executor | status | needs |
 |---|---|---|
 | `codex` | wired | `codex` on PATH; sandbox derived from EffectScope, never full-access |
-| `cursor-agent` | wired | `cursor-agent` on PATH; read-only steps only (no hard sandbox for writes) |
+| `cursor-agent` | wired | Cursor CLI `agent` or `cursor-agent` on PATH, or `VERNIER_CURSOR_BIN`; supports read-only and workspace-write, with `VERNIER_CURSOR_MODEL` for model selection |
 | `claude` | wired | `claude` (Claude Code >= 2.0) on PATH; effect-free steps run on a read-only toolset (`Read,Glob,Grep`, asks auto-denied), write scopes on `acceptEdits` — edits confined to the workdir by Claude Code's workspace boundary, Bash and out-of-workspace writes denied (print mode cannot grant); permission-bypass flags are never passed; Agent Skills delivered natively (a synthesized session `--plugin-dir` plugin — see "Skills") |
 | `opencode` | wired | `opencode` (>= 1.16.2) on PATH; noEffects() steps only — the provider has no enforceable sandbox, so write scopes fail closed and effect-free steps run unconfined (read-only intent observed post-hoc, not enforced) |
 | `pi` | wired | `pi` (>= 0.79.1, `@earendil-works/pi-coding-agent`) on PATH; same posture as opencode — write scopes fail closed, effect-free steps run unconfined |

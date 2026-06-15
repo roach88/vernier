@@ -1,20 +1,21 @@
 // CursorExecutor: Cursor Agent behind the Executor seam.
 //
-// Cursor Agent Step 6A is deliberately read-only only. Unlike Codex, Cursor does not expose the
-// hard sandbox vernier needs for scoped writes, so write scopes become evidence-bearing failures
-// before the provider process starts.
+// Cursor's CLI provides read-only Ask mode and write-capable Agent mode behind
+// its own sandbox switch. Vernier maps EffectScope -> read-only/workspace-write
+// the same way Codex/Claude do; exact path scope remains the engine's post-run
+// effect observation contract.
 
 import { join } from "node:path"
 import { CursorWorker } from "./vendor/omegacode/cursor.js"
 import type { AgentError, AgentInterrupted, Worker } from "./vendor/omegacode/index.js"
-import type { AgentSpec } from "./vendor/omegacode/types.js"
+import type { AgentSpec, Sandbox } from "./vendor/omegacode/types.js"
 import type { Executor, RunContext, StepResult, StepSpec } from "../kernel/types.js"
-import { beginWorkerStep, requirePrompt, runWorkerStep, unsupportedSandboxResult } from "./worker-step.js"
+import { beginWorkerStep, requirePrompt, runWorkerStep } from "./worker-step.js"
 
 export interface CursorExecutorOpts {
   /** Injectable worker (tests pass scripted workers). Default: a per-run CursorWorker. */
   readonly worker?: Worker
-  /** Cursor Agent binary. Defaults to "cursor-agent"; pass "agent" or an absolute path explicitly. */
+  /** Cursor CLI binary. Defaults through the shared resolver; explicit values bypass fallback. */
   readonly bin?: string
   readonly model?: string
 }
@@ -34,20 +35,14 @@ export class CursorExecutor implements Executor {
   async run(spec: StepSpec, ctx: RunContext): Promise<StepResult> {
     const prompt = requirePrompt(this.id, spec)
     const evidence = beginWorkerStep(spec, "cursor", prompt)
-
-    if (spec.effects.allow.length > 0) {
-      const message =
-        `cursor-agent Step 6A supports read-only/noEffects() steps only; ` +
-        `refusing to run write scope(s): ${spec.effects.allow.join(", ")}`
-      return unsupportedSandboxResult({ spec, evidence, provider: this.id, fileStem: "cursor", role: "cursor-preflight", message })
-    }
+    const sandbox: Sandbox = spec.effects.allow.length > 0 ? "workspace-write" : "read-only"
 
     const configDir = join(spec.runDir, `${evidence.prefix}cursor-config`)
     const agentSpec: AgentSpec = {
       prompt,
       provider: "cursor-agent",
       cwd: ctx.workdir,
-      sandbox: "read-only",
+      sandbox,
       approval: "never",
       ...(this.model ? { model: this.model } : {}),
       ...(spec.outputSchema ? { schema: spec.outputSchema } : {}),

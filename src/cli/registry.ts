@@ -67,7 +67,7 @@ function scratchDir(label: string): string {
 export function wiredProviders(): { readonly executors: readonly Executor[]; shutdown(): Promise<void> } {
   const executors = [
     new CodexExecutor(),
-    new CursorExecutor(),
+    new CursorExecutor({ ...(process.env.VERNIER_CURSOR_MODEL ? { model: process.env.VERNIER_CURSOR_MODEL } : {}) }),
     new ClaudeExecutor(),
     new OpencodeExecutor(),
     new PiExecutor(),

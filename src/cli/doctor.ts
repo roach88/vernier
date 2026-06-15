@@ -29,11 +29,12 @@
 // Exit 0 iff every registered loop is runnable; an unusable executor no
 // step resolves to is reported but does not fail the doctor.
 
-import { accessSync, constants, mkdtempSync, readFileSync, statSync } from "node:fs"
+import { mkdtempSync, readFileSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { delimiter, dirname, isAbsolute, join } from "node:path"
+import { dirname, join } from "node:path"
 import { ClaudeExecutor } from "../executors/claude.js"
 import { CodexExecutor } from "../executors/codex.js"
+import { defaultWhich, resolveCursorBin } from "../executors/cursor-bin.js"
 import { CursorExecutor } from "../executors/cursor.js"
 import { JudgeExecutor } from "../executors/judge.js"
 import { recallExecutor, rememberExecutor } from "../executors/memory.js"
@@ -58,19 +59,16 @@ export interface ZodInstall {
 export interface DoctorProbes {
   /** PATH lookup: absolute path of the first executable match, or undefined. Never runs the binary. */
   which(bin: string): string | undefined
+  /** Environment relevant to executor probing. Tests inject this so local VERNIER_* vars do not leak into reports. */
+  env(): NodeJS.ProcessEnv
   /** Every node_modules/zod on the upward dir chain from cwd, nearest first, each with its declared version — the zod-skew shadow probe. Never imports zod. */
   zodInstalls(): readonly ZodInstall[]
 }
 
 export const defaultProbes: DoctorProbes = {
-  which(bin) {
-    if (isAbsolute(bin)) return executable(bin) ? bin : undefined
-    for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-      if (!dir) continue
-      const candidate = join(dir, bin)
-      if (executable(candidate)) return candidate
-    }
-    return undefined
+  which: defaultWhich,
+  env() {
+    return process.env
   },
   zodInstalls() {
     const found: ZodInstall[] = []
@@ -98,15 +96,6 @@ function zodVersion(manifest: string): string {
     return typeof version === "string" ? version : ""
   } catch {
     return ""
-  }
-}
-
-function executable(path: string): boolean {
-  try {
-    accessSync(path, constants.X_OK)
-    return statSync(path).isFile()
-  } catch {
-    return false
   }
 }
 
@@ -172,12 +161,26 @@ export interface DoctorReport {
 // ---------------------------------------------------------------- diagnosis
 
 /** The binary each provider id spawns — what doctor looks up on PATH. */
-const PROVIDER_BIN: Record<ProviderId, string> = {
+const PROVIDER_BIN: Record<Exclude<ProviderId, "cursor-agent">, string> = {
   codex: "codex",
-  "cursor-agent": "cursor-agent",
   "claude-code": "claude",
   opencode: "opencode",
   pi: "pi",
+}
+
+function providerBin(provider: ProviderId, probes: DoctorProbes): ExecutorReport {
+  if (provider === "cursor-agent") {
+    const cursor = resolveCursorBin({ env: probes.env(), which: probes.which })
+    return { id: provider, ok: cursor.ok, requires: cursor.requires, detail: cursor.detail }
+  }
+  const bin = PROVIDER_BIN[provider]
+  const found = probes.which(bin)
+  return {
+    id: provider,
+    ok: found !== undefined,
+    requires: bin,
+    detail: found !== undefined ? `\`${bin}\` on PATH (${found})` : `\`${bin}\` not found on PATH`,
+  }
 }
 
 /** Probe one executor for the one thing it needs. Classification is by implementation, not id string. */
@@ -186,20 +189,32 @@ function checkExecutor(executor: Executor, fromConfig: boolean, probes: DoctorPr
   if (fromConfig) {
     return { id, ok: true, requires: null, detail: "config-registered executor (its module loaded)" }
   }
+  if (executor instanceof CursorExecutor) {
+    const cursor = providerBin("cursor-agent", probes)
+    return {
+      id,
+      ok: cursor.ok,
+      requires: cursor.requires,
+      detail: cursor.detail,
+    }
+  }
+
   const bin =
     executor instanceof CodexExecutor
       ? "codex"
       : executor instanceof JudgeExecutor
-        ? PROVIDER_BIN[executor.provider] // whichever provider actually backs judge/distill
+        ? null
         : executor instanceof ClaudeExecutor
           ? "claude" // the Claude Code CLI, probed like every other provider
-          : executor instanceof CursorExecutor
-            ? "cursor-agent"
-            : executor instanceof OpencodeExecutor
+          : executor instanceof OpencodeExecutor
               ? "opencode"
               : executor instanceof PiExecutor
                 ? "pi"
                 : null
+  if (executor instanceof JudgeExecutor) {
+    const report = providerBin(executor.provider, probes)
+    return { id, ok: report.ok, requires: report.requires, detail: report.detail }
+  }
   if (bin !== null) {
     const found = probes.which(bin)
     return {

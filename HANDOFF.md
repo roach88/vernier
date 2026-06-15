@@ -148,13 +148,16 @@ npm test                                   # auth-free suite
   before-snapshot is gone). Documented in `replayTick`.
 - **Lease takeover race:** two drivers seeing the same stale lease can both
   take over; fine for cron + human, not adversarial concurrency.
-- **cursor-agent is read-only:** write scopes fail closed before the
-  provider starts (no hard sandbox for writes in Cursor).
+- **cursor-agent supports workspace-write:** Vernier maps noEffects()
+  Cursor steps to Ask mode and write-scoped steps to Agent mode, always
+  with `--sandbox enabled`; exact scope is assessed after the turn by the
+  configured effects observer and journaled before policy decides. That is
+  detection/escalation, not pre-write glob confinement or automatic revert.
 - **opencode/pi run effect-free steps unconfined:** both providers expose
   NO enforceable sandbox (opencode's permission rules leave bash
   unconfined; pi's tool allowlists are not OS confinement), so their
   vendored workers accept only `danger-full-access`. The executors fail
-  closed on write scopes (cursor precedent) and run noEffects() steps on
+  closed on write scopes and run noEffects() steps on
   the providers' only mode — read-only intent is observed post-hoc by
   effect attribution, never enforced up front. Documented in both
   executor headers; bind codex (OS sandbox) or claude (permission-mode +
@@ -173,8 +176,7 @@ npm test                                   # auth-free suite
   caveat's shape; the `judge` config block landed, and
   doctor now probes whichever provider the config names. opencode/pi
   still cannot back the judge by construction — their workers refuse a
-  read-only sandbox — and cursor still needs per-run config plumbing;
-  inject a worker via a custom runtime if you must.)
+  read-only sandbox.)
 ---
 
 ## TL;DR for whoever picks this up
