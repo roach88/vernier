@@ -56,7 +56,7 @@ describe("CursorExecutor", () => {
       expect(ref.path.startsWith(s.runDir)).toBe(true)
       expect(existsSync(ref.path)).toBe(true)
     }
-    expect(readFileSync(join(s.runDir, "cursor-prompt.md"), "utf8")).toBe(s.prompt)
+    expect(readFileSync(join(s.runDir, "answer-cursor-prompt.md"), "utf8")).toBe(s.prompt)
   })
 
   it("maps structured AgentResult output onto StepResult output", async () => {
@@ -114,7 +114,7 @@ describe("CursorExecutor", () => {
     const { worker } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
     const s = spec({ attempt: 2 })
     await new CursorExecutor({ worker }).run(s, { workdir: workdir() })
-    expect(existsSync(join(s.runDir, "retry-2-cursor-final.md"))).toBe(true)
+    expect(existsSync(join(s.runDir, "retry-2-answer-cursor-final.md"))).toBe(true)
   })
 
   it("maps AgentError onto a failed StepResult and redacts auth-looking evidence", async () => {
@@ -137,7 +137,7 @@ describe("CursorExecutor", () => {
     expect(result.status).toBe("failed")
     expect(result.output).toMatchObject({ code: "provider_auth", retryable: false })
     expect(String(result.output.error)).not.toContain("secret-token")
-    expect(readFileSync(join(s.runDir, "cursor-final.md"), "utf8")).not.toContain("secret-token")
+    expect(readFileSync(join(s.runDir, "answer-cursor-final.md"), "utf8")).not.toContain("secret-token")
     expect(result.usage.inputTokens).toBe(10)
   })
 

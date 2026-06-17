@@ -44,6 +44,7 @@ export interface Observation {
   readonly contractValid: boolean
   readonly contractFailedChecks: readonly string[]
   readonly effectsAllowed: boolean
+  readonly effectsObserved?: boolean
   readonly unexpectedChanges: readonly string[]
   /** The signature-validated output value of this step; null when outputValid is false. */
   readonly output: Readonly<Record<string, unknown>> | null
@@ -77,6 +78,16 @@ export function decideNextStep(obs: Observation): Decision {
       summary: `step \`${obs.stepId}\` stopped before executor \`${obs.executorId}\` ran, so the loop needs a human before proceeding.`,
       notes: ["Executor was not run."],
       improvement: "Run the loop with execution enabled when the next pass should exercise this step.",
+    }
+  }
+
+  if (obs.effectsObserved === false) {
+    return {
+      kind: "escalate",
+      classification: "failure",
+      summary: `step \`${obs.stepId}\` has unknown file effects after crash recovery; human review is required before proceeding.`,
+      notes: ["Post-step effects were not observed before the prior process stopped."],
+      improvement: "Inspect the worktree and ledger, then resume only after the side-effect boundary is understood.",
     }
   }
 

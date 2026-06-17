@@ -56,7 +56,7 @@ describe("PiExecutor", () => {
       expect(ref.path.startsWith(s.runDir)).toBe(true)
       expect(existsSync(ref.path)).toBe(true)
     }
-    expect(readFileSync(join(s.runDir, "pi-prompt.md"), "utf8")).toBe(s.prompt)
+    expect(readFileSync(join(s.runDir, "answer-pi-prompt.md"), "utf8")).toBe(s.prompt)
   })
 
   it("maps structured AgentResult output onto StepResult output", async () => {
@@ -113,14 +113,14 @@ describe("PiExecutor", () => {
     expect(result.output).toMatchObject({ code: "unsupported_sandbox", retryable: false })
     expect(String(result.output.error)).toContain("no enforceable sandbox")
     expect(result.evidence.map((e) => e.role)).toEqual(["worker-prompt", "pi-preflight"])
-    expect(readFileSync(join(s.runDir, "pi-preflight.json"), "utf8")).toContain("docs/**")
+    expect(readFileSync(join(s.runDir, "answer-pi-preflight.json"), "utf8")).toContain("docs/**")
   })
 
   it("labels retry-attempt evidence with the same retry prefix as other executors", async () => {
     const { worker } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
     const s = spec({ attempt: 2 })
     await new PiExecutor({ worker }).run(s, { workdir: workdir() })
-    expect(existsSync(join(s.runDir, "retry-2-pi-final.md"))).toBe(true)
+    expect(existsSync(join(s.runDir, "retry-2-answer-pi-final.md"))).toBe(true)
   })
 
   it("maps AgentError onto a failed StepResult with code, retryability, and billed usage", async () => {
@@ -142,7 +142,7 @@ describe("PiExecutor", () => {
 
     expect(result.status).toBe("failed")
     expect(result.output).toMatchObject({ code: "provider_outdated", retryable: false })
-    expect(readFileSync(join(s.runDir, "pi-final.md"), "utf8")).toContain("below the minimum supported")
+    expect(readFileSync(join(s.runDir, "answer-pi-final.md"), "utf8")).toContain("below the minimum supported")
     expect(result.usage.inputTokens).toBe(10)
   })
 

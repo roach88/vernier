@@ -17,7 +17,7 @@
 
 import { createHash } from "node:crypto"
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { dirname, join, relative, resolve } from "node:path"
 import type { ContractResult } from "../kernel/contract.js"
 import type { EffectObservation } from "../kernel/effects.js"
 import type { Decision } from "../kernel/policy.js"
@@ -163,8 +163,25 @@ export function resolveLedgerRoot(spec: LedgerSpec): string {
   return spec.root ?? process.env.VERNIER_HOME ?? join(process.cwd(), ".vernier")
 }
 
+export function assertSafePathComponent(value: string, label = "path component"): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)) {
+    throw new Error(`${label} must be a safe path component (letters, numbers, dot, underscore, dash; no separators), got \`${value}\`.`)
+  }
+}
+
+function assertContained(parent: string, child: string): void {
+  const rel = relative(parent, child)
+  if (rel === "" || rel.startsWith("..") || rel.includes(":") || rel.startsWith("/")) {
+    throw new Error(`journal path escaped ledger root: \`${child}\` is outside \`${parent}\`.`)
+  }
+}
+
 export function journalPath(root: string, runId: string): string {
-  return join(root, "runs", runId, "journal.jsonl")
+  assertSafePathComponent(runId, "run id")
+  const runsRoot = resolve(root, "runs")
+  const path = resolve(runsRoot, runId, "journal.jsonl")
+  assertContained(runsRoot, path)
+  return path
 }
 
 export class Ledger {
@@ -200,6 +217,9 @@ export class Ledger {
  */
 export interface Replay {
   readonly meta?: RunMetaEntry
+  /** Terminal step results in this exact execution slot, regardless of status. */
+  readonly terminal: ReadonlyMap<string, StepResultEntry>
+  /** Completed results only, for summaries that care about successful outputs. */
   readonly completed: ReadonlyMap<string, StepResultEntry>
   readonly contracts: ReadonlyMap<string, ContractEntry>
   readonly effects: ReadonlyMap<string, EffectsEntry>
@@ -210,13 +230,17 @@ export interface Replay {
 export function replay(entries: readonly LedgerEntry[]): Replay {
   let meta: RunMetaEntry | undefined
   let lastDecision: DecisionEntry | undefined
+  const terminal = new Map<string, StepResultEntry>()
   const completed = new Map<string, StepResultEntry>()
   const contracts = new Map<string, ContractEntry>()
   const effects = new Map<string, EffectsEntry>()
   const decisions = new Map<string, DecisionEntry>()
   for (const entry of entries) {
     if (entry.type === "meta") meta = entry
-    else if (entry.type === "step_result" && entry.status === "completed") completed.set(entry.key, entry)
+    else if (entry.type === "step_result") {
+      terminal.set(entry.key, entry)
+      if (entry.status === "completed") completed.set(entry.key, entry)
+    }
     else if (entry.type === "contract") contracts.set(entry.key, entry)
     else if (entry.type === "effects") effects.set(entry.key, entry)
     else if (entry.type === "decision") {
@@ -224,6 +248,6 @@ export function replay(entries: readonly LedgerEntry[]): Replay {
       lastDecision = entry
     }
   }
-  const out: Replay = { completed, contracts, effects, decisions, ...(meta && { meta }), ...(lastDecision && { lastDecision }) }
+  const out: Replay = { terminal, completed, contracts, effects, decisions, ...(meta && { meta }), ...(lastDecision && { lastDecision }) }
   return out
 }

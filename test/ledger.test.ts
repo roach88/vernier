@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import {
   canonical,
+  journalPath,
   Ledger,
   replay,
   resumeKey,
@@ -113,5 +114,16 @@ describe("Ledger", () => {
     expect(view.meta?.runId).toBe("run-1")
     expect(view.completed.get(key)?.status).toBe("completed")
     expect(view.lastDecision?.decision.kind).toBe("stop")
+  })
+})
+
+describe("ledger path containment", () => {
+  it("rejects unsafe run ids before resolving journals", () => {
+    expect(() => journalPath("/tmp/vernier-ledger", "../escape")).toThrow(/safe path component/)
+    expect(() => journalPath("/tmp/vernier-ledger", "nested/run")).toThrow(/safe path component/)
+  })
+
+  it("keeps safe journal paths under the runs root", () => {
+    expect(journalPath("/tmp/vernier-ledger", "safe.run-1_2")).toBe("/tmp/vernier-ledger/runs/safe.run-1_2/journal.jsonl")
   })
 })

@@ -141,14 +141,14 @@ describe("JudgeExecutor", () => {
       expect(ref.path.startsWith(s.runDir)).toBe(true)
       expect(existsSync(ref.path)).toBe(true)
     }
-    expect(JSON.parse(readFileSync(join(s.runDir, "judge-verdict.json"), "utf8"))).toEqual(verdict)
+    expect(JSON.parse(readFileSync(join(s.runDir, "grade-judge-verdict.json"), "utf8"))).toEqual(verdict)
   })
 
   it("prefixes evidence by iteration so loop-back passes never overwrite earlier verdicts", async () => {
     const { worker } = recordingWorker(canned)
     const s = spec({ iteration: 2 })
     await new JudgeExecutor({ worker }).run(s, { workdir: workdir() })
-    expect(existsSync(join(s.runDir, "iter-2-judge-verdict.json"))).toBe(true)
+    expect(existsSync(join(s.runDir, "iter-2-grade-judge-verdict.json"))).toBe(true)
   })
 
   it("fails the step when the provider returns no structured verdict despite the schema", async () => {

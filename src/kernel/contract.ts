@@ -3,8 +3,8 @@
 // ContractResult / registry). A `path`-valued output field whose file
 // content gets validated remains the common case (run-trace.v1 below).
 
-import { existsSync, readFileSync } from "node:fs"
-import { isAbsolute, join } from "node:path"
+import { closeSync, lstatSync, openSync, readSync, realpathSync } from "node:fs"
+import { isAbsolute, relative, resolve } from "node:path"
 
 export interface ContractCheck {
   readonly label: string
@@ -60,6 +60,40 @@ export class ContractRegistry {
 
 export const RUN_TRACE_V1 = "run-trace.v1"
 
+const MAX_TRACE_BYTES = 1_000_000
+
+function safeReadWorkdirRelativeTrace(tracePath: string, workdir: string): { exists: boolean; text: string; detail: string } {
+  if (!tracePath) return { exists: false, text: "", detail: "expected a readable trace file at `<missing trace output field>`" }
+  if (isAbsolute(tracePath)) return { exists: false, text: "", detail: `expected trace path \`${tracePath}\` to be relative to the workdir` }
+  const root = resolve(workdir)
+  const absolute = resolve(root, tracePath)
+  const rel = relative(root, absolute)
+  if (rel === "" || rel.startsWith("..") || rel.includes(":") || rel.startsWith("/")) {
+    return { exists: false, text: "", detail: `expected trace path \`${tracePath}\` to stay inside the workdir` }
+  }
+  try {
+    const realRoot = realpathSync(root)
+    const realAbsolute = realpathSync(absolute)
+    const realRel = relative(realRoot, realAbsolute)
+    if (realRel === "" || realRel.startsWith("..") || realRel.includes(":") || realRel.startsWith("/")) {
+      return { exists: false, text: "", detail: `expected trace path \`${tracePath}\` to stay inside the real workdir` }
+    }
+    const stat = lstatSync(absolute)
+    if (!stat.isFile()) return { exists: false, text: "", detail: `expected trace path \`${tracePath}\` to be a regular file` }
+    if (stat.size > MAX_TRACE_BYTES) return { exists: false, text: "", detail: `expected trace file \`${tracePath}\` to be <= ${MAX_TRACE_BYTES} bytes` }
+    const fd = openSync(absolute, "r")
+    try {
+      const buffer = Buffer.alloc(Math.min(stat.size, MAX_TRACE_BYTES))
+      const bytes = readSync(fd, buffer, 0, buffer.length, 0)
+      return { exists: true, text: buffer.subarray(0, bytes).toString("utf8"), detail: `expected a readable trace file at \`${tracePath}\`` }
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return { exists: false, text: "", detail: `expected a readable trace file at \`${tracePath}\`` }
+  }
+}
+
 function metadataLineContains(text: string, field: string, value: string): boolean {
   const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
   return new RegExp(`^.*\`${escape(field)}\`.*${escape(value)}.*$`, "m").test(text)
@@ -69,12 +103,12 @@ export const runTraceV1: Contract = {
   id: RUN_TRACE_V1,
   validate(output, ctx) {
     const tracePath = typeof output.trace === "string" ? output.trace : ""
-    const absolute = tracePath && !isAbsolute(tracePath) ? join(ctx.workdir, tracePath) : tracePath
-    const exists = Boolean(absolute) && existsSync(absolute)
-    const text = exists ? readFileSync(absolute, "utf8") : ""
+    const trace = safeReadWorkdirRelativeTrace(tracePath, ctx.workdir)
+    const exists = trace.exists
+    const text = trace.text
 
     const checks: ContractCheck[] = [
-      { label: "trace file exists", passed: exists, detail: `expected a readable trace file at \`${tracePath || "<missing trace output field>"}\`` },
+      { label: "trace file exists", passed: exists, detail: trace.detail },
       { label: "trace heading recorded", passed: text.trimStart().startsWith("# Trace:"), detail: "expected a `# Trace:` markdown heading" },
       { label: "trace id recorded", passed: text.includes(ctx.traceId), detail: `expected trace id \`${ctx.traceId}\`` },
       { label: "loop id recorded", passed: metadataLineContains(text, "loop_id", ctx.loopId), detail: `expected loop id \`${ctx.loopId}\` in trace metadata` },

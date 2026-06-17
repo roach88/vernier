@@ -1,7 +1,7 @@
 {
   "name": "vernier",
   "version": "0.1.0",
-  "description": "vernier — agent-orchestration kernel: the loop is data; the step is typed; the executor is fungible; the policy is pure; the ledger is append-only.",
+  "description": "vernier \u2014 agent-orchestration kernel: the loop is data; the step is typed; the executor is fungible; the policy is pure; the ledger is append-only.",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -24,6 +24,7 @@
     "bin",
     "docs/walkthrough.md",
     "docs/provider-executors.md",
+    "docs/safety.md",
     "examples",
     "templates",
     "NOTICE",
@@ -34,7 +35,9 @@
     "prepack": "npm run build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "vernier": "tsx src/cli/main.ts"
+    "vernier": "tsx src/cli/main.ts",
+    "prepare": "npm run build",
+    "verify": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "ajv": "^8.20.0",

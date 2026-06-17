@@ -74,7 +74,7 @@ export function resumeRun(loop: Loop, runId: string): Run {
   const replayed =
     meta.keyVersion === KEY_VERSION
       ? view
-      : { ...view, completed: new Map<string, StepResultEntry>() }
+      : { ...view, terminal: new Map<string, StepResultEntry>(), completed: new Map<string, StepResultEntry>() }
   return { loop, ledger: new Ledger(path), state, replayed }
 }
 

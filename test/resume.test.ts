@@ -130,9 +130,9 @@ describe("resume from the ledger (linear loop)", () => {
     const crashed = startRun(loop, { n: 3 }, d)
     await tick(crashed, d)
     const journal = journalPath(ledgerRoot, crashed.state.runId)
-    // Simulate the torn tick: everything after step_result is lost.
-    stripTrailing(journal, ["decision", "effects", "contract"])
-    expect(Ledger.load(journal).map((e) => e.type)).toEqual(["meta", "step_started", "step_result"])
+    // Simulate the smallest torn tick: the non-side-effecting decision tail is lost,
+    // but the effect observation was already journaled.
+    stripTrailing(journal, ["decision"])
 
     // The fold sees no decision, so it lands back ON step 1...
     const resumed = resumeRun(loop, crashed.state.runId)
@@ -149,13 +149,44 @@ describe("resume from the ledger (linear loop)", () => {
     expect(counts).toEqual({ double: 1, doubleAgain: 1 })
     expect(finalOutput(loop, resumed.state, outcome.decision)).toEqual({ n: 12, doubledTwice: true })
 
-    // The replayed tick re-appended the missing pieces: exactly one
-    // step_result for `double`, and its recomputed contract entry.
+    // The replayed tick re-appended the missing decision without re-running.
     const entries = Ledger.load(journal)
     expect(entries.filter((e) => e.type === "step_result" && e.stepId === "double")).toHaveLength(1)
     expect(entries.filter((e) => e.type === "contract" && e.stepId === "double")).toHaveLength(1)
     expect(summarizeJournal(entries).status).toBe("done")
   })
+
+
+
+  it("replays a failed step_result without re-running and escalates when effects were never observed", async () => {
+    const { workdir, ledgerRoot } = temp()
+    let attempts = 0
+    const failing = scriptExecutor("script:double", (_spec, ctx) => {
+      attempts += 1
+      writeFileSync(join(ctx.workdir, "failed-side-effect.txt"), `attempt ${attempts}\n`)
+      throw new Error("side-effect then failure")
+    })
+    const { doubleAgain } = countedDoubles()
+    const d = deps([failing, doubleAgain], workdir)
+    const loop = twoStepLoop(ledgerRoot)
+
+    const crashed = startRun(loop, { n: 3 }, d)
+    await tick(crashed, d)
+    const journal = journalPath(ledgerRoot, crashed.state.runId)
+    stripTrailing(journal, ["decision", "effects", "contract"])
+
+    const resumed = resumeRun(loop, crashed.state.runId)
+    const replayed = await tick(resumed, d)
+
+    expect(attempts).toBe(1)
+    expect(replayed.decision.kind).toBe("escalate")
+    expect(replayed.state.status).toBe("needs_human")
+    expect(readFileSync(join(workdir, "failed-side-effect.txt"), "utf8")).toBe("attempt 1\n")
+    const effects = Ledger.load(journal).filter((e) => e.type === "effects")
+    expect(effects).toHaveLength(1)
+    expect(effects[0]?.type === "effects" ? effects[0].observation.allowed : true).toBe(false)
+  })
+
 
   it("a terminal run resumes as terminal; ticking it refuses", async () => {
     const { workdir, ledgerRoot } = temp()
@@ -298,7 +329,7 @@ describe("resume from the ledger (ITERATING loop)", () => {
     await tick(crashed, d) // grade@1 -> iterate
     await tick(crashed, d) // answer@2
     const journal = journalPath(ledgerRoot, crashed.state.runId)
-    stripTrailing(journal, ["decision", "effects", "contract"]) // tear answer@2's tick
+    stripTrailing(journal, ["decision"]) // tear answer@2's decision tail, preserving the observed effects
 
     const resumed = resumeRun(loop, crashed.state.runId)
     expect(resumed.state).toMatchObject({ stepIndex: 0, iteration: 2, attempt: 1 })
@@ -390,9 +421,9 @@ describe("resume never double-applies side effects", () => {
     const resumed = resumeRun(loop, crashed.state.runId)
     expect(resumed.state.stepIndex).toBe(0) // fold lands back on `remember`...
     const outcome = await driveRun(resumed, d)
-    expect(outcome.state.status).toBe("done")
+    expect(outcome.state.status).toBe("needs_human")
     expect(storeLines(store)).toEqual(["always verify"]) // ...but replay, not re-execution: ONE append
-    expect(ex.counts).toEqual({ remember: 1, confirm: 1 })
-    expect(finalOutput(loop, resumed.state, outcome.decision)).toEqual({ stored: true, confirmed: true })
+    expect(ex.counts).toEqual({ remember: 1, confirm: 0 })
+    expect(outcome.decision.kind).toBe("escalate")
   })
 })

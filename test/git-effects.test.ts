@@ -53,17 +53,19 @@ describe("git-aware effects observer", () => {
     expect(obs.unexpected).toEqual([])
   })
 
-  it("attributes ignored file changes while still skipping heavy internal dirs", async () => {
+  it("attributes ignored and generated file changes while still skipping heavy dependency dirs", async () => {
     const dir = gitRepo()
     writeFileSync(join(dir, ".gitignore"), "*.log\nnode_modules/\n")
     const before = await gitObserver.snapshot(dir)
     writeFileSync(join(dir, "debug.log"), "noise\n")
     mkdirSync(join(dir, "node_modules", "x"), { recursive: true })
     writeFileSync(join(dir, "node_modules", "x", "index.js"), "noise\n")
+    mkdirSync(join(dir, ".next", "cache"), { recursive: true })
+    writeFileSync(join(dir, ".next", "cache", "bundle.js"), "noise\n")
     const obs = await gitObserver.assess(dir, before, fsScope())
-    expect(obs.changed).toEqual(["debug.log"])
+    expect(obs.changed).toEqual([".next/cache/bundle.js", "debug.log"])
     expect(obs.allowed).toBe(false)
-    expect(obs.unexpected).toEqual(["debug.log"])
+    expect(obs.unexpected).toEqual([".next/cache/bundle.js", "debug.log"])
   })
 
   it("never touches the real index (the throwaway-GIT_INDEX_FILE invariant)", async () => {

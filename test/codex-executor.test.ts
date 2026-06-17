@@ -89,18 +89,44 @@ describe("CodexExecutor", () => {
       expect(ref.path.startsWith(s.runDir)).toBe(true) // absolute, under runDir
       expect(existsSync(ref.path)).toBe(true)
     }
-    expect(readFileSync(join(s.runDir, "codex-prompt.md"), "utf8")).toBe(s.prompt)
+    const promptPath = result.evidence.find((e) => e.role === "worker-prompt")?.path
+    const eventsPath = result.evidence.find((e) => e.role === "worker-events")?.path
+    expect(promptPath).toBeDefined()
+    expect(eventsPath).toBeDefined()
+    expect(readFileSync(promptPath!, "utf8")).toBe(s.prompt)
     // The progress feed was journaled as JSONL.
-    const events = readFileSync(join(s.runDir, "codex-events.jsonl"), "utf8").trim().split("\n")
+    const events = readFileSync(eventsPath!, "utf8").trim().split("\n")
     expect(events.length).toBeGreaterThan(0)
     expect(JSON.parse(events[0]!)).toHaveProperty("kind")
+  })
+
+
+  it("keeps same-executor evidence distinct per step and path-safe", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "vernier-codex-shared-run-"))
+    const executor = new CodexExecutor({ worker: new FakeWorker() })
+    const firstSpec = spec({ runDir, stepId: "implement/docs" })
+    const secondSpec = spec({ runDir, stepId: "implement?docs" })
+    const first = await executor.run(firstSpec, { workdir: workdir() })
+    const second = await executor.run(secondSpec, { workdir: workdir() })
+
+    const firstPrompt = first.evidence.find((e) => e.role === "worker-prompt")?.path
+    const secondPrompt = second.evidence.find((e) => e.role === "worker-prompt")?.path
+    expect(firstPrompt).toBeDefined()
+    expect(secondPrompt).toBeDefined()
+    expect(firstPrompt).not.toBe(secondPrompt)
+    expect(firstPrompt!.startsWith(runDir)).toBe(true)
+    expect(secondPrompt!.startsWith(runDir)).toBe(true)
+    expect(firstPrompt!.slice(runDir.length + 1)).not.toContain("/")
+    expect(secondPrompt!.slice(runDir.length + 1)).not.toContain("/")
+    expect(readFileSync(firstPrompt!, "utf8")).toBe(firstSpec.prompt)
+    expect(readFileSync(secondPrompt!, "utf8")).toBe(secondSpec.prompt)
   })
 
   it("labels retry-attempt evidence like the Python runner (retry- prefix)", async () => {
     const executor = new CodexExecutor({ worker: new FakeWorker() })
     const s = spec({ attempt: 2 })
     await executor.run(s, { workdir: workdir() })
-    expect(existsSync(join(s.runDir, "retry-2-codex-final.md"))).toBe(true)
+    expect(existsSync(join(s.runDir, "retry-2-implement-codex-final.md"))).toBe(true)
   })
 
   it("derives the sandbox from the EffectScope, fail-closed: scope -> workspace-write, none -> read-only", async () => {

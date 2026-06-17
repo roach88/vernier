@@ -8,7 +8,7 @@ import { readdirSync, readFileSync } from "node:fs"
 import { join, relative } from "node:path"
 import type { EffectScope, OutputProjection } from "./types.js"
 
-const SKIP_DIRS = new Set([".git", "node_modules", ".vernier"])
+const SKIP_DIRS = new Set([".git", "node_modules", ".vernier", ".next", ".turbo", ".cache", "coverage"])
 
 /** Map of workdir-relative posix path -> sha256 of contents. */
 export type Snapshot = ReadonlyMap<string, string>
@@ -46,6 +46,9 @@ export interface EffectObservation {
   readonly changed: readonly string[]
   readonly allowed: boolean
   readonly unexpected: readonly string[]
+  /** False only when a crash made post-step effect observation unknowable. Missing means observed=true for old journals. */
+  readonly observed?: boolean
+  readonly reason?: string
 }
 
 export function assessChanges(before: Snapshot, after: Snapshot, scope: EffectScope): EffectObservation {

@@ -66,8 +66,8 @@ describe("ClaudeExecutor", () => {
       expect(ref.path.startsWith(s.runDir)).toBe(true)
       expect(existsSync(ref.path)).toBe(true)
     }
-    expect(readFileSync(join(s.runDir, "claude-prompt.md"), "utf8")).toBe(s.prompt)
-    expect(readFileSync(join(s.runDir, "claude-final.md"), "utf8")).toBe("claude ok")
+    expect(readFileSync(join(s.runDir, "implement-claude-prompt.md"), "utf8")).toBe(s.prompt)
+    expect(readFileSync(join(s.runDir, "implement-claude-final.md"), "utf8")).toBe("claude ok")
   })
 
   it("maps structured AgentResult output onto StepResult output", async () => {
@@ -109,7 +109,7 @@ describe("ClaudeExecutor", () => {
     expect(result.status).toBe("failed")
     expect(result.output).toMatchObject({ code: "binary_not_found", retryable: false })
     expect(String(result.output.error)).toContain("on PATH")
-    expect(readFileSync(join(s.runDir, "claude-final.md"), "utf8")).toContain("claude")
+    expect(readFileSync(join(s.runDir, "implement-claude-final.md"), "utf8")).toContain("claude")
   })
 
   it("maps AgentError onto a failed StepResult, carrying the failed turn's usage", async () => {
@@ -158,7 +158,7 @@ describe("ClaudeExecutor", () => {
     const { worker } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
     const s = spec({ attempt: 2 })
     await new ClaudeExecutor({ worker }).run(s, { workdir: workdir() })
-    expect(existsSync(join(s.runDir, "retry-2-claude-final.md"))).toBe(true)
+    expect(existsSync(join(s.runDir, "retry-2-implement-claude-final.md"))).toBe(true)
   })
 
   it("refuses to run without a rendered prompt", async () => {
@@ -188,7 +188,7 @@ describe("ClaudeExecutor", () => {
     })
     const result = await executor.run(s, { workdir: workdir() })
 
-    const pluginDir = join(s.runDir, "skills-plugin")
+    const pluginDir = join(s.runDir, "implement-skills-plugin")
     expect(seen[0]!.pluginDirs).toEqual([pluginDir])
     const manifest = JSON.parse(readFileSync(join(pluginDir, ".claude-plugin", "plugin.json"), "utf8")) as { name: string }
     expect(manifest.name).toBe("vernier-skills")
@@ -203,7 +203,7 @@ describe("ClaudeExecutor", () => {
     const s = spec()
     const result = await new ClaudeExecutor({ worker }).run(s, { workdir: workdir() })
     expect(seen[0]!.pluginDirs).toBeUndefined()
-    expect(existsSync(join(s.runDir, "skills-plugin"))).toBe(false)
+    expect(existsSync(join(s.runDir, "implement-skills-plugin"))).toBe(false)
     expect(result.evidence.map((e) => e.role)).not.toContain("skills-plugin")
   })
 
@@ -224,7 +224,7 @@ describe("ClaudeExecutor", () => {
 
     expect(result.status).toBe("completed")
     expect(seen).toHaveLength(1)
-    const copied = join(s.runDir, "skills-plugin", "skills", "aliased-skill")
+    const copied = join(s.runDir, "implement-skills-plugin", "skills", "aliased-skill")
     // The copy is a REAL directory tree — a snapshot — not a symlink back to mutable source.
     expect(lstatSync(copied).isSymbolicLink()).toBe(false)
     expect(lstatSync(copied).isDirectory()).toBe(true)
@@ -251,7 +251,7 @@ describe("ClaudeExecutor", () => {
     expect(seen).toHaveLength(0) // the worker was never invoked — no paid turn on a hostile skill
     // Containment is checked before any copy, so no plugin dir exists and the
     // secret's bytes were never materialized under the run dir.
-    expect(existsSync(join(s.runDir, "skills-plugin"))).toBe(false)
+    expect(existsSync(join(s.runDir, "implement-skills-plugin"))).toBe(false)
   })
 })
 

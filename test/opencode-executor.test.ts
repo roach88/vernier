@@ -56,7 +56,7 @@ describe("OpencodeExecutor", () => {
       expect(ref.path.startsWith(s.runDir)).toBe(true)
       expect(existsSync(ref.path)).toBe(true)
     }
-    expect(readFileSync(join(s.runDir, "opencode-prompt.md"), "utf8")).toBe(s.prompt)
+    expect(readFileSync(join(s.runDir, "answer-opencode-prompt.md"), "utf8")).toBe(s.prompt)
   })
 
   it("maps structured AgentResult output onto StepResult output", async () => {
@@ -113,14 +113,14 @@ describe("OpencodeExecutor", () => {
     expect(result.output).toMatchObject({ code: "unsupported_sandbox", retryable: false })
     expect(String(result.output.error)).toContain("no enforceable sandbox")
     expect(result.evidence.map((e) => e.role)).toEqual(["worker-prompt", "opencode-preflight"])
-    expect(readFileSync(join(s.runDir, "opencode-preflight.json"), "utf8")).toContain("docs/**")
+    expect(readFileSync(join(s.runDir, "answer-opencode-preflight.json"), "utf8")).toContain("docs/**")
   })
 
   it("labels retry-attempt evidence with the same retry prefix as other executors", async () => {
     const { worker } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
     const s = spec({ attempt: 2 })
     await new OpencodeExecutor({ worker }).run(s, { workdir: workdir() })
-    expect(existsSync(join(s.runDir, "retry-2-opencode-final.md"))).toBe(true)
+    expect(existsSync(join(s.runDir, "retry-2-answer-opencode-final.md"))).toBe(true)
   })
 
   it("maps AgentError onto a failed StepResult with code, retryability, and billed usage", async () => {
@@ -142,7 +142,7 @@ describe("OpencodeExecutor", () => {
 
     expect(result.status).toBe("failed")
     expect(result.output).toMatchObject({ code: "provider_busy", retryable: true })
-    expect(readFileSync(join(s.runDir, "opencode-final.md"), "utf8")).toContain("database contention")
+    expect(readFileSync(join(s.runDir, "answer-opencode-final.md"), "utf8")).toContain("database contention")
     expect(result.usage.inputTokens).toBe(10)
   })
 

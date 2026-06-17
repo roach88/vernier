@@ -8,7 +8,7 @@ Vernier validates inputs and outputs, observes file effects, and records an
 append-only `journal.jsonl` so every run can be inspected, resumed, and
 audited.
 
-[Walkthrough](docs/walkthrough.md) · [Provider details](docs/provider-executors.md) · [Templates](templates) · [Examples](examples/getting-started) · [License notices](NOTICE)
+[Walkthrough](docs/walkthrough.md) · [Safety model](docs/safety.md) · [Provider details](docs/provider-executors.md) · [Templates](templates) · [Examples](examples/getting-started) · [License notices](NOTICE)
 
 ## Install
 
@@ -109,6 +109,8 @@ variable overrides the binary.
 not expose an enforceable write sandbox.
 
 ## Effects And Trust
+
+The detailed safety posture and provider matrix live in [docs/safety.md](docs/safety.md).
 
 Effect scopes describe what a step may touch. `noEffects()` maps to a
 read-only provider mode where the provider supports one; a non-empty

@@ -15,7 +15,7 @@ import { hashObserver, type EffectObservation, type EffectsObserver } from "../k
 import type { Decision, Observation } from "../kernel/policy.js"
 import type { Executor, Loop, MemoryStore, Step, StepResult, StepSkill } from "../kernel/types.js"
 import { derivedOutputSchema, zeroUsage } from "../kernel/types.js"
-import { journalPath, Ledger, resolveLedgerRoot, resumeKey, KEY_VERSION, type Replay, type StepResultEntry } from "../ledger/ledger.js"
+import { assertSafePathComponent, journalPath, Ledger, resolveLedgerRoot, resumeKey, KEY_VERSION, type Replay, type StepResultEntry } from "../ledger/ledger.js"
 import { embedSkillsInPrompt, nativeSkillsDirective, skillBody, snapshotSkills } from "../skills/skills.js"
 
 export type RunStatus = "running" | "done" | "needs_human" | "stopped"
@@ -77,6 +77,7 @@ const now = (): string => new Date().toISOString()
 
 /** Fresh run id: loopId + timestamp + entropy. Exposed so a driver can lease the run dir BEFORE the first journal write. */
 export function newRunId(loop: Loop): string {
+  assertSafePathComponent(loop.id, "loop id")
   return `${loop.id}-${now().replace(/[-:T]/g, "").slice(0, 14)}-${randomBytes(3).toString("hex")}`
 }
 
@@ -130,7 +131,7 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
   // after the step_result but before its decision — the slot is replayed
   // from the ledger, never re-executed. LLM steps are non-deterministic and
   // side-effecting steps (codex writes, `remember`) must not double-apply.
-  const journaled = run.replayed?.completed.get(key)
+  const journaled = run.replayed?.terminal.get(key)
   if (journaled) return replayTick(run, deps, step, key, journaled)
 
   const executor = deps.executors.get(step.executor)
@@ -277,6 +278,7 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
     contractValid: contractResult ? contractResult.valid : true,
     contractFailedChecks: contractResult ? failedCheckMessages(contractResult) : [],
     effectsAllowed: effects.allowed,
+    effectsObserved: effects.observed !== false,
     unexpectedChanges: effects.unexpected,
     output: validatedOutput,
   }
@@ -303,7 +305,7 @@ function replayTick(run: Run, deps: EngineDeps, step: Step, key: string, journal
 
   const output = journaled.output
   const outputParse = step.signature.output.safeParse(output)
-  const outputValid = outputParse.success
+  const outputValid = journaled.status === "completed" && journaled.outputValid && outputParse.success
 
   let contractResult: ContractResult | null = null
   if (step.contract) {
@@ -326,9 +328,13 @@ function replayTick(run: Run, deps: EngineDeps, step: Step, key: string, journal
 
   // Effects: replay the ledgered observation. If the crash landed before the
   // effects entry was written, the before-snapshot is gone and observation is
-  // impossible — assume a clean scope rather than re-executing the step.
+  // impossible. Fail loud instead of assuming a clean scope.
+  const ledgeredEffects = run.replayed?.effects.get(key)?.observation
   const effects: EffectObservation =
-    run.replayed?.effects.get(key)?.observation ?? { changed: [], allowed: true, unexpected: [] }
+    ledgeredEffects ?? { changed: [], allowed: false, unexpected: ["<effects unknown: crash before observation>"], observed: false, reason: "crash before effects journal entry" }
+  if (!ledgeredEffects) {
+    ledger.append({ type: "effects", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, observation: effects, at: now() })
+  }
 
   const validatedOutput = outputValid ? (outputParse.data as Record<string, unknown>) : null
   const observation: Observation = {
@@ -348,6 +354,7 @@ function replayTick(run: Run, deps: EngineDeps, step: Step, key: string, journal
     contractValid: contractResult ? contractResult.valid : true,
     contractFailedChecks: contractResult ? failedCheckMessages(contractResult) : [],
     effectsAllowed: effects.allowed,
+    effectsObserved: effects.observed !== false,
     unexpectedChanges: effects.unexpected,
     output: validatedOutput,
   }

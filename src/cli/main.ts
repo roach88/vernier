@@ -643,6 +643,10 @@ function cmdInit(flags: Flags): number {
   return EXIT.ok
 }
 
+async function shutdownRuntime(runtime: LoopRuntime | undefined): Promise<void> {
+  await runtime?.shutdown()
+}
+
 async function cmdRun(flags: Flags): Promise<number> {
   const config = await loadConfig()
   const registry = loopRegistry(config)
@@ -673,8 +677,11 @@ async function cmdRun(flags: Flags): Promise<number> {
     printOutcome(run, outcome, flags, { workdir })
     return terminalExit(outcome.state.status)
   } finally {
-    lease.release()
-    await runtime?.shutdown()
+    try {
+      await shutdownRuntime(runtime)
+    } finally {
+      lease.release()
+    }
   }
 }
 
@@ -736,8 +743,11 @@ async function cmdTickOrResume(flags: Flags, mode: "tick" | "resume"): Promise<n
     printOutcome(run, outcome, flags, { workdir: target.workdir, resumed: true })
     return outcome.state.status === "running" ? EXIT.ok : terminalExit(outcome.state.status)
   } finally {
-    lease.release()
-    await runtime?.shutdown()
+    try {
+      await shutdownRuntime(runtime)
+    } finally {
+      lease.release()
+    }
   }
 }
 
