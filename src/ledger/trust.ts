@@ -89,11 +89,13 @@ function compareEvidence(a: RunEvidenceProjection, b: RunEvidenceProjection): nu
 function rejectionReasons(evidence: RunEvidenceProjection): string[] {
   const reasons: string[] = []
   if (!evidence.strict.validCurrentV2) reasons.push("not valid current-v2 evidence")
+  if (!evidence.strict.usableForTrust) reasons.push("not usable for trust")
   if (evidence.terminalStatus !== "done") reasons.push(`terminal status is ${evidence.terminalStatus}`)
   if (!evidence.outcome.terminalSuccess) reasons.push("terminal decision was not successful")
   if (evidence.outcome.escalated) reasons.push("required human escalation")
   if (evidence.totals.outputInvalid > 0) reasons.push(`${evidence.totals.outputInvalid} invalid output${evidence.totals.outputInvalid === 1 ? "" : "s"}`)
   if (evidence.totals.contractsFailed > 0) reasons.push(`${evidence.totals.contractsFailed} failed contract${evidence.totals.contractsFailed === 1 ? "" : "s"}`)
+  if (evidence.totals.contractsMissing > 0) reasons.push(`${evidence.totals.contractsMissing} missing contract${evidence.totals.contractsMissing === 1 ? "" : "s"}`)
   if (evidence.totals.effectsFailed > 0) reasons.push(`${evidence.totals.effectsFailed} unexpected effect observation${evidence.totals.effectsFailed === 1 ? "" : "s"}`)
   if (evidence.totals.effectsUnknown > 0) reasons.push(`${evidence.totals.effectsUnknown} unknown effect observation${evidence.totals.effectsUnknown === 1 ? "" : "s"}`)
   for (const diagnostic of evidence.diagnostics) reasons.push(`${diagnostic.severity}: ${diagnostic.code}`)

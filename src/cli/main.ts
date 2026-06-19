@@ -941,11 +941,11 @@ function loadRunEvidence(root: string): RunEvidenceProjection[] {
     ids = []
   }
   return ids.map((id) => {
-    const path = journalPath(root, id)
     try {
+      const path = journalPath(root, id)
       return projectRunEvidence({ ledgerPath: path, entries: Ledger.load(path) })
     } catch (error) {
-      return projectRunEvidence({ ledgerPath: path, loadError: error })
+      return projectRunEvidence({ ledgerPath: join(root, "runs", id, "journal.jsonl"), loadError: error })
     }
   })
 }

@@ -175,11 +175,10 @@ describe("projectRunEvidence", () => {
     expect(unobserved.steps[0]).toMatchObject({ effects: "unknown", observedEffects: false })
     expect(unobserved.diagnostics).toContainEqual({ severity: "degraded", code: "EFFECTS_UNOBSERVED", detail: "step write effects were not observed: observer crashed" })
 
-    const missing = projectRunEvidence({
-      entries: [meta(), started("write"), result("write", "write-1", { evidence: [{ role: "artifact", path: "docs/a.md" }] }), decision("write", "stop", "success")],
-    })
+    const missing = projectRunEvidence({ entries: [meta(), started("write"), result("write"), decision("write", "stop", "success")] })
     expect(missing.strict.usableForTrust).toBe(false)
-    expect(missing.diagnostics).toContainEqual({ severity: "degraded", code: "MISSING_EFFECTS", detail: "completed step write has artifacts but no effects entry" })
+    expect(missing.totals.effectsUnknown).toBe(1)
+    expect(missing.diagnostics).toContainEqual({ severity: "degraded", code: "MISSING_EFFECTS", detail: "completed step write has no effects entry" })
   })
 
   it("keeps missing usage honest rather than fabricating availability or cost", () => {

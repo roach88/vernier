@@ -126,8 +126,8 @@ export function projectRunEvidence(input: ProjectRunEvidenceInput): RunEvidenceP
       usage,
     })
 
-    if (result.status === "completed" && !effects && maybeEffectful(result.evidence)) {
-      diagnostics.push({ severity: "degraded", code: "MISSING_EFFECTS", detail: `completed step ${result.stepId} has artifacts but no effects entry` })
+    if (result.status === "completed" && !effects) {
+      diagnostics.push({ severity: "degraded", code: "MISSING_EFFECTS", detail: `completed step ${result.stepId} has no effects entry` })
     }
     if (effects && effects.observation.observed === false) {
       diagnostics.push({ severity: "degraded", code: "EFFECTS_UNOBSERVED", detail: `step ${result.stepId} effects were not observed: ${effects.observation.reason ?? "unknown reason"}` })
@@ -152,7 +152,7 @@ export function projectRunEvidence(input: ProjectRunEvidenceInput): RunEvidenceP
       if (step.contract === "failed") acc.contractsFailed += 1
       if (step.contract === "missing") acc.contractsMissing += 1
       if (step.effects === "failed") acc.effectsFailed += 1
-      if (step.effects === "unknown") acc.effectsUnknown += 1
+      if (step.effects === "unknown" || (step.status === "completed" && step.effects === "not_applicable")) acc.effectsUnknown += 1
       if (step.output !== "valid") acc.outputInvalid += 1
       if (step.usage.available) acc.usageAvailable = true
       acc.inputTokens += step.usage.inputTokens
@@ -224,10 +224,6 @@ function effectEvidence(effects: { readonly observation: { readonly allowed: boo
   if (!effects) return "not_applicable"
   if (effects.observation.observed === false) return "unknown"
   return effects.observation.allowed ? "passed" : "failed"
-}
-
-function maybeEffectful(evidence: readonly unknown[]): boolean {
-  return evidence.length > 0
 }
 
 function number(value: unknown): number {

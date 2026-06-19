@@ -82,6 +82,22 @@ describe("trust status evaluation", () => {
     expect(report.reasons.join("\n")).toContain("unknown effect observation")
   })
 
+  it("rejects evidence whenever the strict projection says it is not usable for trust", () => {
+    const evidence = [
+      baseEvidence({
+        runId: "strict-rejected",
+        strict: { validCurrentV2: true, usableForTrust: false },
+        totals: { ...baseEvidence().totals, contractsMissing: 1 },
+      }),
+    ]
+
+    const report = evaluateTrustStatus({ loopId: "loop-a", loopVersion: "1.0.0", evidence, policy: { requiredRuns: 1 } })
+
+    expect(report.promotable).toBe(false)
+    expect(report.rejected).toEqual([{ runId: "strict-rejected", reasons: ["not usable for trust", "1 missing contract"] }])
+    expect(report.reasons.join("\n")).toContain("not usable for trust")
+  })
+
   it("applies --last-style windows after sorting by startedAt/runId", () => {
     const evidence = [
       baseEvidence({ runId: "run-1", startedAt: "2026-06-19T00:00:01.000Z" }),

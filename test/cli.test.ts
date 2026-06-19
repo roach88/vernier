@@ -466,6 +466,23 @@ describe("vernier CLI", () => {
     expect(unknown.stderr).toContain("trust currently supports only")
   })
 
+  it("`trust status` reports unsafe run directories as corrupt evidence instead of aborting", async () => {
+    const root = home()
+    await cli(root, "run", "control-plane-smoke-test", "--json")
+    const badRun = join(root, "runs", "bad name")
+    mkdirSync(badRun, { recursive: true })
+    writeFileSync(join(badRun, "journal.jsonl"), "{}\n", "utf8")
+
+    const result = await cli(root, "trust", "status", "control-plane-smoke-test", "--min-runs", "1", "--json")
+
+    expect(result.code).toBe(0)
+    expect(result.stderr).toBe("")
+    const parsed = JSON.parse(result.stdout) as { report: Record<string, any> }
+    expect(parsed.report.promotable).toBe(true)
+    expect(parsed.report.totals.matchingVersionRuns).toBe(1)
+    expect(parsed.report.considered).toHaveLength(1)
+  })
+
   it("keeps stdout machine-clean under --json: diagnostics go to stderr", async () => {
     const root = home()
     const { runId, runDir } = crashedSmokeRun(root)

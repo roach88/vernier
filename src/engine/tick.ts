@@ -311,7 +311,7 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
  * (signature parse; the contract, when its entry is missing) are recomputed;
  * non-deterministic and side-effecting pieces are never re-run.
  */
-function replayTick(run: Run, deps: EngineDeps, step: Step, key: string, journaled: StepResultEntry): TickOutcome {
+function replayTick(run: Run, deps: EngineDeps, step: Step, key: string, journaled: StepResultEntry, recoveredEffects?: EffectObservation): TickOutcome {
   const { loop, ledger, state } = run
   // Tolerant lookup: replaying must not require the executor to be wired.
   const executorId = deps.executors.get(step.executor)?.id ?? step.executor
@@ -344,7 +344,7 @@ function replayTick(run: Run, deps: EngineDeps, step: Step, key: string, journal
   // impossible. Fail loud instead of assuming a clean scope.
   const ledgeredEffects = run.replayed?.effects.get(key)?.observation
   const effects: EffectObservation =
-    ledgeredEffects ?? { changed: [], allowed: false, unexpected: ["<effects unknown: crash before observation>"], observed: false, reason: "crash before effects journal entry" }
+    ledgeredEffects ?? recoveredEffects ?? { changed: [], allowed: false, unexpected: ["<effects unknown: crash before observation>"], observed: false, reason: "crash before effects journal entry" }
   if (!ledgeredEffects) {
     ledger.append({ type: "effects", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, observation: effects, at: now() })
   }
@@ -400,8 +400,7 @@ function recoverStartedTick(run: Run, deps: EngineDeps, step: Step, key: string,
     reason: "crash after step_started before step_result",
   }
   ledger.append(journaled)
-  ledger.append({ type: "effects", key, stepId: step.id, attempt: started.attempt, iteration: started.iteration, observation: effects, at: now() })
-  return replayTick(run, deps, step, key, journaled)
+  return replayTick(run, deps, step, key, journaled, effects)
 }
 
 /** The journal-to-state projection. Exported for the resume fold (engine/resume.ts); not a public API. */

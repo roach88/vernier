@@ -187,6 +187,27 @@ describe("resume from the ledger (linear loop)", () => {
     expect(effects[0]?.type === "effects" ? effects[0].observation.allowed : true).toBe(false)
   })
 
+  it("recovers a started-only slot with one unknown-effects entry", async () => {
+    const { workdir, ledgerRoot } = temp()
+    const { double, doubleAgain, counts } = countedDoubles()
+    const d = deps([double, doubleAgain], workdir)
+    const loop = twoStepLoop(ledgerRoot)
+
+    const crashed = startRun(loop, { n: 3 }, d)
+    await tick(crashed, d)
+    const journal = journalPath(ledgerRoot, crashed.state.runId)
+    stripTrailing(journal, ["decision", "effects", "contract", "step_result"])
+
+    const resumed = resumeRun(loop, crashed.state.runId)
+    const replayed = await tick(resumed, d)
+
+    expect(counts.double).toBe(1)
+    expect(replayed.decision.kind).toBe("escalate")
+    const effects = Ledger.load(journal).filter((e) => e.type === "effects" && e.stepId === "double")
+    expect(effects).toHaveLength(1)
+    expect(effects[0]?.type === "effects" ? effects[0].observation.reason : "").toBe("crash after step_started before step_result")
+  })
+
 
   it("a terminal run resumes as terminal; ticking it refuses", async () => {
     const { workdir, ledgerRoot } = temp()
