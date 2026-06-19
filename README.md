@@ -174,6 +174,7 @@ scaffolded loop. Once your project installs dependencies, the project's
 ```sh
 npm install
 npm test
+npm run test:chaos
 npm run build
 npm run typecheck
 npm run vernier -- loops
@@ -181,6 +182,10 @@ npm run vernier -- loops
 
 `npm test` is deterministic and does not require agent credentials. Live tests
 are opt-in through environment gates such as `VERNIER_LIVE=1`.
+`npm run test:chaos` is also deterministic: it runs the fast PR-tier
+subprocess lifecycle chaos checks and seeded policy property checks without
+provider CLIs or credentials. To reproduce or expand a property run, set
+`VERNIER_PROPERTY_SEED=<number>` and `VERNIER_PROPERTY_CASES=<number>`.
 
 `bin/vernier.js` prefers `dist/` when it exists and falls back to running the
 TypeScript source through `tsx`. After editing source, rebuild before trusting

@@ -34,6 +34,7 @@
     "build": "tsc -p tsconfig.build.json",
     "prepack": "npm run build",
     "test": "vitest run",
+    "test:chaos": "vitest run test/subprocess-jsonl.test.ts test/policy-property.test.ts --reporter=dot",
     "typecheck": "tsc --noEmit",
     "vernier": "tsx src/cli/main.ts",
     "verify": "npm run typecheck && npm test && npm run build && npm run smoke:package",
