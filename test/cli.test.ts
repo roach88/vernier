@@ -422,6 +422,50 @@ describe("vernier CLI", () => {
     expect(JSON.parse(empty.stdout)).toMatchObject({ runs: [], loops: [] })
   })
 
+  it("`trust status` reports read-only promotion status from strict ledger evidence", async () => {
+    const root = home()
+    await cli(root, "run", "control-plane-smoke-test", "--json")
+    await cli(root, "run", "control-plane-smoke-test", "--json")
+    await cli(root, "run", "control-plane-smoke-test", "--json")
+
+    const result = await cli(root, "trust", "status", "control-plane-smoke-test", "--min-runs", "3", "--json")
+    expect(result.code).toBe(0)
+    const parsed = JSON.parse(result.stdout) as { ledgerRoot: string; report: Record<string, any> }
+    expect(parsed.ledgerRoot).toBe(root)
+    expect(parsed.report).toMatchObject({
+      loopId: "control-plane-smoke-test",
+      loopVersion: "0.2.0",
+      status: "promotable",
+      promotable: true,
+      totals: { matchingVersionRuns: 3, consideredRuns: 3, cleanRuns: 3 },
+    })
+    expect(parsed.report.reasons).toEqual([])
+
+    const human = await cli(root, "trust", "status", "control-plane-smoke-test", "--min-runs", "3")
+    expect(human.code).toBe(0)
+    expect(human.stdout).toContain("status      promotable")
+    expect(human.stdout).toContain("reasons     <none>")
+  })
+
+  it("`trust status` fails closed on bad windows, insufficient evidence, and unsupported subcommands", async () => {
+    const root = home()
+    await cli(root, "run", "control-plane-smoke-test", "--json")
+
+    const report = await cli(root, "trust", "status", "control-plane-smoke-test", "--min-runs", "2", "--json")
+    expect(report.code).toBe(1)
+    const parsed = JSON.parse(report.stdout) as { report: Record<string, any> }
+    expect(parsed.report.status).toBe("not_promotable")
+    expect(parsed.report.reasons.join("\n")).toContain("insufficient evidence")
+
+    const badLast = await cli(root, "trust", "status", "control-plane-smoke-test", "--last", "0")
+    expect(badLast.code).toBe(2)
+    expect(badLast.stderr).toContain("--last expects a positive integer")
+
+    const unknown = await cli(root, "trust", "unknown")
+    expect(unknown.code).toBe(2)
+    expect(unknown.stderr).toContain("trust currently supports only")
+  })
+
   it("keeps stdout machine-clean under --json: diagnostics go to stderr", async () => {
     const root = home()
     const { runId, runDir } = crashedSmokeRun(root)

@@ -28,8 +28,10 @@ import { resumeRun, summarizeJournal, type JournalSummary } from "../engine/resu
 import { driveRun, finalOutput, newRunId, startRun, tick, type EngineDeps, type Run, type TickOutcome } from "../engine/tick.js"
 import { bindingVocabulary } from "../kernel/bindings.js"
 import type { Executor, Loop } from "../kernel/types.js"
+import { projectRunEvidence, type RunEvidenceProjection } from "../ledger/evidence.js"
 import { journalPath, Ledger, resolveLedgerRoot, type LedgerEntry } from "../ledger/ledger.js"
 import { buildTimeline, computedCostUsd, renderStats, renderTimeline, rollupByLoop, runStatsRow, type PriceModel, type RunStatsRow } from "../ledger/stats.js"
+import { evaluateTrustStatus, type TrustStatusReport } from "../ledger/trust.js"
 import { bindSkills, discoverSkills, SKILL_NAME_PATTERN, SkillError, type SkillBindingLayer, type SkillRegistry } from "../skills/skills.js"
 import { bindExecutors, ConfigError, loadConfig, type BindingLayer, type LoadedConfig } from "./config.js"
 import { defaultProbes, diagnose, renderDoctor } from "./doctor.js"
@@ -73,6 +75,8 @@ USAGE
   vernier stats [--loop <id>] [--last <n>]            usage/cost roll-ups across runs, per run and
                [--price-in <usd> --price-out <usd>]  per loop (prices are USD per 1M tokens; without
                                                      them the output is tokens only — never invented $)
+  vernier trust status <loopId> [--last <n>] [--min-runs <n>]
+                                                     read-only trust evidence over strict current-v2 ledgers
   vernier doctor                                      probe executors + per-loop runnability
                                                      (exit 0 iff every registered loop is runnable)
 
@@ -124,6 +128,7 @@ interface Flags {
   readonly last?: string
   readonly priceIn?: string
   readonly priceOut?: string
+  readonly minRuns?: string
   readonly positionals: readonly string[]
 }
 
@@ -142,6 +147,7 @@ function parseFlags(args: readonly string[]): Flags {
         last: { type: "string" },
         "price-in": { type: "string" },
         "price-out": { type: "string" },
+        "min-runs": { type: "string" },
         help: { type: "boolean", default: false },
       },
       allowPositionals: true,
@@ -165,6 +171,7 @@ function parseFlags(args: readonly string[]): Flags {
       ...(values.last !== undefined ? { last: values.last } : {}),
       ...(values["price-in"] !== undefined ? { priceIn: values["price-in"] } : {}),
       ...(values["price-out"] !== undefined ? { priceOut: values["price-out"] } : {}),
+      ...(values["min-runs"] !== undefined ? { minRuns: values["min-runs"] } : {}),
       positionals,
     }
   } catch (error) {
@@ -916,6 +923,77 @@ function cmdStats(flags: Flags): number {
   return EXIT.ok
 }
 
+function parsePositiveIntegerFlag(value: string | undefined, name: string, defaultValue: number | null): number | null {
+  if (value === undefined) return defaultValue
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed <= 0) throw new UsageError(`${name} expects a positive integer, got \`${value}\`.`)
+  return parsed
+}
+
+function loadRunEvidence(root: string): RunEvidenceProjection[] {
+  const runsDir = join(root, "runs")
+  let ids: string[] = []
+  try {
+    ids = readdirSync(runsDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+  } catch {
+    ids = []
+  }
+  return ids.map((id) => {
+    const path = journalPath(root, id)
+    try {
+      return projectRunEvidence({ ledgerPath: path, entries: Ledger.load(path) })
+    } catch (error) {
+      return projectRunEvidence({ ledgerPath: path, loadError: error })
+    }
+  })
+}
+
+function renderTrustStatus(report: TrustStatusReport): string[] {
+  const lines = [
+    `loop        ${report.loopId}@${report.loopVersion}`,
+    `status      ${report.status}`,
+    `policy      required=${report.policy.requiredRuns}${report.policy.last === null ? "" : ` last=${report.policy.last}`}`,
+    `evidence    matching=${report.totals.matchingVersionRuns} considered=${report.totals.consideredRuns} clean=${report.totals.cleanRuns} mismatched-version=${report.totals.versionMismatchRuns}`,
+  ]
+  if (report.reasons.length === 0) {
+    lines.push("reasons     <none>")
+  } else {
+    lines.push("reasons")
+    for (const reason of report.reasons) lines.push(`  - ${reason}`)
+  }
+  if (report.considered.length > 0) {
+    lines.push("runs")
+    for (const evidence of report.considered) {
+      lines.push(
+        `  ${evidence.runId ?? "<unknown>"}  ${evidence.terminalStatus}  trust=${evidence.strict.usableForTrust ? "clean" : "rejected"}  diagnostics=${evidence.diagnostics.length}`,
+      )
+    }
+  }
+  return lines
+}
+
+async function cmdTrust(flags: Flags): Promise<number> {
+  const [subcommand, loopId, ...extra] = flags.positionals
+  if (subcommand !== "status") throw new UsageError("trust currently supports only `vernier trust status <loopId>`.")
+  if (!loopId) throw new UsageError("Missing <loopId>. Usage: vernier trust status <loopId> [--last <n>] [--min-runs <n>].")
+  if (extra.length > 0) throw new UsageError(`Unexpected argument(s) for trust status: ${extra.join(", ")}.`)
+  const config = await loadConfig()
+  const entry = lookupLoop(loopRegistry(config), loopId)
+  const requiredRuns = parsePositiveIntegerFlag(flags.minRuns, "--min-runs", 3) ?? 3
+  const last = parsePositiveIntegerFlag(flags.last, "--last", null)
+  const root = resolveLedgerRoot(entry.loop.ledger)
+  const evidence = loadRunEvidence(root)
+  const report = evaluateTrustStatus({ loopId: entry.loop.id, loopVersion: entry.loop.version, evidence, policy: { requiredRuns, last } })
+  if (flags.json) {
+    json({ ledgerRoot: root, report })
+  } else {
+    for (const line of renderTrustStatus(report)) out(line)
+  }
+  return report.promotable ? EXIT.ok : EXIT.failed
+}
+
 async function cmdDoctor(flags: Flags): Promise<number> {
   const config = await loadConfig()
   const registry = loopRegistry(config)
@@ -964,10 +1042,12 @@ export async function main(argv: readonly string[]): Promise<number> {
       return cmdShow(flags)
     case "stats":
       return cmdStats(flags)
+    case "trust":
+      return cmdTrust(flags)
     case "doctor":
       return cmdDoctor(flags)
     default:
-      throw new UsageError(`Unknown command \`${command}\`. Commands: init, loops, skills, run, tick, resume, runs, show, stats, doctor.`)
+      throw new UsageError(`Unknown command \`${command}\`. Commands: init, loops, skills, run, tick, resume, runs, show, stats, trust, doctor.`)
   }
 }
 
