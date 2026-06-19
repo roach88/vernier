@@ -20,12 +20,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { changedFiles, isAllowed, snapshotDir, type EffectsObserver, type Snapshot } from "./effects.js"
 
-const SKIP_CHANGE_PREFIXES = [".next/", ".turbo/", ".cache/", "coverage/"]
-
-function attributionRelevant(path: string): boolean {
-  return !SKIP_CHANGE_PREFIXES.some((prefix) => path === prefix.slice(0, -1) || path.startsWith(prefix))
-}
-
 function git(workdir: string, args: string[], env?: NodeJS.ProcessEnv): string {
   return execFileSync("git", args, {
     cwd: workdir,
@@ -81,9 +75,10 @@ export const gitObserver: EffectsObserver = {
     const afterFiles = snapshotDir(workdir)
     // Git already gives us a cheap tree-level diff, so do not hide unignored
     // generated dirs here; if they changed, they should be attributed. The
-    // filesystem hash fallback is where we skip heavyweight cache trees.
+    // filesystem observer also keeps generated/cache dirs visible so ignored
+    // generated files cannot become an effects blind spot.
     const gitChanged = gitChangedFiles(workdir, prior.tree, afterTree)
-    const fsChanged = changedFiles(prior.files, afterFiles).filter(attributionRelevant)
+    const fsChanged = changedFiles(prior.files, afterFiles)
     const changed = [...new Set([...gitChanged, ...fsChanged])].sort()
     const unexpected = changed.filter((path) => !isAllowed(path, scope))
     return { changed, allowed: unexpected.length === 0, unexpected }

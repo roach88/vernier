@@ -3,7 +3,7 @@
 // ContractResult / registry). A `path`-valued output field whose file
 // content gets validated remains the common case (run-trace.v1 below).
 
-import { closeSync, lstatSync, openSync, readSync, realpathSync } from "node:fs"
+import { closeSync, constants, fstatSync, openSync, readSync, realpathSync } from "node:fs"
 import { isAbsolute, relative, resolve } from "node:path"
 
 export interface ContractCheck {
@@ -78,11 +78,11 @@ function safeReadWorkdirRelativeTrace(tracePath: string, workdir: string): { exi
     if (realRel === "" || realRel.startsWith("..") || realRel.includes(":") || realRel.startsWith("/")) {
       return { exists: false, text: "", detail: `expected trace path \`${tracePath}\` to stay inside the real workdir` }
     }
-    const stat = lstatSync(absolute)
-    if (!stat.isFile()) return { exists: false, text: "", detail: `expected trace path \`${tracePath}\` to be a regular file` }
-    if (stat.size > MAX_TRACE_BYTES) return { exists: false, text: "", detail: `expected trace file \`${tracePath}\` to be <= ${MAX_TRACE_BYTES} bytes` }
-    const fd = openSync(absolute, "r")
+    const fd = openSync(absolute, constants.O_RDONLY | constants.O_NOFOLLOW)
     try {
+      const stat = fstatSync(fd)
+      if (!stat.isFile()) return { exists: false, text: "", detail: `expected trace path \`${tracePath}\` to be a regular file` }
+      if (stat.size > MAX_TRACE_BYTES) return { exists: false, text: "", detail: `expected trace file \`${tracePath}\` to be <= ${MAX_TRACE_BYTES} bytes` }
       const buffer = Buffer.alloc(Math.min(stat.size, MAX_TRACE_BYTES))
       const bytes = readSync(fd, buffer, 0, buffer.length, 0)
       return { exists: true, text: buffer.subarray(0, bytes).toString("utf8"), detail: `expected a readable trace file at \`${tracePath}\`` }

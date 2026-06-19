@@ -12,4 +12,9 @@ describe("evidence file slugs", () => {
     expect(safeEvidenceSlug(unsafe.slice(1))).toBe(unsafe.slice(1))
     expect(unsafe).not.toBe(safeEvidenceSlug(unsafe.slice(1)))
   })
+
+  it("hashes portable-filesystem hazards instead of preserving them verbatim", () => {
+    expect(safeEvidenceSlug("CON")).toMatch(/^~CON-[a-f0-9]{8}$/)
+    expect(safeEvidenceSlug("step.")).toMatch(/^~step-[a-f0-9]{8}$/)
+  })
 })

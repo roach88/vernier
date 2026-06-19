@@ -16,7 +16,7 @@
 // ledger entries, not just agent results.
 
 import { createHash } from "node:crypto"
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs"
 import { dirname, join, relative, resolve } from "node:path"
 import type { ContractResult } from "../kernel/contract.js"
 import type { EffectObservation } from "../kernel/effects.js"
@@ -164,8 +164,9 @@ export function resolveLedgerRoot(spec: LedgerSpec): string {
 }
 
 export function assertSafePathComponent(value: string, label = "path component"): void {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)) {
-    throw new Error(`${label} must be a safe path component (letters, numbers, dot, underscore, dash; no separators), got \`${value}\`.`)
+  const windowsDevice = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) || value.endsWith(".") || windowsDevice.test(value)) {
+    throw new Error(`${label} must be a portable safe path component (letters, numbers, dot, underscore, dash; no separators, trailing dot, or Windows device names), got \`${value}\`.`)
   }
 }
 
@@ -176,10 +177,27 @@ function assertContained(parent: string, child: string): void {
   }
 }
 
+function assertNoSymlink(path: string, label: string): void {
+  if (existsSync(path) && lstatSync(path).isSymbolicLink()) {
+    throw new Error(`${label} must not be a symlink: \`${path}\`.`)
+  }
+}
+
+function assertRealContained(parent: string, child: string): void {
+  if (!existsSync(parent) || !existsSync(child)) return
+  const realParent = realpathSync(parent)
+  const realChild = realpathSync(child)
+  assertContained(realParent, realChild)
+}
+
 export function journalPath(root: string, runId: string): string {
   assertSafePathComponent(runId, "run id")
   const runsRoot = resolve(root, "runs")
-  const path = resolve(runsRoot, runId, "journal.jsonl")
+  const runDir = resolve(runsRoot, runId)
+  assertNoSymlink(runsRoot, "ledger runs root")
+  assertNoSymlink(runDir, "ledger run directory")
+  assertRealContained(runsRoot, runDir)
+  const path = resolve(runDir, "journal.jsonl")
   assertContained(runsRoot, path)
   return path
 }
@@ -196,13 +214,17 @@ export class Ledger {
   static load(path: string): LedgerEntry[] {
     if (!existsSync(path)) return []
     const entries: LedgerEntry[] = []
-    for (const line of readFileSync(path, "utf8").split("\n")) {
+    const lines = readFileSync(path, "utf8").split("\n")
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i]!
       const trimmed = line.trim()
       if (!trimmed) continue
       try {
         entries.push(JSON.parse(trimmed) as LedgerEntry)
-      } catch {
-        continue // torn / unparseable line: skip, keep the prefix (omegacode journal.ts)
+      } catch (error) {
+        const hasLaterEntry = lines.slice(i + 1).some((later) => later.trim().length > 0)
+        if (!hasLaterEntry) break // torn trailing line: keep the prefix (omegacode journal.ts)
+        throw new Error(`journal contains an invalid JSON line before the end at ${path}:${i + 1}: ${error instanceof Error ? error.message : String(error)}`)
       }
     }
     return entries
@@ -217,6 +239,8 @@ export class Ledger {
  */
 export interface Replay {
   readonly meta?: RunMetaEntry
+  /** Started slots that have no terminal result yet are unsafe to re-run on resume. */
+  readonly started: ReadonlyMap<string, StepStartedEntry>
   /** Terminal step results in this exact execution slot, regardless of status. */
   readonly terminal: ReadonlyMap<string, StepResultEntry>
   /** Completed results only, for summaries that care about successful outputs. */
@@ -230,6 +254,7 @@ export interface Replay {
 export function replay(entries: readonly LedgerEntry[]): Replay {
   let meta: RunMetaEntry | undefined
   let lastDecision: DecisionEntry | undefined
+  const started = new Map<string, StepStartedEntry>()
   const terminal = new Map<string, StepResultEntry>()
   const completed = new Map<string, StepResultEntry>()
   const contracts = new Map<string, ContractEntry>()
@@ -237,6 +262,7 @@ export function replay(entries: readonly LedgerEntry[]): Replay {
   const decisions = new Map<string, DecisionEntry>()
   for (const entry of entries) {
     if (entry.type === "meta") meta = entry
+    else if (entry.type === "step_started") started.set(entry.key, entry)
     else if (entry.type === "step_result") {
       terminal.set(entry.key, entry)
       if (entry.status === "completed") completed.set(entry.key, entry)
@@ -248,6 +274,6 @@ export function replay(entries: readonly LedgerEntry[]): Replay {
       lastDecision = entry
     }
   }
-  const out: Replay = { terminal, completed, contracts, effects, decisions, ...(meta && { meta }), ...(lastDecision && { lastDecision }) }
+  const out: Replay = { started, terminal, completed, contracts, effects, decisions, ...(meta && { meta }), ...(lastDecision && { lastDecision }) }
   return out
 }

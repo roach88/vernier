@@ -11,13 +11,14 @@ const dist = new URL("../dist/cli/main.js", import.meta.url)
 if (existsSync(dist)) {
   await import(dist.href)
 } else {
+  let tsx
   try {
-    const { register } = await import("tsx/esm/api")
-    register()
-    await import(new URL("../src/cli/main.ts", import.meta.url).href)
+    tsx = await import("tsx/esm/api")
   } catch (error) {
     console.error("vernier: built dist/cli/main.js was not found, and the development tsx fallback is unavailable.")
     console.error("Run `npm install && npm run build` in the vernier checkout, then retry.")
     throw error
   }
+  tsx.register()
+  await import(new URL("../src/cli/main.ts", import.meta.url).href)
 }

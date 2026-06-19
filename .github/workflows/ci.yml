@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -18,14 +21,4 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - name: Package smoke
-        run: |
-          npm pack --dry-run --ignore-scripts --json > /tmp/vernier-pack.json
-          node - <<'NODE'
-          const fs = require('node:fs')
-          const pack = JSON.parse(fs.readFileSync('/tmp/vernier-pack.json', 'utf8'))[0]
-          const files = new Set(pack.files.map((f) => f.path))
-          for (const required of ['bin/vernier.js', 'dist/index.js', 'dist/cli/main.js', 'docs/safety.md']) {
-            if (!files.has(required)) throw new Error(`missing ${required} from package`)
-          }
-          NODE
+      - run: npm run smoke:package

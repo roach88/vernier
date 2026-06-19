@@ -158,6 +158,25 @@ describe("vernier CLI", () => {
     ])
   })
 
+  it("`runs` and `stats` skip unsafe legacy run directories, while direct `show` reports usage error", async () => {
+    const root = home()
+    const { runId } = crashedSmokeRun(root)
+    mkdirSync(join(root, "runs", "bad name"), { recursive: true })
+    writeFileSync(join(root, "runs", "bad name", "journal.jsonl"), "not json\n")
+
+    const runs = await cli(root, "runs", "--json")
+    expect(runs.code).toBe(0)
+    expect((JSON.parse(runs.stdout) as Array<{ runId: string }>).map((r) => r.runId)).toEqual([runId])
+
+    const stats = await cli(root, "stats", "--json")
+    expect(stats.code).toBe(0)
+    expect((JSON.parse(stats.stdout) as { runs: Array<{ runId: string }> }).runs.map((r) => r.runId)).toEqual([runId])
+
+    const show = await cli(root, "show", "bad name")
+    expect(show.code).toBe(2)
+    expect(show.stderr).toContain("safe path component")
+  })
+
   it("`run` accepts --input and honors it", async () => {
     const root = home()
     const result = await cli(root, "run", "control-plane-smoke-test", "--input", '{"jobName":"x","upstreamChanged":true}', "--json")

@@ -190,7 +190,7 @@ describe("walkthrough §8: examples/getting-started through the CLI", () => {
     expect((outcome.decision as { summary: string }).summary).toContain("three lines")
   })
 
-  it("§9: a crashed run resumes from its ledger — compose replays, review re-executes, done", async () => {
+  it("§9: a crashed run resumes from its ledger — compose replays, started review escalates without re-execution", async () => {
     const home = tmp("home")
     const work = tmp("work")
 
@@ -204,15 +204,15 @@ describe("walkthrough §8: examples/getting-started through the CLI", () => {
     const runId = listed[0]!.runId
 
     const resumed = await cli(home, ["resume", runId, "--json"])
-    expect(resumed.code).toBe(0)
-    expect(JSON.parse(resumed.stdout)).toMatchObject({ runId, status: "done", resumed: true })
+    expect(resumed.code).toBe(1)
+    expect(JSON.parse(resumed.stdout)).toMatchObject({ runId, status: "needs_human", resumed: true })
     expect(resumed.stderr).toContain("took over a stale lease")
 
-    // Resume replayed compose from the ledger (one execution) and re-ran
-    // only the torn review step (started pre-crash, started again on resume).
+    // Resume replayed compose from the ledger (one execution) and refused to
+    // re-run the torn review slot because it had already started pre-crash.
     const entries = Ledger.load(journalPath(home, runId))
     expect(entries.filter((e) => e.type === "step_started" && e.stepId === "compose")).toHaveLength(1)
-    expect(entries.filter((e) => e.type === "step_started" && e.stepId === "review")).toHaveLength(2)
+    expect(entries.filter((e) => e.type === "step_started" && e.stepId === "review")).toHaveLength(1)
     expect(entries.filter((e) => e.type === "step_result" && e.stepId === "review")).toHaveLength(1)
   })
 })

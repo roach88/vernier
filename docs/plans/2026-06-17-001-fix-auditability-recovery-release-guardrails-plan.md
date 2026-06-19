@@ -1,7 +1,7 @@
 ---
 title: "fix: Harden auditability, recovery, and release guardrails"
 type: fix
-status: active
+status: completed
 date: 2026-06-17
 deepened: 2026-06-17
 ---
@@ -567,7 +567,7 @@ stateDiagram-v2
 - The bin no longer falls through to a missing devDependency in consumer-like installs.
 - README install instructions match the actual supported paths.
 
-### U12. Create the follow-up trust-promotion lifecycle plan
+### U12. Create the follow-up trust-promotion gate plan
 
 **Goal:** Capture the trust direction suggestion in a separate feature plan instead of implementing trust-promotion code inside this hardening pass.
 
@@ -576,7 +576,7 @@ stateDiagram-v2
 **Dependencies:** U2 and U3, because the follow-up plan should build promotion criteria on truthful observed-vs-unknown ledger evidence.
 
 **Files:**
-- Create: `docs/plans/2026-06-17-002-feat-trust-promotion-lifecycle-plan.md`
+- Create: `docs/plans/2026-06-17-002-feat-trust-promotion-gate-plan.md`
 - Reference: `HANDOFF.md`
 - Reference: `src/kernel/types.ts`
 - Reference: `src/ledger/ledger.ts`
@@ -623,7 +623,7 @@ stateDiagram-v2
 | Contract path containment blocks legitimate artifact paths | Preserve current workdir-relative `output.trace` semantics, document that root, and add happy-path template/direct contract tests. |
 | Git observer optimization misses ignored out-of-scope writes | Preserve ignored-file checks for relevant scopes; add regression tests with ignored files inside and outside scope. |
 | CI package smoke becomes slow or flaky | Keep smoke deterministic and no-auth; avoid live providers and global `npm link`. |
-| Trust follow-up expands into product implementation | Keep U12 planning-only in this hardening pass; all trust CLI/runtime work belongs in `docs/plans/2026-06-17-002-feat-trust-promotion-lifecycle-plan.md` or a later feature plan. |
+| Trust follow-up expands into product implementation | Keep U12 planning-only in this hardening pass; all trust CLI/runtime work belongs in `docs/plans/2026-06-17-002-feat-trust-promotion-gate-plan.md` or a later feature plan. |
 
 ---
 

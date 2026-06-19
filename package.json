@@ -36,8 +36,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "vernier": "tsx src/cli/main.ts",
-    "prepare": "npm run build",
-    "verify": "npm run typecheck && npm test && npm run build"
+    "verify": "npm run typecheck && npm test && npm run build && npm run smoke:package",
+    "smoke:package": "node scripts/package-smoke.mjs"
   },
   "dependencies": {
     "ajv": "^8.20.0",

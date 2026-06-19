@@ -1,4 +1,4 @@
-import { appendFileSync, mkdtempSync } from "node:fs"
+import { appendFileSync, mkdirSync, mkdtempSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -101,6 +101,17 @@ describe("Ledger", () => {
     expect(entries[0]?.type).toBe("meta")
   })
 
+  it("rejects invalid JSON in the middle of a journal", () => {
+    const path = tempJournal()
+    const ledger = new Ledger(path)
+    const key = resumeKey("smoke", { a: 1 }, 1, 1)
+    ledger.append(meta())
+    appendFileSync(path, '{"type":"step_result","key":"abc","trunc\n', "utf8")
+    ledger.append(decision(key))
+
+    expect(() => Ledger.load(path)).toThrow(/invalid JSON line before the end/)
+  })
+
   it("is replayable: completed results recoverable by resume key, last decision surfaced", () => {
     const path = tempJournal()
     const ledger = new Ledger(path)
@@ -121,9 +132,28 @@ describe("ledger path containment", () => {
   it("rejects unsafe run ids before resolving journals", () => {
     expect(() => journalPath("/tmp/vernier-ledger", "../escape")).toThrow(/safe path component/)
     expect(() => journalPath("/tmp/vernier-ledger", "nested/run")).toThrow(/safe path component/)
+    expect(() => journalPath("/tmp/vernier-ledger", "CON")).toThrow(/portable safe path component/)
+    expect(() => journalPath("/tmp/vernier-ledger", "run.")).toThrow(/portable safe path component/)
   })
 
   it("keeps safe journal paths under the runs root", () => {
     expect(journalPath("/tmp/vernier-ledger", "safe.run-1_2")).toBe("/tmp/vernier-ledger/runs/safe.run-1_2/journal.jsonl")
+  })
+
+  it("rejects symlinked run directories before journal IO can escape", () => {
+    const root = mkdtempSync(join(tmpdir(), "vernier-ledger-root-"))
+    const outside = mkdtempSync(join(tmpdir(), "vernier-ledger-outside-"))
+    mkdirSync(join(root, "runs"), { recursive: true })
+    symlinkSync(outside, join(root, "runs", "safe-run"), "dir")
+
+    expect(() => journalPath(root, "safe-run")).toThrow(/ledger run directory must not be a symlink/)
+  })
+
+  it("rejects a symlinked runs root", () => {
+    const root = mkdtempSync(join(tmpdir(), "vernier-ledger-root-"))
+    const outside = mkdtempSync(join(tmpdir(), "vernier-ledger-outside-"))
+    symlinkSync(outside, join(root, "runs"), "dir")
+
+    expect(() => journalPath(root, "safe-run")).toThrow(/ledger runs root must not be a symlink/)
   })
 })

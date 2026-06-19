@@ -382,7 +382,12 @@ function parseInputs(entry: RegisteredLoop, flags: Flags): Record<string, unknow
 function loadJournal(runId: string | undefined): { runId: string; path: string; entries: LedgerEntry[]; summary: JournalSummary } {
   if (!runId) throw new UsageError("Missing <runId>. See `vernier runs`.")
   const root = resolveLedgerRoot({})
-  const path = journalPath(root, runId)
+  let path: string
+  try {
+    path = journalPath(root, runId)
+  } catch (error) {
+    throw new UsageError(error instanceof Error ? error.message : String(error))
+  }
   const entries = Ledger.load(path)
   if (entries.length === 0) throw new UsageError(`No run \`${runId}\` under \`${root}\` (no journal at ${path}). See \`vernier runs\`.`)
   return { runId, path, entries, summary: summarizeJournal(entries) }
@@ -643,8 +648,24 @@ function cmdInit(flags: Flags): number {
   return EXIT.ok
 }
 
+const SHUTDOWN_TIMEOUT_MS = 5_000
+
 async function shutdownRuntime(runtime: LoopRuntime | undefined): Promise<void> {
-  await runtime?.shutdown()
+  if (!runtime?.shutdown) return
+  const timedOut = Symbol("shutdown timed out")
+  const shutdown = runtime.shutdown()
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const timer = new Promise<typeof timedOut>((resolve) => {
+    timeout = setTimeout(resolve, SHUTDOWN_TIMEOUT_MS, timedOut)
+  })
+  try {
+    const result = await Promise.race([shutdown.then(() => undefined), timer])
+    if (result === timedOut) {
+      shutdown.catch(() => {})
+    }
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
 }
 
 async function cmdRun(flags: Flags): Promise<number> {
@@ -763,7 +784,13 @@ function cmdRuns(flags: Flags): number {
     ids = [] // no runs yet
   }
   const summaries = ids
-    .map((id) => ({ runId: id, summary: summarizeJournal(Ledger.load(journalPath(root, id))) }))
+    .flatMap((id) => {
+      try {
+        return [{ runId: id, summary: summarizeJournal(Ledger.load(journalPath(root, id))) }]
+      } catch {
+        return []
+      }
+    })
     .filter((r) => r.summary.meta !== undefined)
     .sort((a, b) => (a.summary.startedAt ?? "").localeCompare(b.summary.startedAt ?? ""))
   if (flags.json) {
@@ -855,8 +882,14 @@ function cmdStats(flags: Flags): number {
     ids = [] // no runs yet
   }
   let rows = ids
-    .map((id) => runStatsRow(id, Ledger.load(journalPath(root, id))))
-    .filter((r): r is RunStatsRow => r !== null)
+    .flatMap((id) => {
+      try {
+        const row = runStatsRow(id, Ledger.load(journalPath(root, id)))
+        return row ? [row] : []
+      } catch {
+        return []
+      }
+    })
     .sort((a, b) => (a.startedAt ?? "").localeCompare(b.startedAt ?? "") || a.runId.localeCompare(b.runId))
   if (loop !== null) rows = rows.filter((r) => r.loopId === loop)
   if (last !== null) rows = rows.slice(-last)

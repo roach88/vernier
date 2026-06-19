@@ -21,7 +21,7 @@ import { executorRegistry, scriptExecutor } from "../src/executors/script.js"
 import { ContractRegistry, type Contract } from "../src/kernel/contract.js"
 import { retryPolicy, until } from "../src/kernel/policy.js"
 import { noEffects, sig, type Loop } from "../src/kernel/types.js"
-import { Ledger, journalPath } from "../src/ledger/ledger.js"
+import { Ledger, journalPath, resumeKey } from "../src/ledger/ledger.js"
 
 function temp(): { workdir: string; ledgerRoot: string } {
   const root = mkdtempSync(join(tmpdir(), "vernier-resume-"))
@@ -388,6 +388,69 @@ function rememberExecutors(storePath: string) {
 const storeLines = (path: string): string[] => (existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean) : [])
 
 describe("resume never double-applies side effects", () => {
+  it("crash after step_started but before step_result escalates instead of re-running the side-effecting slot", async () => {
+    const { workdir, ledgerRoot } = temp()
+    const store = join(workdir, "..", "rules.txt")
+    const ex = rememberExecutors(store)
+    const d = deps([ex.remember, ex.confirm], workdir)
+    const loop = rememberLoop(ledgerRoot)
+
+    const crashed = startRun(loop, { rule: "always verify" }, d)
+    const key = resumeKey("remember", { rule: "always verify" }, 1, 1)
+    crashed.ledger.append({
+      type: "step_started",
+      key,
+      stepId: "remember",
+      attempt: 1,
+      iteration: 1,
+      executorId: "script:remember",
+      at: new Date().toISOString(),
+    })
+    appendFileSync(store, "always verify\n", "utf8")
+
+    const resumed = resumeRun(loop, crashed.state.runId)
+    const outcome = await driveRun(resumed, d)
+
+    expect(outcome.state.status).toBe("needs_human")
+    expect(outcome.decision.kind).toBe("escalate")
+    expect(storeLines(store)).toEqual(["always verify"])
+    expect(ex.counts).toEqual({ remember: 0, confirm: 0 })
+    const entries = Ledger.load(journalPath(ledgerRoot, crashed.state.runId))
+    expect(entries.filter((e) => e.type === "step_result" && e.stepId === "remember")).toHaveLength(1)
+    const effects = entries.findLast((e) => e.type === "effects")
+    expect(effects?.type === "effects" ? effects.observation.observed : true).toBe(false)
+  })
+
+  it("effect observer failure after executor completion journals the result and escalates without throwing", async () => {
+    const { workdir, ledgerRoot } = temp()
+    const store = join(workdir, "..", "rules.txt")
+    const ex = rememberExecutors(store)
+    const d: EngineDeps = {
+      ...deps([ex.remember, ex.confirm], workdir),
+      observer: {
+        async snapshot() {
+          return new Map<string, string>()
+        },
+        async assess() {
+          throw new Error("observer unavailable")
+        },
+      },
+    }
+    const loop = rememberLoop(ledgerRoot)
+
+    const run = startRun(loop, { rule: "always verify" }, d)
+    const outcome = await tick(run, d)
+
+    expect(outcome.state.status).toBe("needs_human")
+    expect(outcome.decision.kind).toBe("escalate")
+    expect(storeLines(store)).toEqual(["always verify"])
+    expect(ex.counts).toEqual({ remember: 1, confirm: 0 })
+    const entries = Ledger.load(journalPath(ledgerRoot, run.state.runId))
+    expect(entries.filter((e) => e.type === "step_result" && e.stepId === "remember")).toHaveLength(1)
+    const effects = entries.findLast((e) => e.type === "effects")
+    expect(effects?.type === "effects" ? effects.observation.reason : "").toContain("observer unavailable")
+  })
+
   it("crash after the remember step's tick: resume does NOT append twice", async () => {
     const { workdir, ledgerRoot } = temp()
     const store = join(workdir, "..", "rules.txt") // OUTSIDE the observed workdir, like the real Memory store

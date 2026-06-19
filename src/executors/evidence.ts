@@ -7,7 +7,8 @@ import { createHash } from "node:crypto"
 import type { StepSpec } from "../kernel/types.js"
 
 export function safeEvidenceSlug(value: string): string {
-  if (/^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/.test(value)) return value
+  const windowsDevice = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
+  if (/^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/.test(value) && !value.endsWith(".") && !windowsDevice.test(value)) return value
   const hash = createHash("sha256").update(value).digest("hex").slice(0, 8)
   const cleaned = value
     .normalize("NFKD")

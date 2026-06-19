@@ -15,7 +15,7 @@ import { hashObserver, type EffectObservation, type EffectsObserver } from "../k
 import type { Decision, Observation } from "../kernel/policy.js"
 import type { Executor, Loop, MemoryStore, Step, StepResult, StepSkill } from "../kernel/types.js"
 import { derivedOutputSchema, zeroUsage } from "../kernel/types.js"
-import { assertSafePathComponent, journalPath, Ledger, resolveLedgerRoot, resumeKey, KEY_VERSION, type Replay, type StepResultEntry } from "../ledger/ledger.js"
+import { assertSafePathComponent, journalPath, Ledger, resolveLedgerRoot, resumeKey, KEY_VERSION, type Replay, type StepResultEntry, type StepStartedEntry } from "../ledger/ledger.js"
 import { embedSkillsInPrompt, nativeSkillsDirective, skillBody, snapshotSkills } from "../skills/skills.js"
 
 export type RunStatus = "running" | "done" | "needs_human" | "stopped"
@@ -133,6 +133,8 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
   // side-effecting steps (codex writes, `remember`) must not double-apply.
   const journaled = run.replayed?.terminal.get(key)
   if (journaled) return replayTick(run, deps, step, key, journaled)
+  const started = run.replayed?.started.get(key)
+  if (started) return recoverStartedTick(run, deps, step, key, started)
 
   const executor = deps.executors.get(step.executor)
   if (!executor) throw new Error(`Unknown executor id \`${step.executor}\` for step \`${step.id}\`.`)
@@ -233,7 +235,18 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
       usage: zeroUsage(),
     }
   }
-  const effects: EffectObservation = await observer.assess(deps.workdir, before, step.effects)
+  let effects: EffectObservation
+  try {
+    effects = await observer.assess(deps.workdir, before, step.effects)
+  } catch (error) {
+    effects = {
+      changed: [],
+      allowed: false,
+      unexpected: ["<effects unknown: observer failed after executor>"],
+      observed: false,
+      reason: `effect observer failed after executor: ${error instanceof Error ? error.message : String(error)}`,
+    }
+  }
 
   // 5. Project engine-observed fields over the executor's output (e.g. an
   //    artifact path from effect attribution — the projection wins on
@@ -362,6 +375,33 @@ function replayTick(run: Run, deps: EngineDeps, step: Step, key: string, journal
   ledger.append({ type: "decision", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, decision, at: now() })
   run.state = nextState(loop, state, decision, validatedOutput ?? {})
   return { state: run.state, decision }
+}
+
+function recoverStartedTick(run: Run, deps: EngineDeps, step: Step, key: string, started: StepStartedEntry): TickOutcome {
+  const { ledger } = run
+  const journaled: StepResultEntry = {
+    type: "step_result",
+    key,
+    stepId: step.id,
+    attempt: started.attempt,
+    iteration: started.iteration,
+    status: "interrupted",
+    output: { error: "crash after step_started before step_result" },
+    outputValid: false,
+    evidence: [],
+    usage: zeroUsage(),
+    at: now(),
+  }
+  const effects: EffectObservation = {
+    changed: [],
+    allowed: false,
+    unexpected: ["<effects unknown: crash after step_started before step_result>"],
+    observed: false,
+    reason: "crash after step_started before step_result",
+  }
+  ledger.append(journaled)
+  ledger.append({ type: "effects", key, stepId: step.id, attempt: started.attempt, iteration: started.iteration, observation: effects, at: now() })
+  return replayTick(run, deps, step, key, journaled)
 }
 
 /** The journal-to-state projection. Exported for the resume fold (engine/resume.ts); not a public API. */

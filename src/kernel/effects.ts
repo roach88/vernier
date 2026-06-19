@@ -8,7 +8,12 @@ import { readdirSync, readFileSync } from "node:fs"
 import { join, relative } from "node:path"
 import type { EffectScope, OutputProjection } from "./types.js"
 
-const SKIP_DIRS = new Set([".git", "node_modules", ".vernier", ".next", ".turbo", ".cache", "coverage"])
+// Skip only structural directories that cannot be meaningful step output.
+// Generated/cache directories such as .next, .turbo, .cache, and coverage
+// remain observable: hiding them would let a step mutate the workdir without
+// an effects entry, which is worse than the hashing cost for the default
+// correctness-first observer.
+const SKIP_DIRS = new Set([".git", "node_modules", ".vernier"])
 
 /** Map of workdir-relative posix path -> sha256 of contents. */
 export type Snapshot = ReadonlyMap<string, string>
