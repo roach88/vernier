@@ -4,7 +4,7 @@
 // worktree.ts only answers "did anything change?" — this attributes.
 
 import { createHash } from "node:crypto"
-import { readdirSync, readFileSync } from "node:fs"
+import { lstatSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs"
 import { join, relative } from "node:path"
 import type { EffectScope, OutputProjection } from "./types.js"
 
@@ -24,15 +24,43 @@ export function snapshotDir(root: string): Snapshot {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (SKIP_DIRS.has(entry.name)) continue
       const full = join(dir, entry.name)
+      const rel = relative(root, full).split("\\").join("/")
       if (entry.isDirectory()) walk(full)
+      else if (entry.isSymbolicLink()) out.set(rel, symlinkDigest(full))
       else if (entry.isFile()) {
-        const rel = relative(root, full).split("\\").join("/")
         out.set(rel, createHash("sha256").update(readFileSync(full)).digest("hex"))
+      } else {
+        out.set(rel, `type:${entryType(full)}`)
       }
     }
   }
   walk(root)
   return out
+}
+
+function symlinkDigest(path: string): string {
+  const target = readlinkSync(path)
+  try {
+    const stat = statSync(path)
+    if (stat.isFile()) return `symlink:${target}:file:${createHash("sha256").update(readFileSync(path)).digest("hex")}`
+    if (stat.isDirectory()) return `symlink:${target}:directory`
+    return `symlink:${target}:target:${entryType(path, false)}`
+  } catch (error) {
+    const reason = error instanceof Error ? ((error as NodeJS.ErrnoException).code ?? error.message) : String(error)
+    return `symlink:${target}:unreadable:${reason}`
+  }
+}
+
+function entryType(path: string, noFollow = true): string {
+  const stat = noFollow ? lstatSync(path) : statSync(path)
+  if (stat.isFile()) return "file"
+  if (stat.isDirectory()) return "directory"
+  if (stat.isSymbolicLink()) return "symlink"
+  if (stat.isFIFO()) return "fifo"
+  if (stat.isSocket()) return "socket"
+  if (stat.isBlockDevice()) return "block-device"
+  if (stat.isCharacterDevice()) return "character-device"
+  return "unknown"
 }
 
 export function changedFiles(before: Snapshot, after: Snapshot): string[] {
