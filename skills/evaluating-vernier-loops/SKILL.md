@@ -48,10 +48,10 @@ module and its `vernier.config` — not a description of them.
   config (`bindings`) where it is visible and per-run overridable.
 - Prompts/contracts reference the role, not the provider, so checks hold
   under any binding.
-- Write-scoped steps: is the bound provider one with enforced write
-  boundaries (codex, claude)? opencode/pi/cursor-agent fail closed on
-  write scopes — a binding that can never run is a P1 (`vernier doctor`
-  shows it).
+- Write-scoped steps: is the bound provider one with write support and
+  post-run scope attribution (codex, claude, cursor-agent)? opencode/pi
+  fail closed on write scopes — a binding that can never run is a P1
+  (`vernier doctor` shows it).
 
 ## 5. Policy (termination and escalation)
 
