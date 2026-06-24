@@ -101,6 +101,9 @@ allowed before policy decides what happens next.
 
 Project skills live under `.agents/skills/<name>/SKILL.md`, or any path listed
 in config `skills`. User-level skills are read from `~/.agents/skills`.
+Legacy `.claude/skills` directories are still scanned for one migration window,
+with `.agents/skills` taking precedence and deprecation warnings for any loaded
+legacy skill.
 
 ```sh
 vernier skills
@@ -133,7 +136,8 @@ yet.
 - `Unresolved executor binding`: the resolved executor id is not registered.
   Run `vernier doctor` to see registered executors and per-step bindings.
 - `Unresolved skill binding`: the skill name is not in config `skills`,
-  `.agents/skills`, or `~/.agents/skills`.
+  `.agents/skills`, `~/.agents/skills`, or the deprecated `.claude/skills`
+  fallback locations.
 - `needs_human`: read the last decision and the failed contract checks with
   `vernier show <runId>`.
 - `lease held` / exit 3: another live driver owns the run. Stale leases are

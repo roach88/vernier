@@ -244,6 +244,22 @@ describe("discoverSkills: explicit > project > user, first registration wins", (
     expect(() => discoverSkills({ explicit: [join(a, "same-name"), join(b, "same-name")] })).toThrow(/Duplicate skill `same-name`/)
   })
 
+  it("warns when an explicit config registration points into a legacy .claude/skills tree", () => {
+    const root = scratch("explicit-legacy")
+    writeSkill(join(root, ".claude", "skills"), { name: "legacy-explicit" })
+
+    const byParent = discoverSkills({ explicit: [join(root, ".claude", "skills")] })
+    expect(byParent.skills.get("legacy-explicit")).toMatchObject({ origin: "config", dir: join(root, ".claude", "skills", "legacy-explicit") })
+    expect(byParent.warnings).toEqual([expect.stringContaining("legacy-explicit")])
+    expect(byParent.warnings[0]).toContain(".claude/skills")
+
+    const bySkillDir = discoverSkills({ explicit: [join(root, ".claude", "skills", "legacy-explicit")] })
+    expect(bySkillDir.warnings).toEqual([expect.stringContaining("legacy-explicit")])
+
+    const bySkillFile = discoverSkills({ explicit: [join(root, ".claude", "skills", "legacy-explicit", "SKILL.md")] })
+    expect(bySkillFile.warnings).toEqual([expect.stringContaining("legacy-explicit")])
+  })
+
   it("scans <projectRoot>/.agents/skills and <home>/.agents/skills; earlier tiers win name collisions", () => {
     const explicitRoot = scratch("tier-config")
     const project = scratch("tier-project")
@@ -258,6 +274,34 @@ describe("discoverSkills: explicit > project > user, first registration wins", (
     expect(registry.skills.get("shared-name")).toMatchObject({ origin: "config", dir: join(explicitRoot, "shared-name") })
     expect(registry.skills.get("project-only")?.origin).toBe("project")
     expect(registry.skills.get("user-only")?.origin).toBe("user")
+  })
+
+  it("keeps legacy .claude/skills discovery for migration, with .agents/skills taking same-scope precedence", () => {
+    const project = scratch("legacy-project")
+    const home = scratch("legacy-home")
+    writeSkill(join(project, ".agents", "skills"), { name: "shared-project", description: "new project copy." })
+    writeSkill(join(project, ".claude", "skills"), { name: "shared-project", description: "legacy project copy." })
+    writeSkill(join(project, ".claude", "skills"), { name: "legacy-project-only" })
+    writeSkill(join(home, ".agents", "skills"), { name: "shared-user", description: "new user copy." })
+    writeSkill(join(home, ".claude", "skills"), { name: "shared-user", description: "legacy user copy." })
+    writeSkill(join(home, ".claude", "skills"), { name: "legacy-user-only" })
+
+    const registry = discoverSkills({ projectRoot: project, home })
+
+    expect(registry.skills.get("shared-project")).toMatchObject({ origin: "project", dir: join(project, ".agents", "skills", "shared-project") })
+    expect(registry.skills.get("shared-user")).toMatchObject({ origin: "user", dir: join(home, ".agents", "skills", "shared-user") })
+    expect(registry.skills.get("legacy-project-only")).toMatchObject({
+      origin: "project",
+      dir: join(project, ".claude", "skills", "legacy-project-only"),
+    })
+    expect(registry.skills.get("legacy-user-only")).toMatchObject({ origin: "user", dir: join(home, ".claude", "skills", "legacy-user-only") })
+    expect(registry.warnings).toHaveLength(2)
+    expect(registry.warnings).toEqual([
+      expect.stringContaining("legacy-project-only"),
+      expect.stringContaining("legacy-user-only"),
+    ])
+    expect(registry.warnings.join("\n")).not.toContain("shared-project")
+    expect(registry.warnings.join("\n")).not.toContain("shared-user")
   })
 
   it("a project tier beats the user tier on the same name", () => {

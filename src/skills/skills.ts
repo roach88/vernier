@@ -14,7 +14,9 @@
 //   config    paths registered in vernier.config `skills` (a SKILL.md file,
 //             a skill directory, or a parent directory of skill directories)
 //   project   <project>/.agents/skills/*  (project = the config file's dir)
+//             <project>/.claude/skills/*  (migration fallback; deprecated)
 //   user      ~/.agents/skills/*
+//             ~/.claude/skills/*          (migration fallback; deprecated)
 //
 // Earlier tiers win name collisions — explicit registration beats both
 // standard locations; project beats user. Duplicate names WITHIN the
@@ -68,6 +70,8 @@ export interface SkillRegistry {
   /** Spec-valid skills by name, collisions already resolved by tier precedence. */
   readonly skills: ReadonlyMap<string, SkillRecord>
   readonly invalid: readonly InvalidSkill[]
+  /** Non-fatal discovery advisories, such as legacy `.claude/skills` fallbacks. */
+  readonly warnings: readonly string[]
 }
 
 export interface SkillDiscoveryOpts {
@@ -215,6 +219,16 @@ function isDir(path: string, entry: { isDirectory(): boolean; isSymbolicLink(): 
   }
 }
 
+function isLegacyClaudeSkillsPath(path: string): boolean {
+  const parts = path.split(/[\\/]+/)
+  return parts.some((part, index) => part === ".claude" && parts[index + 1] === "skills")
+}
+
+function legacyClaudeWarning(record: SkillRecord): string {
+  const target = record.origin === "user" ? "~/.agents/skills" : record.origin === "project" ? "<project>/.agents/skills" : ".agents/skills"
+  return `skill \`${record.name}\` was loaded from deprecated \`.claude/skills\` path \`${record.dir}\`; move it to ${target} before legacy discovery is removed.`
+}
+
 /**
  * Build the skill registry for one invocation. Explicit entries throw on
  * any problem (duplicates included); standard locations tolerate invalid
@@ -223,6 +237,7 @@ function isDir(path: string, entry: { isDirectory(): boolean; isSymbolicLink(): 
 export function discoverSkills(opts: SkillDiscoveryOpts): SkillRegistry {
   const skills = new Map<string, SkillRecord>()
   const invalid: InvalidSkill[] = []
+  const warnings: string[] = []
 
   for (const entry of opts.explicit ?? []) {
     for (const record of readExplicit(entry)) {
@@ -233,30 +248,36 @@ export function discoverSkills(opts: SkillDiscoveryOpts): SkillRegistry {
         )
       }
       skills.set(record.name, record)
+      if (isLegacyClaudeSkillsPath(record.dir)) warnings.push(legacyClaudeWarning(record))
     }
   }
 
-  const tiers: ReadonlyArray<{ root: string | undefined; origin: SkillOrigin }> = [
-    { root: opts.projectRoot, origin: "project" },
-    { root: opts.home, origin: "user" },
+  const tiers: ReadonlyArray<{ root: string | undefined; origin: SkillOrigin; dotDir: ".agents" | ".claude"; deprecated: boolean }> = [
+    { root: opts.projectRoot, origin: "project", dotDir: ".agents", deprecated: false },
+    { root: opts.projectRoot, origin: "project", dotDir: ".claude", deprecated: true },
+    { root: opts.home, origin: "user", dotDir: ".agents", deprecated: false },
+    { root: opts.home, origin: "user", dotDir: ".claude", deprecated: true },
   ]
-  for (const { root, origin } of tiers) {
+  for (const { root, origin, dotDir, deprecated } of tiers) {
     if (root === undefined) continue
-    const dir = join(root, ".agents", "skills")
+    const dir = join(root, dotDir, "skills")
     if (!existsSync(dir) || !statSync(dir).isDirectory()) continue
     for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const candidate = join(dir, entry.name)
       if (!isDir(candidate, entry) || !existsSync(join(candidate, SKILL_FILE))) continue
       try {
         const record = readSkillDir(candidate, origin)
-        if (!skills.has(record.name)) skills.set(record.name, record) // earlier tier won the name
+        if (!skills.has(record.name)) {
+          skills.set(record.name, record) // earlier tier won the name
+          if (deprecated) warnings.push(legacyClaudeWarning(record))
+        }
       } catch (error) {
         invalid.push({ path: candidate, origin, reason: error instanceof Error ? error.message : String(error) })
       }
     }
   }
 
-  return { skills, invalid }
+  return { skills, invalid, warnings }
 }
 
 // --------------------------------------------------------------- resolution

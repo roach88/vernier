@@ -117,7 +117,7 @@ export interface DoctorReport {
   /** The discovered skill inventory (config > project > user) plus standard-location skills that fail the spec. */
   readonly skills: readonly SkillReport[]
   readonly loops: readonly LoopReport[]
-  /** Reserved for non-fatal advisories. Kept in --json for downstream parsers; currently empty. */
+  /** Non-fatal advisories, such as legacy `.claude/skills` fallback discovery. */
   readonly warnings: readonly string[]
   /** True iff every registered loop is runnable. The doctor's exit code. */
   readonly ok: boolean
@@ -195,7 +195,7 @@ function checkExecutor(executor: Executor, fromConfig: boolean, probes: DoctorPr
 }
 
 /** The empty skill registry: what diagnose assumes when the caller skipped discovery. */
-export const NO_SKILLS: SkillRegistry = { skills: new Map(), invalid: [] }
+export const NO_SKILLS: SkillRegistry = { skills: new Map(), invalid: [], warnings: [] }
 
 /**
  * Resolve a step's skills (config skillBindings > declared default; --skill
@@ -209,7 +209,11 @@ function stepSkillReports(step: Step, skillBindings: readonly SkillBindingLayer[
     const found = skills.skills.get(name)
     return found !== undefined
       ? { name, ok: true, detail: found.dir }
-      : { name, ok: false, detail: `skill \`${name}\` is not discovered (vernier.config skills, <project>/.agents/skills, ~/.agents/skills)` }
+      : {
+          name,
+          ok: false,
+          detail: `skill \`${name}\` is not discovered (vernier.config skills, <project>/.agents/skills, <project>/.claude/skills, ~/.agents/skills, ~/.claude/skills)`,
+        }
   })
 }
 
@@ -265,7 +269,7 @@ export async function diagnose(
     for (const executor of baseline) check(executor)
     for (const executor of config?.executors ?? []) check(executor)
     for (const executor of baseline) await (executor as { shutdown?: () => Promise<void> }).shutdown?.()
-    return { executors: [...checked.values()], skills: skillRows, loops: [], warnings: [], ok: true }
+    return { executors: [...checked.values()], skills: skillRows, loops: [], warnings: skills.warnings, ok: true }
   }
 
   const loops: LoopReport[] = []
@@ -358,7 +362,7 @@ export async function diagnose(
     executors: [...checked.values()],
     skills: skillRows,
     loops,
-    warnings: [],
+    warnings: skills.warnings,
     ok: loops.every((l) => l.runnable),
   }
 }
@@ -373,7 +377,7 @@ export function renderDoctor(report: DoctorReport): string[] {
   }
   if (report.skills.length > 0) {
     // Config/project skills and every invalid skill print in full; valid
-    // user-tier (~/.agents/skills) skills that no step references collapse
+    // User-tier skills that no step references collapse
     // to a count — a big personal skill library must not drown the report
     // (--json always carries every row).
     const referenced = new Set(report.loops.flatMap((l) => l.steps.flatMap((s) => (s.skills ?? []).map((sk) => sk.name))))
@@ -383,7 +387,11 @@ export function renderDoctor(report: DoctorReport): string[] {
     for (const s of shown) {
       lines.push(`  ${mark(s.ok)}  ${s.name.padEnd(28)} ${s.origin}: ${s.detail}`)
     }
-    if (elided > 0) lines.push(`      (+ ${elided} more spec-valid skill${elided === 1 ? "" : "s"} under ~/.agents/skills; see --json)`)
+    if (elided > 0) lines.push(`      (+ ${elided} more spec-valid user skill${elided === 1 ? "" : "s"}; see --json)`)
+  }
+  if (report.warnings.length > 0) {
+    lines.push("", "WARNINGS")
+    for (const warning of report.warnings) lines.push(`  !!  ${warning}`)
   }
   lines.push("", "LOOPS")
   if (report.loops.length === 0) {
