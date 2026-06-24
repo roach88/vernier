@@ -244,15 +244,15 @@ describe("discoverSkills: explicit > project > user, first registration wins", (
     expect(() => discoverSkills({ explicit: [join(a, "same-name"), join(b, "same-name")] })).toThrow(/Duplicate skill `same-name`/)
   })
 
-  it("scans <projectRoot>/.claude/skills and <home>/.claude/skills; earlier tiers win name collisions", () => {
+  it("scans <projectRoot>/.agents/skills and <home>/.agents/skills; earlier tiers win name collisions", () => {
     const explicitRoot = scratch("tier-config")
     const project = scratch("tier-project")
     const home = scratch("tier-home")
     writeSkill(explicitRoot, { name: "shared-name", description: "config wins. Use when testing precedence." })
-    writeSkill(join(project, ".claude", "skills"), { name: "shared-name", description: "project copy." })
-    writeSkill(join(project, ".claude", "skills"), { name: "project-only" })
-    writeSkill(join(home, ".claude", "skills"), { name: "shared-name", description: "user copy." })
-    writeSkill(join(home, ".claude", "skills"), { name: "user-only" })
+    writeSkill(join(project, ".agents", "skills"), { name: "shared-name", description: "project copy." })
+    writeSkill(join(project, ".agents", "skills"), { name: "project-only" })
+    writeSkill(join(home, ".agents", "skills"), { name: "shared-name", description: "user copy." })
+    writeSkill(join(home, ".agents", "skills"), { name: "user-only" })
 
     const registry = discoverSkills({ explicit: [join(explicitRoot, "shared-name")], projectRoot: project, home })
     expect(registry.skills.get("shared-name")).toMatchObject({ origin: "config", dir: join(explicitRoot, "shared-name") })
@@ -263,27 +263,27 @@ describe("discoverSkills: explicit > project > user, first registration wins", (
   it("a project tier beats the user tier on the same name", () => {
     const project = scratch("pvu-project")
     const home = scratch("pvu-home")
-    writeSkill(join(project, ".claude", "skills"), { name: "both-tiers" })
-    writeSkill(join(home, ".claude", "skills"), { name: "both-tiers" })
+    writeSkill(join(project, ".agents", "skills"), { name: "both-tiers" })
+    writeSkill(join(home, ".agents", "skills"), { name: "both-tiers" })
     const registry = discoverSkills({ projectRoot: project, home })
     expect(registry.skills.get("both-tiers")?.origin).toBe("project")
   })
 
   it("an invalid skill in a standard location is RECORDED and skipped, never an error and never silently hidden", () => {
     const home = scratch("invalid-home")
-    writeSkill(join(home, ".claude", "skills"), { name: "good-one" })
-    writeSkill(join(home, ".claude", "skills"), { name: "Wrong-Case", dirName: "Wrong-Case" })
+    writeSkill(join(home, ".agents", "skills"), { name: "good-one" })
+    writeSkill(join(home, ".agents", "skills"), { name: "Wrong-Case", dirName: "Wrong-Case" })
     const registry = discoverSkills({ home })
     expect([...registry.skills.keys()]).toEqual(["good-one"])
     expect(registry.invalid).toHaveLength(1)
-    expect(registry.invalid[0]).toMatchObject({ origin: "user", path: join(home, ".claude", "skills", "Wrong-Case") })
+    expect(registry.invalid[0]).toMatchObject({ origin: "user", path: join(home, ".agents", "skills", "Wrong-Case") })
     expect(registry.invalid[0]!.reason).toMatch(/lowercase/)
   })
 
   it("missing roots and non-skill children are silently fine", () => {
     const home = scratch("sparse")
-    mkdirSync(join(home, ".claude", "skills", "not-a-skill"), { recursive: true }) // no SKILL.md
-    writeFileSync(join(home, ".claude", "skills", "stray.txt"), "x", "utf8")
+    mkdirSync(join(home, ".agents", "skills", "not-a-skill"), { recursive: true }) // no SKILL.md
+    writeFileSync(join(home, ".agents", "skills", "stray.txt"), "x", "utf8")
     const registry = discoverSkills({ projectRoot: join(home, "no-such-project"), home })
     expect(registry.skills.size).toBe(0)
     expect(registry.invalid).toEqual([])
@@ -401,7 +401,7 @@ describe("assertSkillContained: a skill must be a self-contained tree of regular
     expect(() => assertSkillContained(join(root, "nested-link"), "nested-link")).toThrow(/contains a symlink/)
   })
 
-  it("the skill DIRECTORY itself may be a symlink (the .claude/skills marketplace install shape)", () => {
+  it("the skill DIRECTORY itself may be a symlink (the .agents/skills marketplace install shape)", () => {
     // Spec-shaped content: SKILL.md + scripts/ + references/, all regular files.
     const cache = scratch("alias-cache")
     writeSkill(cache, { name: "aliased" })

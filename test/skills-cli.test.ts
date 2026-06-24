@@ -4,7 +4,7 @@
 // fixture's vernier.config.json. The executor echoes the rendered prompt,
 // so whatever the engine delivered comes back as the loop output — skill
 // embedding is observable from outside the process. HOME points at scratch
-// so the user tier (~/.claude/skills) is hermetic per test.
+// so the user tier (~/.agents/skills) is hermetic per test.
 
 import { execFile } from "node:child_process"
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
@@ -76,9 +76,9 @@ describe("vernier run --skill (spawned CLI)", () => {
     expect(started?.skills).toBeUndefined()
   })
 
-  it("resolves a --skill override from the user tier (~/.claude/skills of $HOME)", async () => {
+  it("resolves a --skill override from the user tier (~/.agents/skills of $HOME)", async () => {
     const userHome = scratch("user-tier")
-    const dir = join(userHome, ".claude", "skills", "home-greeting")
+    const dir = join(userHome, ".agents", "skills", "home-greeting")
     mkdirSync(dir, { recursive: true })
     writeFileSync(
       join(dir, "SKILL.md"),
@@ -125,7 +125,7 @@ describe("vernier run --skill (spawned CLI)", () => {
   it("repeated --skill flags for one key accumulate and de-dupe; a later empty value clears, winning over accumulation", async () => {
     // A second resolvable skill in the user tier so accumulation is observable.
     const userHome = scratch("accum-user")
-    const dir = join(userHome, ".claude", "skills", "home-greeting")
+    const dir = join(userHome, ".agents", "skills", "home-greeting")
     mkdirSync(dir, { recursive: true })
     writeFileSync(
       join(dir, "SKILL.md"),
@@ -220,7 +220,7 @@ describe("vernier run --skill (spawned CLI)", () => {
     const filler = "x".repeat(900)
     for (let i = 0; i < 90; i++) {
       const name = `bulk-skill-${String(i).padStart(2, "0")}`
-      const dir = join(userHome, ".claude", "skills", name)
+      const dir = join(userHome, ".agents", "skills", name)
       mkdirSync(dir, { recursive: true })
       writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: Bulk fixture ${i}. ${filler}\n---\n\nbody\n`, "utf8")
     }

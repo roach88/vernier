@@ -27,7 +27,7 @@ import { executorRegistry } from "../executors/script.js"
 import { defaultContractRegistry } from "../kernel/contract.js"
 import { gitObserver } from "../kernel/git-effects.js"
 import type { Executor, Loop } from "../kernel/types.js"
-import { Memory, resolveMemoryRoot, retrieverFromEnv, rulesPath } from "../memory/memory.js"
+import { Memory, resolveMemoryRoot, rulesPath } from "../memory/memory.js"
 import { ConfigError, judgeBackingProvider, type LoadedConfig, type LoopRegistration } from "./config.js"
 
 export interface LoopRuntime {
@@ -118,7 +118,7 @@ function userEntry(reg: LoopRegistration, source: string, judgeProvider: JudgePr
           contracts,
           workdir,
           ...(reg.observer === "git" ? { observer: gitObserver } : {}),
-          memory: new Memory(rulesPath(resolveMemoryRoot({})), retrieverFromEnv()),
+          memory: new Memory(rulesPath(resolveMemoryRoot({}))),
         },
         shutdown: async () => {
           await providers.shutdown()

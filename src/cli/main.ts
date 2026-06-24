@@ -59,7 +59,7 @@ USAGE
   vernier init [template]                             list starter templates, or scaffold one into
                                                      the current directory (never overwrites)
   vernier loops                                       list registered loops (from vernier.config)
-  vernier skills                                       list discovered Agent Skills (config + .claude/skills)
+  vernier skills                                       list discovered Agent Skills (config + .agents/skills)
   vernier run <loopId> [--input '<json>'] [--input-file <path>] [--workdir <dir>]
              [--executor <stepIdOrExecutorId>=<executorId>]...
              [--skill <stepIdOrExecutorId>=<name[,name...]>]...
@@ -98,8 +98,8 @@ SKILLS (Agent Skills, agentskills.io)
   through the executor chain: --skill overrides > config skillBindings > the
   loop's declared default. Keys are a step id or an executor id (the loop's
   DECLARED vocabulary); \`--skill <step>=\` clears a step's skills.
-  Discovery: vernier.config \`skills\` paths, then <project>/.claude/skills,
-  then ~/.claude/skills — earlier tiers win name collisions. Delivery is
+  Discovery: vernier.config \`skills\` paths, then <project>/.agents/skills,
+  then ~/.agents/skills — earlier tiers win name collisions. Delivery is
   provider-native where supported (claude: a session --plugin-dir, spec
   progressive disclosure intact); for every other executor the SKILL.md
   body is embedded in the step prompt, delimited and attributed. The ledger
@@ -271,8 +271,8 @@ function skillBindingLayers(flags: Flags, loop: Loop, config: LoadedConfig | und
 
 /**
  * The standard three-tier discovery a run/doctor/skills invocation uses:
- * config-registered paths, then <config-dir>/.claude/skills, then
- * ~/.claude/skills. `home` is injectable (defaults to os.homedir()) so the
+ * config-registered paths, then <config-dir>/.agents/skills, then
+ * ~/.agents/skills. `home` is injectable (defaults to os.homedir()) so the
  * user tier is controllable without spawning a process.
  */
 function discoverConfiguredSkills(config: LoadedConfig | undefined, home: string = homedir()): SkillRegistry {
@@ -312,7 +312,7 @@ function assertSkillsResolvable(loop: Loop, registry: SkillRegistry): void {
   const known = [...registry.skills.keys()]
   throw new UsageError(
     `Unresolved skill binding(s): ${problems.join("; ")}. Discovered skills: ${known.length > 0 ? known.join(", ") : "(none)"}. ` +
-      `Register skills in vernier.config (skills: [...]) or under .claude/skills (project or ~), or rebind with --skill <stepId>=<name>.`,
+      `Register skills in vernier.config (skills: [...]) or under .agents/skills (project or ~), or rebind with --skill <stepId>=<name>.`,
   )
 }
 
@@ -489,8 +489,8 @@ async function cmdLoops(flags: Flags): Promise<number> {
 
 /**
  * `vernier skills`: the Agent Skill inventory, the cheap parallel to
- * `vernier loops`. Pure discovery (config paths > project/.claude/skills >
- * ~/.claude/skills) — no loop runtimes, no executor probes, so an agent can
+ * `vernier loops`. Pure discovery (config paths > project/.agents/skills >
+ * ~/.agents/skills) — no loop runtimes, no executor probes, so an agent can
  * enumerate what it can bind without paying the full `doctor` cost. Exit 0
  * always: an inventory is not a health check (use `doctor` for runnability).
  * Spec-invalid skills in the standard locations are surfaced, never hidden.
@@ -505,7 +505,7 @@ async function cmdSkills(flags: Flags): Promise<number> {
     ])
     if (skills.size === 0 && invalid.length === 0) {
       note("no skills discovered.")
-      note("Register skills in vernier.config (skills: [...]) or place them under .claude/skills (project) or ~/.claude/skills (user).")
+      note("Register skills in vernier.config (skills: [...]) or place them under .agents/skills (project) or ~/.agents/skills (user).")
     }
     return EXIT.ok
   }
@@ -514,8 +514,8 @@ async function cmdSkills(flags: Flags): Promise<number> {
     out("")
     out("Skills are discovered from three locations (earlier wins name collisions):")
     out("  vernier.config `skills`   explicitly registered SKILL.md / skill dirs")
-    out("  <project>/.claude/skills  per-project skills")
-    out("  ~/.claude/skills          your personal skills")
+    out("  <project>/.agents/skills  per-project skills")
+    out("  ~/.agents/skills          your personal skills")
     return EXIT.ok
   }
   for (const s of skills.values()) {

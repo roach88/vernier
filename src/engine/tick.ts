@@ -146,7 +146,7 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
     const skill = deps.skills?.get(name)
     if (!skill) {
       throw new Error(
-        `Unknown skill \`${name}\` for step \`${step.id}\`. Register it in vernier.config (skills: [...]) or place it under .claude/skills.`,
+        `Unknown skill \`${name}\` for step \`${step.id}\`. Register it in vernier.config (skills: [...]) or place it under .agents/skills.`,
       )
     }
     return skill

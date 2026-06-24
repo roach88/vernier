@@ -13,8 +13,8 @@
 //
 //   config    paths registered in vernier.config `skills` (a SKILL.md file,
 //             a skill directory, or a parent directory of skill directories)
-//   project   <project>/.claude/skills/*  (project = the config file's dir)
-//   user      ~/.claude/skills/*
+//   project   <project>/.agents/skills/*  (project = the config file's dir)
+//   user      ~/.agents/skills/*
 //
 // Earlier tiers win name collisions — explicit registration beats both
 // standard locations; project beats user. Duplicate names WITHIN the
@@ -73,9 +73,9 @@ export interface SkillRegistry {
 export interface SkillDiscoveryOpts {
   /** Absolute paths from vernier.config `skills`: SKILL.md files, skill dirs, or parent dirs of skill dirs. */
   readonly explicit?: readonly string[]
-  /** Directory whose `.claude/skills` is the project tier (the config file's dir, else cwd). */
+  /** Directory whose `.agents/skills` is the project tier (the config file's dir, else cwd). */
   readonly projectRoot?: string
-  /** Directory whose `.claude/skills` is the user tier (os.homedir() in production). */
+  /** Directory whose `.agents/skills` is the user tier (os.homedir() in production). */
   readonly home?: string
 }
 
@@ -193,7 +193,7 @@ function readExplicit(path: string): SkillRecord[] {
     return [readSkillDir(join(path, ".."), "config")]
   }
   if (existsSync(join(path, SKILL_FILE))) return [readSkillDir(path, "config")]
-  // A parent directory of skill directories (the `.claude/skills` shape).
+  // A parent directory of skill directories (the `.agents/skills` shape).
   const children = readdirSync(path, { withFileTypes: true })
     .filter((d) => isDir(join(path, d.name), d))
     .map((d) => join(path, d.name))
@@ -209,7 +209,7 @@ function isDir(path: string, entry: { isDirectory(): boolean; isSymbolicLink(): 
   if (entry.isDirectory()) return true
   if (!entry.isSymbolicLink()) return false
   try {
-    return statSync(path).isDirectory() // follow the link, the .claude/skills convention allows them
+    return statSync(path).isDirectory() // follow the link, the .agents/skills convention allows them
   } catch {
     return false
   }
@@ -242,7 +242,7 @@ export function discoverSkills(opts: SkillDiscoveryOpts): SkillRegistry {
   ]
   for (const { root, origin } of tiers) {
     if (root === undefined) continue
-    const dir = join(root, ".claude", "skills")
+    const dir = join(root, ".agents", "skills")
     if (!existsSync(dir) || !statSync(dir).isDirectory()) continue
     for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const candidate = join(dir, entry.name)
@@ -313,7 +313,7 @@ export function bindSkills(loop: Loop, layers: readonly SkillBindingLayer[]): Lo
  *     follow the source, a TOCTOU window, not the recorded snapshot.
  *
  * Rejecting all symlinks INSIDE the tree closes both. The skill directory
- * ITSELF may be a symlink — the .claude/skills marketplace convention links
+ * ITSELF may be a symlink — the .agents/skills marketplace convention links
  * the dir to a cache — callers pass the resolved real path (and copy from
  * it). Spec-shaped skills (SKILL.md + scripts/ + references/ + assets/, all
  * regular files) pass untouched; across 800+ real installed skills surveyed,
