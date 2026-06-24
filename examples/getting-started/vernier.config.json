@@ -1,4 +1,0 @@
-{
-  "loops": ["./haiku-loop.mjs"],
-  "executors": ["./alt-poets.mjs"]
-}

@@ -1,8 +1,7 @@
-// CodexExecutor conformance to the Executor seam, proven against
-// omegacode's vendored deterministic FakeWorker (no network, no auth)
-// plus stub workers for the error taxonomy. What is under test is the
-// honest AgentResult -> StepResult mapping and the fail-closed sandbox
-// derivation — not the model.
+// CodexExecutor conformance to the Executor seam, proven against scripted
+// workers (no network, no auth). What is under test is the honest
+// AgentResult -> StepResult mapping and the fail-closed sandbox derivation
+// — not the model.
 
 import { existsSync, mkdtempSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -10,7 +9,6 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { CodexExecutor } from "../src/executors/codex.js"
 import { AgentError, AgentInterrupted, type Worker, type WorkerContext } from "../src/executors/vendor/omegacode/index.js"
-import { FakeWorker } from "../src/executors/vendor/omegacode/fake.js"
 import type { AgentResult, AgentSpec } from "../src/executors/vendor/omegacode/types.js"
 import { fsScope, noEffects, type StepSpec } from "../src/kernel/types.js"
 
@@ -40,8 +38,9 @@ function recordingWorker(result: AgentResult): { worker: Worker; seen: AgentSpec
   const seen: AgentSpec[] = []
   const worker: Worker = {
     id: "codex",
-    async runAgent(s: AgentSpec, _ctx: WorkerContext) {
+    async runAgent(s: AgentSpec, ctx: WorkerContext) {
       seen.push(s)
+      ctx.onProgress({ kind: "text", text: result.text })
       return result
     },
     async shutdown() {},
@@ -50,19 +49,30 @@ function recordingWorker(result: AgentResult): { worker: Worker; seen: AgentSpec
 }
 
 describe("CodexExecutor", () => {
-  it("maps a FakeWorker text turn onto StepResult: completed, {text}, usage + duration", async () => {
-    const executor = new CodexExecutor({ worker: new FakeWorker() })
+  it("maps a worker text turn onto StepResult: completed, {text}, usage + duration", async () => {
     const s = spec()
+    const { worker } = recordingWorker({
+      text: "[fake:codex] Write the dry-run note.",
+      status: "completed",
+      usage: { inputTokens: s.prompt!.length, outputTokens: 16, costUsd: 0 },
+    })
+    const executor = new CodexExecutor({ worker })
     const result = await executor.run(s, { workdir: workdir() })
 
     expect(result.status).toBe("completed")
     expect(String(result.output.text)).toContain("[fake:codex]")
-    expect(result.usage.inputTokens).toBe(s.prompt!.length) // FakeWorker bills prompt length
+    expect(result.usage.inputTokens).toBe(s.prompt!.length)
     expect(result.usage.durationMs).toBeGreaterThanOrEqual(0)
   })
 
   it("maps structured output (outputSchema -> AgentResult.structured) onto output", async () => {
-    const executor = new CodexExecutor({ worker: new FakeWorker() })
+    const { worker } = recordingWorker({
+      text: "{\"artifact\":\"fake\",\"summary\":\"fake\"}",
+      structured: { artifact: "fake", summary: "fake" },
+      status: "completed",
+      usage: { inputTokens: 1, outputTokens: 1, costUsd: 0 },
+    })
+    const executor = new CodexExecutor({ worker })
     const s = spec({
       outputSchema: {
         type: "object",
@@ -73,12 +83,12 @@ describe("CodexExecutor", () => {
     const result = await executor.run(s, { workdir: workdir() })
 
     expect(result.status).toBe("completed")
-    // FakeWorker synthesizes a schema-satisfying value; the executor returns it AS the output.
     expect(result.output).toEqual({ artifact: "fake", summary: "fake" })
   })
 
   it("writes runner-managed evidence (prompt, events, final) under runDir, never the workdir", async () => {
-    const executor = new CodexExecutor({ worker: new FakeWorker() })
+    const { worker } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
+    const executor = new CodexExecutor({ worker })
     const s = spec()
     const wd = workdir()
     const result = await executor.run(s, { workdir: wd })
@@ -97,7 +107,8 @@ describe("CodexExecutor", () => {
   })
 
   it("labels retry-attempt evidence like the Python runner (retry- prefix)", async () => {
-    const executor = new CodexExecutor({ worker: new FakeWorker() })
+    const { worker } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
+    const executor = new CodexExecutor({ worker })
     const s = spec({ attempt: 2 })
     await executor.run(s, { workdir: workdir() })
     expect(existsSync(join(s.runDir, "retry-2-codex-final.md"))).toBe(true)
@@ -189,7 +200,8 @@ describe("CodexExecutor", () => {
   })
 
   it("refuses to run without a rendered prompt (executor misconfiguration, not a step failure)", async () => {
-    const executor = new CodexExecutor({ worker: new FakeWorker() })
+    const { worker } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
+    const executor = new CodexExecutor({ worker })
     const promptless = { ...spec() } as Record<string, unknown>
     delete promptless.prompt
     await expect(executor.run(promptless as unknown as StepSpec, { workdir: workdir() })).rejects.toThrow(/without a rendered prompt/)

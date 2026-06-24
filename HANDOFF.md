@@ -5,7 +5,7 @@ _Last updated: 2026-06-11 · remote: `roach88/vernier` (private)_
 Working handoff for the next person/agent: where the project is after the
 two v1 units, the conventions that have held, and what is deliberately
 deferred. Current architecture is in the README and walkthrough; superseded
-planning rationale is archived under `docs/archive/`.
+planning rationale lives in git history.
 
 ---
 

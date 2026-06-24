@@ -6,9 +6,8 @@
 // on EVERY object-typed node, records included — see the tail of strictify and
 // toCodexOutputSchema's doc comment for the why and the lossiness.
 
-// JSON Schema → per-provider output-format shapes + client-side validation.
+// JSON Schema → provider output schemas + client-side validation.
 //   Codex:  turn/start.outputSchema = <json schema>
-//   Claude: options.outputFormat = { type: "json_schema", schema: <json schema> }
 // We always re-validate the returned value client-side regardless of provider enforcement.
 
 import { Ajv, type ValidateFunction } from "ajv"
@@ -63,10 +62,6 @@ export function validate(schema: JSONSchema, value: unknown): ValidationResult {
  */
 export function toCodexOutputSchema(schema: JSONSchema): JSONSchema {
   return strictify(schema) as JSONSchema
-}
-
-export function toClaudeOutputFormat(schema: JSONSchema): { type: "json_schema"; schema: JSONSchema } {
-  return { type: "json_schema", schema }
 }
 
 /**

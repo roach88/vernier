@@ -59,7 +59,7 @@ USAGE
   vernier init [template]                             list starter templates, or scaffold one into
                                                      the current directory (never overwrites)
   vernier loops                                       list registered loops (from vernier.config)
-  vernier skills                                       list discovered Agent Skills (config + .claude/skills)
+  vernier skills                                       list discovered Agent Skills (config + standard dirs)
   vernier run <loopId> [--input '<json>'] [--input-file <path>] [--workdir <dir>]
              [--executor <stepIdOrExecutorId>=<executorId>]...
              [--skill <stepIdOrExecutorId>=<name[,name...]>]...
@@ -98,12 +98,13 @@ SKILLS (Agent Skills, agentskills.io)
   through the executor chain: --skill overrides > config skillBindings > the
   loop's declared default. Keys are a step id or an executor id (the loop's
   DECLARED vocabulary); \`--skill <step>=\` clears a step's skills.
-  Discovery: vernier.config \`skills\` paths, then <project>/.claude/skills,
-  then ~/.claude/skills — earlier tiers win name collisions. Delivery is
-  provider-native where supported (claude: a session --plugin-dir, spec
-  progressive disclosure intact); for every other executor the SKILL.md
-  body is embedded in the step prompt, delimited and attributed. The ledger
-  records resolved skills and the delivery mode per step.
+  Discovery: vernier.config \`skills\` paths, then <project>/.agents/skills,
+  <project>/.claude/skills, ~/.agents/skills, and ~/.claude/skills — earlier
+  tiers win name collisions, and .claude/skills is a deprecated migration
+  fallback. Delivery is provider-native where supported (claude: a session
+  --plugin-dir, spec progressive disclosure intact); for every other executor
+  the SKILL.md body is embedded in the step prompt, delimited and attributed.
+  The ledger records resolved skills and the delivery mode per step.
 
 EXIT CODES
   0 success   1 needs_human/stopped/failed   2 usage error   3 lease held`
@@ -270,10 +271,10 @@ function skillBindingLayers(flags: Flags, loop: Loop, config: LoadedConfig | und
 }
 
 /**
- * The standard three-tier discovery a run/doctor/skills invocation uses:
- * config-registered paths, then <config-dir>/.claude/skills, then
- * ~/.claude/skills. `home` is injectable (defaults to os.homedir()) so the
- * user tier is controllable without spawning a process.
+ * The standard discovery a run/doctor/skills invocation uses:
+ * config-registered paths, then project/user .agents skill dirs with legacy
+ * .claude fallbacks for the migration window. `home` is injectable (defaults
+ * to os.homedir()) so the user tier is controllable without spawning a process.
  */
 function discoverConfiguredSkills(config: LoadedConfig | undefined, home: string = homedir()): SkillRegistry {
   return discoverSkills({
@@ -283,16 +284,21 @@ function discoverConfiguredSkills(config: LoadedConfig | undefined, home: string
   })
 }
 
+function noteSkillWarnings(registry: SkillRegistry | undefined): void {
+  for (const warning of registry?.warnings ?? []) note(`warning: ${warning}`)
+}
+
 /**
  * Discover skills only when this invocation needs them (a bound step names
  * one, or --skill was passed): discovery reads SKILL.md frontmatter across
- * three locations, and loops without skills must not pay for that. Missing
- * names fail here — BEFORE the first journal write, like executors.
+ * standard locations, and loops without skills must not pay for that.
+ * Missing names fail here — BEFORE the first journal write, like executors.
  */
 function resolveSkillRegistry(loop: Loop, flags: Flags, config: LoadedConfig | undefined): SkillRegistry | undefined {
   const used = loop.steps.some((step) => (step.skills?.length ?? 0) > 0)
   if (!used && flags.skill.length === 0) return undefined
   const registry = discoverConfiguredSkills(config)
+  noteSkillWarnings(registry)
   assertSkillsResolvable(loop, registry)
   return registry
 }
@@ -312,7 +318,8 @@ function assertSkillsResolvable(loop: Loop, registry: SkillRegistry): void {
   const known = [...registry.skills.keys()]
   throw new UsageError(
     `Unresolved skill binding(s): ${problems.join("; ")}. Discovered skills: ${known.length > 0 ? known.join(", ") : "(none)"}. ` +
-      `Register skills in vernier.config (skills: [...]) or under .claude/skills (project or ~), or rebind with --skill <stepId>=<name>.`,
+      `Register skills in vernier.config (skills: [...]) or under .agents/skills (project or ~), or rebind with --skill <stepId>=<name>. ` +
+      `.claude/skills is only a deprecated migration fallback.`,
   )
 }
 
@@ -489,15 +496,18 @@ async function cmdLoops(flags: Flags): Promise<number> {
 
 /**
  * `vernier skills`: the Agent Skill inventory, the cheap parallel to
- * `vernier loops`. Pure discovery (config paths > project/.claude/skills >
- * ~/.claude/skills) — no loop runtimes, no executor probes, so an agent can
- * enumerate what it can bind without paying the full `doctor` cost. Exit 0
- * always: an inventory is not a health check (use `doctor` for runnability).
- * Spec-invalid skills in the standard locations are surfaced, never hidden.
+ * `vernier loops`. Pure discovery (config paths > project/user .agents skills
+ * > same-scope legacy .claude fallbacks) — no loop runtimes, no executor
+ * probes, so an agent can enumerate what it can bind without paying the full
+ * `doctor` cost. Exit 0 always: an inventory is not a health check (use
+ * `doctor` for runnability). Spec-invalid skills in the standard locations are
+ * surfaced, never hidden.
  */
 async function cmdSkills(flags: Flags): Promise<number> {
   const config = await loadConfig()
-  const { skills, invalid } = discoverConfiguredSkills(config)
+  const registry = discoverConfiguredSkills(config)
+  const { skills, invalid } = registry
+  noteSkillWarnings(registry)
   if (flags.json) {
     json([
       ...[...skills.values()].map((s) => ({ name: s.name, origin: s.origin, dir: s.dir, description: s.description, ok: true })),
@@ -505,17 +515,20 @@ async function cmdSkills(flags: Flags): Promise<number> {
     ])
     if (skills.size === 0 && invalid.length === 0) {
       note("no skills discovered.")
-      note("Register skills in vernier.config (skills: [...]) or place them under .claude/skills (project) or ~/.claude/skills (user).")
+      note("Register skills in vernier.config (skills: [...]) or place them under .agents/skills (project) or ~/.agents/skills (user).")
+      note(".claude/skills is scanned for one migration window only and emits deprecation warnings.")
     }
     return EXIT.ok
   }
   if (skills.size === 0 && invalid.length === 0) {
     out("no skills discovered.")
     out("")
-    out("Skills are discovered from three locations (earlier wins name collisions):")
+    out("Skills are discovered from these locations (earlier wins name collisions):")
     out("  vernier.config `skills`   explicitly registered SKILL.md / skill dirs")
-    out("  <project>/.claude/skills  per-project skills")
-    out("  ~/.claude/skills          your personal skills")
+    out("  <project>/.agents/skills  per-project skills")
+    out("  <project>/.claude/skills  deprecated project fallback")
+    out("  ~/.agents/skills          your personal skills")
+    out("  ~/.claude/skills          deprecated user fallback")
     return EXIT.ok
   }
   for (const s of skills.values()) {
@@ -880,6 +893,7 @@ async function cmdDoctor(flags: Flags): Promise<number> {
   // inventory says what THIS machine could bind, and per-step reports say
   // what each loop would actually resolve at rest.
   const skills = discoverConfiguredSkills(config)
+  noteSkillWarnings(skills)
   const report = await diagnose(registry, config, defaultProbes, skills)
   if (flags.json) {
     json(report)
