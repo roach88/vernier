@@ -8,7 +8,7 @@ Vernier validates inputs and outputs, observes file effects, and records an
 append-only `journal.jsonl` so every run can be inspected, resumed, and
 audited.
 
-[Walkthrough](docs/walkthrough.md) · [Provider details](docs/provider-executors.md) · [Templates](templates) · [Agent Skills](.agents/skills) · [License notices](NOTICE)
+[Walkthrough](docs/walkthrough.md) · [Provider details](docs/provider-executors.md) · [Safety model](docs/safety.md) · [Templates](templates) · [Agent Skills](.agents/skills) · [License notices](NOTICE)
 
 ## Install
 
@@ -22,6 +22,9 @@ npm install
 npm run build
 npm link
 ```
+
+Release confidence is checked with `npm run verify`, which typechecks, tests,
+builds, and runs `npm run smoke:package` against an installed package tarball.
 
 Then run Vernier from the codebase where you want the loop to live:
 
