@@ -35,7 +35,7 @@ describe("pi live proof", () => {
     "runs a no-effects pi step through the Executor seam",
     async () => {
       const executor = new PiExecutor()
-      const result = await executor.run(spec(), { workdir: mkdtempSync(join(tmpdir(), "vernier-pi-live-work-")) })
+      const result = await executor.run(spec(), { workdir: mkdtempSync(join(tmpdir(), "vernier-pi-live-work-")) , signal: AbortSignal.timeout(600_000) })
       expect(result.status).toBe("completed")
       expect(String(result.output.text).length).toBeGreaterThan(0)
       expect(result.usage.inputTokens).toBeGreaterThan(0)

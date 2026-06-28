@@ -288,7 +288,7 @@ export interface RunContext {
   readonly workdir: string
   /** The shared rule store; the recall/remember executors require it (executors/memory.ts). */
   readonly memory?: MemoryStore
-  readonly signal?: AbortSignal
+  readonly signal: AbortSignal
 }
 
 /**

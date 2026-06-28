@@ -53,7 +53,7 @@ describe("CodexExecutor", () => {
   it("maps a FakeWorker text turn onto StepResult: completed, {text}, usage + duration", async () => {
     const executor = new CodexExecutor({ worker: new FakeWorker() })
     const s = spec()
-    const result = await executor.run(s, { workdir: workdir() })
+    const result = await executor.run(s, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
 
     expect(result.status).toBe("completed")
     expect(String(result.output.text)).toContain("[fake:codex]")
@@ -70,7 +70,7 @@ describe("CodexExecutor", () => {
         required: ["artifact", "summary"],
       },
     })
-    const result = await executor.run(s, { workdir: workdir() })
+    const result = await executor.run(s, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
 
     expect(result.status).toBe("completed")
     // FakeWorker synthesizes a schema-satisfying value; the executor returns it AS the output.
@@ -81,7 +81,7 @@ describe("CodexExecutor", () => {
     const executor = new CodexExecutor({ worker: new FakeWorker() })
     const s = spec()
     const wd = workdir()
-    const result = await executor.run(s, { workdir: wd })
+    const result = await executor.run(s, { workdir: wd , signal: AbortSignal.timeout(600_000) })
 
     const roles = result.evidence.map((e) => e.role)
     expect(roles).toEqual(["worker-prompt", "worker-events", "worker-final"])
@@ -99,7 +99,7 @@ describe("CodexExecutor", () => {
   it("labels retry-attempt evidence like the Python runner (retry- prefix)", async () => {
     const executor = new CodexExecutor({ worker: new FakeWorker() })
     const s = spec({ attempt: 2 })
-    await executor.run(s, { workdir: workdir() })
+    await executor.run(s, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(existsSync(join(s.runDir, "retry-2-codex-final.md"))).toBe(true)
   })
 
@@ -107,12 +107,12 @@ describe("CodexExecutor", () => {
     const canned: AgentResult = { text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } }
 
     const scoped = recordingWorker(canned)
-    await new CodexExecutor({ worker: scoped.worker }).run(spec(), { workdir: workdir() })
+    await new CodexExecutor({ worker: scoped.worker }).run(spec(), { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(scoped.seen[0]!.sandbox).toBe("workspace-write")
     expect(scoped.seen[0]!.approval).toBe("never")
 
     const unscoped = recordingWorker(canned)
-    await new CodexExecutor({ worker: unscoped.worker }).run(spec({ effects: noEffects() }), { workdir: workdir() })
+    await new CodexExecutor({ worker: unscoped.worker }).run(spec({ effects: noEffects() }), { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(unscoped.seen[0]!.sandbox).toBe("read-only")
   })
 
@@ -120,7 +120,7 @@ describe("CodexExecutor", () => {
     const canned: AgentResult = { text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } }
     const { worker, seen } = recordingWorker(canned)
     const wd = workdir()
-    await new CodexExecutor({ worker }).run(spec(), { workdir: wd })
+    await new CodexExecutor({ worker }).run(spec(), { workdir: wd , signal: AbortSignal.timeout(600_000) })
     expect(seen[0]!.cwd).toBe(wd)
   })
 
@@ -138,7 +138,7 @@ describe("CodexExecutor", () => {
       },
       async shutdown() {},
     }
-    const result = await new CodexExecutor({ worker: failing }).run(spec(), { workdir: workdir() })
+    const result = await new CodexExecutor({ worker: failing }).run(spec(), { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(result.status).toBe("failed")
     expect(result.output).toMatchObject({ code: "turn_failed", retryable: true })
     expect(result.usage.inputTokens).toBe(100) // failed turns still bill
@@ -184,7 +184,7 @@ describe("CodexExecutor", () => {
       },
       async shutdown() {},
     }
-    const result = await new CodexExecutor({ worker: interrupted }).run(spec(), { workdir: workdir() })
+    const result = await new CodexExecutor({ worker: interrupted }).run(spec(), { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(result.status).toBe("interrupted")
   })
 
@@ -192,6 +192,6 @@ describe("CodexExecutor", () => {
     const executor = new CodexExecutor({ worker: new FakeWorker() })
     const promptless = { ...spec() } as Record<string, unknown>
     delete promptless.prompt
-    await expect(executor.run(promptless as unknown as StepSpec, { workdir: workdir() })).rejects.toThrow(/without a rendered prompt/)
+    await expect(executor.run(promptless as unknown as StepSpec, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })).rejects.toThrow(/without a rendered prompt/)
   })
 })

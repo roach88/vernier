@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { z } from "zod"
+import { resumeRun } from "../src/engine/resume.js"
 import { runLoop, startRun, tick, type EngineDeps } from "../src/engine/tick.js"
 import { ContractRegistry, type Contract } from "../src/kernel/contract.js"
 import { decideNextStep, retryPolicy, until } from "../src/kernel/policy.js"
@@ -31,6 +32,16 @@ function deps(executors: Parameters<typeof executorRegistry>, workdir: string): 
     contracts: new ContractRegistry().register(evenCheck),
     workdir,
   }
+}
+
+function stripTrailing(path: string, types: readonly string[]): void {
+  const lines = readFileSync(path, "utf8").split("\n").filter(Boolean)
+  while (lines.length > 0) {
+    const last = JSON.parse(lines[lines.length - 1]!) as { type: string }
+    if (types.includes(last.type)) lines.pop()
+    else break
+  }
+  writeFileSync(path, lines.join("\n") + "\n", "utf8")
 }
 
 const twoStepLoop = (ledgerRoot: string): Loop<{ n: number }, { n: number; doubledTwice: boolean }> => ({
@@ -361,5 +372,157 @@ describe("tick positional advance (until at a mid-sequence step)", () => {
     const started = entries.filter((e) => e.type === "step_started").map((e) => (e.type === "step_started" ? e.stepId : ""))
     expect(started).not.toContain("distill")
     expect(started).not.toContain("remember") // no path to the store without a passing grade
+  })
+})
+
+describe("tick audit fixes", () => {
+  it("journaled contract validator throws without leaving a replay gap", async () => {
+    const { workdir, ledgerRoot } = temp()
+    let scriptRuns = 0
+    const throwing: Contract = {
+      id: "throws.v1",
+      validate() {
+        throw new Error("validator exploded")
+      },
+    }
+    const once = scriptExecutor("script:once", () => {
+      scriptRuns += 1
+      return { output: { n: 4 } }
+    })
+    const loop: Loop<{ n: number }, { n: number }> = {
+      id: "contract-throw",
+      version: "0.1.0",
+      signature: sig(z.object({ n: z.number() }), z.object({ n: z.number() })),
+      steps: [
+        {
+          id: "check",
+          signature: sig(z.object({ n: z.number() }), z.object({ n: z.number() })),
+          executor: "script:once",
+          contract: "throws.v1",
+          effects: noEffects(),
+        },
+      ],
+      policy: retryPolicy({ maxAttempts: 1 }),
+      trust: "dry-run",
+      ledger: { root: ledgerRoot },
+    }
+    const d: EngineDeps = {
+      executors: executorRegistry(once),
+      contracts: new ContractRegistry().register(throwing),
+      workdir,
+    }
+    const run = startRun(loop, { n: 1 }, d)
+    const outcome = await tick(run, d)
+    expect(["retry", "escalate"]).toContain(outcome.decision.kind)
+    expect(scriptRuns).toBe(1)
+
+    const journal = join(ledgerRoot, "runs", run.state.runId, "journal.jsonl")
+    expect(Ledger.load(journal).map((e) => e.type)).toEqual(["meta", "step_started", "step_result", "contract", "effects", "decision"])
+
+    stripTrailing(journal, ["decision"])
+    const resumed = resumeRun(loop, run.state.runId)
+    await tick(resumed, d)
+    expect(scriptRuns).toBe(1)
+  })
+
+  it("central timeout interrupts a never-settling script executor", async () => {
+    const { workdir, ledgerRoot } = temp()
+    const hang = scriptExecutor("script:hang", () => new Promise(() => undefined))
+    const loop: Loop<{ n: number }, { n: number }> = {
+      id: "timeout",
+      version: "0.1.0",
+      signature: sig(z.object({ n: z.number() }), z.object({ n: z.number() })),
+      steps: [
+        {
+          id: "wait",
+          signature: sig(z.object({ n: z.number() }), z.object({ n: z.number() })),
+          executor: "script:hang",
+          effects: noEffects(),
+          timeoutMs: 10,
+        },
+      ],
+      policy: retryPolicy({ maxAttempts: 1 }),
+      trust: "dry-run",
+      ledger: { root: ledgerRoot },
+    }
+    const d = deps([hang], workdir)
+    const run = startRun(loop, { n: 1 }, d)
+    const outcome = await tick(run, d)
+    expect(["retry", "escalate"]).toContain(outcome.decision.kind)
+    const stepResult = Ledger.load(join(ledgerRoot, "runs", run.state.runId, "journal.jsonl")).find((e) => e.type === "step_result")
+    expect(stepResult?.type === "step_result" && stepResult.status).toBe("interrupted")
+  })
+
+  it("invalid final loop output escalates instead of journaling success", async () => {
+    const { workdir, ledgerRoot } = temp()
+    const emit = scriptExecutor("script:emit", () => ({ output: { x: "ok" } }))
+    const loop: Loop<{ x: string }, { x: string; missing: string }> = {
+      id: "bad-final",
+      version: "0.1.0",
+      signature: sig(z.object({ x: z.string() }), z.object({ x: z.string(), missing: z.string() })),
+      steps: [
+        {
+          id: "only",
+          signature: sig(z.object({ x: z.string() }), z.object({ x: z.string() })),
+          executor: "script:emit",
+          effects: noEffects(),
+        },
+      ],
+      policy: () => ({
+        kind: "stop",
+        classification: "success",
+        summary: "policy says success",
+        notes: [],
+        improvement: "none",
+      }),
+      trust: "dry-run",
+      ledger: { root: ledgerRoot },
+    }
+    const outcome = await runLoop(loop, { x: "seed" }, deps([emit], workdir))
+    expect(outcome.state.status).toBe("needs_human")
+    expect(outcome.output).toBeNull()
+    const decision = Ledger.load(join(ledgerRoot, "runs", outcome.state.runId, "journal.jsonl")).find((e) => e.type === "decision")
+    expect(decision?.type === "decision" && decision.decision.summary).toContain("final loop output does not satisfy")
+  })
+
+  it("rejects ledger roots inside the workdir", () => {
+    const { workdir } = temp()
+    const inside = join(workdir, ".vernier", "runs-store")
+    mkdirSync(inside, { recursive: true })
+    const loop = twoStepLoop(inside)
+    const d = deps([double, doubleAgain], workdir)
+    expect(() => startRun(loop, { n: 3 }, d)).toThrow(/inside workdir/)
+  })
+
+  it("attributes .vernier writes under the workdir as unexpected changes", async () => {
+    const { workdir, ledgerRoot } = temp()
+    const loop: Loop<{ n: number }, { n: number }> = {
+      id: "vernier-scope",
+      version: "0.1.0",
+      signature: sig(z.object({ n: z.number() }), z.object({ n: z.number() })),
+      steps: [
+        {
+          id: "write",
+          signature: sig(z.object({ n: z.number() }), z.object({ n: z.number() })),
+          executor: "script:writer",
+          effects: fsScope("allowed/**"),
+        },
+      ],
+      policy: decideNextStep,
+      trust: "dry-run",
+      ledger: { root: ledgerRoot },
+    }
+    const writer = scriptExecutor("script:writer", (spec, ctx) => {
+      mkdirSync(join(ctx.workdir, "allowed"), { recursive: true })
+      writeFileSync(join(ctx.workdir, "allowed", "fine.txt"), "ok")
+      mkdirSync(join(ctx.workdir, ".vernier"), { recursive: true })
+      writeFileSync(join(ctx.workdir, ".vernier", "escaped.txt"), "hidden")
+      return { output: { n: Number(spec.inputs.n) } }
+    })
+    const d = deps([writer], workdir)
+    const run = startRun(loop, { n: 1 }, d)
+    const outcome = await tick(run, d)
+    expect(outcome.decision.kind).toBe("escalate")
+    expect(outcome.decision.notes.join("\n")).toContain(".vernier/escaped.txt")
   })
 })

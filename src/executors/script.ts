@@ -19,8 +19,30 @@ export function scriptExecutor(id: string, fn: ScriptFn): Executor {
     id,
     async run(spec, ctx): Promise<StepResult> {
       const startedAt = Date.now()
-      const { output, evidence = [] } = await fn(spec, ctx)
-      return { status: "completed", output, evidence, usage: zeroUsage(Date.now() - startedAt) }
+      const complete = async (): Promise<StepResult> => {
+        const { output, evidence = [] } = await fn(spec, ctx)
+        return { status: "completed", output, evidence, usage: zeroUsage(Date.now() - startedAt) }
+      }
+      const onAbort = (): Promise<StepResult> => {
+        const reason = ctx.signal.reason
+        const timedOut =
+          reason instanceof DOMException
+            ? reason.name === "TimeoutError"
+            : reason instanceof Error
+              ? reason.message.includes("timeout")
+              : false
+        if (timedOut) {
+          return Promise.reject(new Error(`step timed out after ${spec.timeoutMs}ms`))
+        }
+        return Promise.reject(reason instanceof Error ? reason : new Error(String(reason ?? "aborted")))
+      }
+      if (ctx.signal.aborted) return onAbort()
+      return Promise.race([
+        complete(),
+        new Promise<StepResult>((_, reject) => {
+          ctx.signal.addEventListener("abort", () => void onAbort().catch(reject), { once: true })
+        }),
+      ])
     },
   }
 }

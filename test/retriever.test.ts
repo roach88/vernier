@@ -88,7 +88,7 @@ describe("the seam, end-to-end", () => {
       loopId: "l",
     })
 
-    const result = await recallExecutor.run(spec("recall", { topic: "apollo program history" }), { workdir: "/tmp", memory })
+    const result = await recallExecutor.run(spec("recall", { topic: "apollo program history" }), { workdir: "/tmp", memory , signal: AbortSignal.timeout(600_000) })
     expect(result.status).toBe("completed")
     expect(result.output.rules).toEqual(["Prefer concrete dates."])
     expect(result.usage.costUsd).toBe(0) // still a deterministic store read, not an LLM turn

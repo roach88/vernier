@@ -45,7 +45,7 @@ describe("CursorExecutor", () => {
   it("maps a read-only worker text turn onto StepResult and writes evidence under runDir", async () => {
     const { worker } = recordingWorker({ text: "cursor ok", status: "completed", usage: { inputTokens: 1, outputTokens: 2, costUsd: 0 } })
     const s = spec()
-    const result = await new CursorExecutor({ worker }).run(s, { workdir: workdir() })
+    const result = await new CursorExecutor({ worker }).run(s, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
 
     expect(result.status).toBe("completed")
     expect(result.output).toEqual({ text: "cursor ok" })
@@ -74,7 +74,7 @@ describe("CursorExecutor", () => {
           required: ["passed"],
         },
       }),
-      { workdir: workdir() },
+      { workdir: workdir() , signal: AbortSignal.timeout(600_000) },
     )
 
     expect(result.status).toBe("completed")
@@ -84,7 +84,7 @@ describe("CursorExecutor", () => {
   it("hands read-only Cursor AgentSpec to the worker for noEffects steps", async () => {
     const { worker, seen } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
     const wd = workdir()
-    await new CursorExecutor({ worker, model: "cursor-test-model" }).run(spec(), { workdir: wd })
+    await new CursorExecutor({ worker, model: "cursor-test-model" }).run(spec(), { workdir: wd , signal: AbortSignal.timeout(600_000) })
 
     expect(seen[0]).toMatchObject({
       provider: "cursor-agent",
@@ -99,7 +99,7 @@ describe("CursorExecutor", () => {
     const { worker, seen } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
     const wd = workdir()
     const s = spec({ effects: fsScope("docs/**") })
-    const result = await new CursorExecutor({ worker }).run(s, { workdir: wd })
+    const result = await new CursorExecutor({ worker }).run(s, { workdir: wd , signal: AbortSignal.timeout(600_000) })
 
     expect(result.status).toBe("completed")
     expect(seen[0]).toMatchObject({
@@ -113,7 +113,7 @@ describe("CursorExecutor", () => {
   it("labels retry-attempt evidence with the same retry prefix as other executors", async () => {
     const { worker } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
     const s = spec({ attempt: 2 })
-    await new CursorExecutor({ worker }).run(s, { workdir: workdir() })
+    await new CursorExecutor({ worker }).run(s, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(existsSync(join(s.runDir, "retry-2-cursor-final.md"))).toBe(true)
   })
 
@@ -132,7 +132,7 @@ describe("CursorExecutor", () => {
       async shutdown() {},
     }
     const s = spec()
-    const result = await new CursorExecutor({ worker: failing }).run(s, { workdir: workdir() })
+    const result = await new CursorExecutor({ worker: failing }).run(s, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
 
     expect(result.status).toBe("failed")
     expect(result.output).toMatchObject({ code: "provider_auth", retryable: false })
@@ -153,7 +153,7 @@ describe("CursorExecutor", () => {
       async shutdown() {},
     }
 
-    const timedOut = await new CursorExecutor({ worker: hanging }).run(spec({ timeoutMs: 50 }), { workdir: workdir() })
+    const timedOut = await new CursorExecutor({ worker: hanging }).run(spec({ timeoutMs: 50 }), { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(timedOut.status).toBe("interrupted")
 
     const caller = new AbortController()
@@ -167,7 +167,7 @@ describe("CursorExecutor", () => {
     const { worker } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
     const promptless = { ...spec() } as Record<string, unknown>
     delete promptless.prompt
-    await expect(new CursorExecutor({ worker }).run(promptless as unknown as StepSpec, { workdir: workdir() })).rejects.toThrow(
+    await expect(new CursorExecutor({ worker }).run(promptless as unknown as StepSpec, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })).rejects.toThrow(
       /without a rendered prompt/,
     )
   })

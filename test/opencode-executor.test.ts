@@ -45,7 +45,7 @@ describe("OpencodeExecutor", () => {
   it("maps a worker text turn onto StepResult and writes evidence under runDir", async () => {
     const { worker } = recordingWorker({ text: "opencode ok", status: "completed", usage: { inputTokens: 1, outputTokens: 2, costUsd: 0 } })
     const s = spec()
-    const result = await new OpencodeExecutor({ worker }).run(s, { workdir: workdir() })
+    const result = await new OpencodeExecutor({ worker }).run(s, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
 
     expect(result.status).toBe("completed")
     expect(result.output).toEqual({ text: "opencode ok" })
@@ -74,7 +74,7 @@ describe("OpencodeExecutor", () => {
           required: ["passed"],
         },
       }),
-      { workdir: workdir() },
+      { workdir: workdir() , signal: AbortSignal.timeout(600_000) },
     )
 
     expect(result.status).toBe("completed")
@@ -84,7 +84,7 @@ describe("OpencodeExecutor", () => {
   it("hands the worker its only accepted sandbox (danger-full-access) for noEffects steps", async () => {
     const { worker, seen } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
     const wd = workdir()
-    await new OpencodeExecutor({ worker, model: "opencode-test-model" }).run(spec(), { workdir: wd })
+    await new OpencodeExecutor({ worker, model: "opencode-test-model" }).run(spec(), { workdir: wd , signal: AbortSignal.timeout(600_000) })
 
     expect(seen[0]).toMatchObject({
       provider: "opencode",
@@ -106,7 +106,7 @@ describe("OpencodeExecutor", () => {
       async shutdown() {},
     }
     const s = spec({ effects: fsScope("docs/**") })
-    const result = await new OpencodeExecutor({ worker }).run(s, { workdir: workdir() })
+    const result = await new OpencodeExecutor({ worker }).run(s, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
 
     expect(invoked).toBe(false)
     expect(result.status).toBe("failed")
@@ -119,7 +119,7 @@ describe("OpencodeExecutor", () => {
   it("labels retry-attempt evidence with the same retry prefix as other executors", async () => {
     const { worker } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
     const s = spec({ attempt: 2 })
-    await new OpencodeExecutor({ worker }).run(s, { workdir: workdir() })
+    await new OpencodeExecutor({ worker }).run(s, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(existsSync(join(s.runDir, "retry-2-opencode-final.md"))).toBe(true)
   })
 
@@ -138,7 +138,7 @@ describe("OpencodeExecutor", () => {
       async shutdown() {},
     }
     const s = spec()
-    const result = await new OpencodeExecutor({ worker: failing }).run(s, { workdir: workdir() })
+    const result = await new OpencodeExecutor({ worker: failing }).run(s, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
 
     expect(result.status).toBe("failed")
     expect(result.output).toMatchObject({ code: "provider_busy", retryable: true })
@@ -158,7 +158,7 @@ describe("OpencodeExecutor", () => {
       async shutdown() {},
     }
 
-    const timedOut = await new OpencodeExecutor({ worker: hanging }).run(spec({ timeoutMs: 50 }), { workdir: workdir() })
+    const timedOut = await new OpencodeExecutor({ worker: hanging }).run(spec({ timeoutMs: 50 }), { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(timedOut.status).toBe("interrupted")
 
     const caller = new AbortController()
@@ -172,7 +172,7 @@ describe("OpencodeExecutor", () => {
     const { worker } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
     const promptless = { ...spec() } as Record<string, unknown>
     delete promptless.prompt
-    await expect(new OpencodeExecutor({ worker }).run(promptless as unknown as StepSpec, { workdir: workdir() })).rejects.toThrow(
+    await expect(new OpencodeExecutor({ worker }).run(promptless as unknown as StepSpec, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })).rejects.toThrow(
       /without a rendered prompt/,
     )
   })
