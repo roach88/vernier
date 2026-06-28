@@ -594,16 +594,12 @@ describe("tick audit fixes", () => {
 
   it("cooperative script aborts classify as interrupted, not failed", async () => {
     const { workdir, ledgerRoot } = temp()
-    const cooperative = scriptExecutor("script:coop", (_spec, ctx) =>
-      new Promise(() => {
-        ctx.signal.addEventListener(
-          "abort",
-          () => {
-            throw ctx.signal.reason
-          },
-          { once: true },
-        )
-      }),
+    const cooperative = scriptExecutor(
+      "script:coop",
+      (_spec, ctx) =>
+        new Promise((_resolve, reject) => {
+          ctx.signal.addEventListener("abort", () => reject(ctx.signal.reason), { once: true })
+        }),
     )
     const loop: Loop<{ n: number }, { n: number }> = {
       id: "coop-timeout",

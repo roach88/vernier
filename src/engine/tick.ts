@@ -91,9 +91,8 @@ function canonicalPath(path: string): string {
 }
 
 function isTimeoutAbortReason(reason: unknown): boolean {
-  if (reason instanceof DOMException && reason.name === "TimeoutError") return true
-  if (reason instanceof Error && reason.message.includes("timeout")) return true
-  return false
+  const message = reason instanceof Error ? reason.message : String(reason)
+  return message.includes("timeout") || message.includes("timed out")
 }
 
 function stepTimedOutMessage(timeoutMs: number): string {
@@ -145,7 +144,9 @@ async function runExecutorWithTimeout(
   ctx: Omit<RunContext, "signal">,
 ): Promise<StepResult> {
   const startedAt = Date.now()
-  const timeout = AbortSignal.timeout(spec.timeoutMs)
+  const controller = new AbortController()
+  const timeout = controller.signal
+  const timeoutId = setTimeout(() => controller.abort(stepTimedOutMessage(spec.timeoutMs)), spec.timeoutMs)
   const runPromise = Promise.resolve()
     .then(() => executor.run(spec, { ...ctx, signal: timeout }))
     .catch((error) => {
@@ -161,6 +162,7 @@ async function runExecutorWithTimeout(
       }
     })
   void runPromise.catch(() => undefined)
+  let removeAbortListener = (): void => undefined
   const timeoutResult = new Promise<StepResult>((resolvePromise) => {
     const finish = () => resolvePromise(interruptedResult(spec.timeoutMs, startedAt))
     if (timeout.aborted) {
@@ -168,8 +170,14 @@ async function runExecutorWithTimeout(
       return
     }
     timeout.addEventListener("abort", finish, { once: true })
+    removeAbortListener = () => timeout.removeEventListener("abort", finish)
   })
-  return Promise.race([runPromise, timeoutResult])
+  try {
+    return await Promise.race([runPromise, timeoutResult])
+  } finally {
+    clearTimeout(timeoutId)
+    removeAbortListener()
+  }
 }
 
 function finalOutputIssues(

@@ -15,9 +15,8 @@ export interface ScriptOutcome {
 export type ScriptFn = (spec: StepSpec, ctx: RunContext) => ScriptOutcome | Promise<ScriptOutcome>
 
 function isTimeoutAbortReason(reason: unknown): boolean {
-  if (reason instanceof DOMException && reason.name === "TimeoutError") return true
-  if (reason instanceof Error && reason.message.includes("timeout")) return true
-  return false
+  const message = reason instanceof Error ? reason.message : String(reason)
+  return message.includes("timeout") || message.includes("timed out")
 }
 
 function stepTimedOutMessage(timeoutMs: number): string {
@@ -51,12 +50,17 @@ export function scriptExecutor(id: string, fn: ScriptFn): Executor {
         return Promise.reject(reason instanceof Error ? reason : new Error(String(reason ?? "aborted")))
       }
       if (ctx.signal.aborted) return onAbort()
-      return Promise.race([
-        complete(),
-        new Promise<StepResult>((_, reject) => {
-          ctx.signal.addEventListener("abort", () => void onAbort().catch(reject), { once: true })
-        }),
-      ])
+      let removeAbortListener = (): void => undefined
+      const abort = new Promise<StepResult>((_, reject) => {
+        const listener = () => void onAbort().catch(reject)
+        ctx.signal.addEventListener("abort", listener, { once: true })
+        removeAbortListener = () => ctx.signal.removeEventListener("abort", listener)
+      })
+      try {
+        return await Promise.race([complete(), abort])
+      } finally {
+        removeAbortListener()
+      }
     },
   }
 }
