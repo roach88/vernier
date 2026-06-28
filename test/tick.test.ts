@@ -525,4 +525,108 @@ describe("tick audit fixes", () => {
     expect(outcome.decision.kind).toBe("escalate")
     expect(outcome.decision.notes.join("\n")).toContain(".vernier/escaped.txt")
   })
+  it("journaled synchronous executor throws as durable step failures", async () => {
+    const { workdir, ledgerRoot } = temp()
+    const syncThrow: { id: string; run: () => never } = {
+      id: "sync:throw",
+      run() {
+        throw new Error("sync boom")
+      },
+    }
+    const loop: Loop<{ n: number }, { n: number }> = {
+      id: "sync-throw",
+      version: "0.1.0",
+      signature: sig(z.object({ n: z.number() }), z.object({ n: z.number() })),
+      steps: [
+        {
+          id: "boom",
+          signature: sig(z.object({ n: z.number() }), z.object({ n: z.number() })),
+          executor: "sync:throw",
+          effects: noEffects(),
+        },
+      ],
+      policy: retryPolicy({ maxAttempts: 1 }),
+      trust: "dry-run",
+      ledger: { root: ledgerRoot },
+    }
+    const d: EngineDeps = {
+      executors: new Map([["sync:throw", syncThrow as never]]),
+      contracts: new ContractRegistry(),
+      workdir,
+    }
+    const run = startRun(loop, { n: 1 }, d)
+    const outcome = await tick(run, d)
+    expect(["retry", "escalate"]).toContain(outcome.decision.kind)
+    const types = Ledger.load(join(ledgerRoot, "runs", run.state.runId, "journal.jsonl")).map((e) => e.type)
+    expect(types).toEqual(["meta", "step_started", "step_result", "effects", "decision"])
+  })
+
+  it("replays ledgered contract results without registry lookup", async () => {
+    const { workdir, ledgerRoot } = temp()
+    const once = scriptExecutor("script:once", () => ({ output: { n: 4 } }))
+    const loop: Loop<{ n: number }, { n: number }> = {
+      id: "ledgered-contract",
+      version: "0.1.0",
+      signature: sig(z.object({ n: z.number() }), z.object({ n: z.number() })),
+      steps: [
+        {
+          id: "check",
+          signature: sig(z.object({ n: z.number() }), z.object({ n: z.number() })),
+          executor: "script:once",
+          contract: "even.v1",
+          effects: noEffects(),
+        },
+      ],
+      policy: retryPolicy({ maxAttempts: 1 }),
+      trust: "dry-run",
+      ledger: { root: ledgerRoot },
+    }
+    const d = deps([once], workdir)
+    const run = startRun(loop, { n: 1 }, d)
+    await tick(run, d)
+    const journal = join(ledgerRoot, "runs", run.state.runId, "journal.jsonl")
+    stripTrailing(journal, ["decision"])
+    const resumed = resumeRun(loop, run.state.runId)
+    const replayDeps: EngineDeps = { ...d, contracts: new ContractRegistry() }
+    const outcome = await tick(resumed, replayDeps)
+    expect(["retry", "escalate", "stop"]).toContain(outcome.decision.kind)
+  })
+
+  it("cooperative script aborts classify as interrupted, not failed", async () => {
+    const { workdir, ledgerRoot } = temp()
+    const cooperative = scriptExecutor("script:coop", (_spec, ctx) =>
+      new Promise(() => {
+        ctx.signal.addEventListener(
+          "abort",
+          () => {
+            throw ctx.signal.reason
+          },
+          { once: true },
+        )
+      }),
+    )
+    const loop: Loop<{ n: number }, { n: number }> = {
+      id: "coop-timeout",
+      version: "0.1.0",
+      signature: sig(z.object({ n: z.number() }), z.object({ n: z.number() })),
+      steps: [
+        {
+          id: "wait",
+          signature: sig(z.object({ n: z.number() }), z.object({ n: z.number() })),
+          executor: "script:coop",
+          effects: noEffects(),
+          timeoutMs: 10,
+        },
+      ],
+      policy: retryPolicy({ maxAttempts: 1 }),
+      trust: "dry-run",
+      ledger: { root: ledgerRoot },
+    }
+    const run = startRun(loop, { n: 1 }, deps([cooperative], workdir))
+    const outcome = await tick(run, deps([cooperative], workdir))
+    expect(["retry", "escalate"]).toContain(outcome.decision.kind)
+    const stepResult = Ledger.load(join(ledgerRoot, "runs", run.state.runId, "journal.jsonl")).find((e) => e.type === "step_result")
+    expect(stepResult?.type === "step_result" && stepResult.status).toBe("interrupted")
+  })
+
 })

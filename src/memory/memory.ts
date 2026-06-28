@@ -18,7 +18,7 @@
 
 import { createHash } from "node:crypto"
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import type { MemoryStore, RuleRecord } from "../kernel/types.js"
 import { canonical } from "../ledger/ledger.js"
 import { lexicalRetriever, type Retriever } from "./retriever.js"
@@ -32,7 +32,7 @@ export interface MemorySpec {
 }
 
 export function resolveMemoryRoot(spec: MemorySpec): string {
-  return spec.root ?? process.env.VERNIER_HOME ?? join(process.cwd(), ".vernier")
+  return resolve(spec.root ?? process.env.VERNIER_HOME ?? join(process.cwd(), ".vernier"))
 }
 
 export function rulesPath(root: string): string {

@@ -17,7 +17,7 @@
 
 import { createHash } from "node:crypto"
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import type { ContractResult } from "../kernel/contract.js"
 import type { EffectObservation } from "../kernel/effects.js"
 import type { Decision } from "../kernel/policy.js"
@@ -160,7 +160,7 @@ export type LedgerEntry =
 // ------------------------------------------------------------------ ledger
 
 export function resolveLedgerRoot(spec: LedgerSpec): string {
-  return spec.root ?? process.env.VERNIER_HOME ?? join(process.cwd(), ".vernier")
+  return resolve(spec.root ?? process.env.VERNIER_HOME ?? join(process.cwd(), ".vernier"))
 }
 
 export function journalPath(root: string, runId: string): string {

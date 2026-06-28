@@ -204,6 +204,43 @@ export default {
     expect(statsDoc.runs).toEqual(expect.arrayContaining([expect.objectContaining({ runId: outcome.runId, journal: outcome.journal })]))
   })
 
+
+  it("does not treat explicit relative ledger roots as duplicate default roots", async () => {
+    const project = mkdtempSync(join(tmpdir(), "vernier-cli-relative-ledger-"))
+    const ledgerRoot = join(project, ".vernier")
+    mkdirSync(ledgerRoot, { recursive: true })
+    const smokeLoopPath = join(TEMPLATES, "smoke", "smoke-loop.mjs")
+    const configPath = join(project, "vernier.config.mjs")
+    writeFileSync(
+      configPath,
+      `import smoke from ${JSON.stringify(pathToFileURL(smokeLoopPath).href)};
+const entry = smoke;
+export default {
+  loops: [{
+    ...entry,
+    loop: { ...entry.loop, ledger: { root: ".vernier" } },
+  }],
+};
+`,
+      "utf8",
+    )
+
+    const run = await cli({ home: ledgerRoot, config: configPath, cwd: project }, "run", "control-plane-smoke-test", "--json")
+    expect(run.code).toBe(0)
+    const outcome = JSON.parse(run.stdout) as { runId: string; journal: string }
+    const show = await cli({ home: ledgerRoot, config: configPath, cwd: project }, "show", outcome.runId, "--json")
+    expect(show.code).toBe(0)
+    const shown = JSON.parse(show.stdout) as { runId: string; journal: string }
+    expect(shown.runId).toBe(outcome.runId)
+    expect(shown.journal).toContain(`${outcome.runId}/journal.jsonl`)
+
+    const stats = await cli({ home: ledgerRoot, config: configPath, cwd: project }, "stats", "--json")
+    expect(stats.code).toBe(0)
+    const statsJson = JSON.parse(stats.stdout) as { ledgerRoots: string[]; runs: Array<{ runId: string }> }
+    expect(statsJson.ledgerRoots).toContain(ledgerRoot)
+    expect(statsJson.runs.map((r) => r.runId)).toContain(outcome.runId)
+  })
+
   it("`run` accepts --input and honors it", async () => {
     const root = home()
     const result = await cli(root, "run", "control-plane-smoke-test", "--input", '{"jobName":"x","upstreamChanged":true}', "--json")

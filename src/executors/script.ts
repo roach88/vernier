@@ -14,25 +14,39 @@ export interface ScriptOutcome {
 
 export type ScriptFn = (spec: StepSpec, ctx: RunContext) => ScriptOutcome | Promise<ScriptOutcome>
 
+function isTimeoutAbortReason(reason: unknown): boolean {
+  if (reason instanceof DOMException && reason.name === "TimeoutError") return true
+  if (reason instanceof Error && reason.message.includes("timeout")) return true
+  return false
+}
+
+function stepTimedOutMessage(timeoutMs: number): string {
+  return `step timed out after ${timeoutMs}ms`
+}
+
 export function scriptExecutor(id: string, fn: ScriptFn): Executor {
   return {
     id,
     async run(spec, ctx): Promise<StepResult> {
       const startedAt = Date.now()
       const complete = async (): Promise<StepResult> => {
-        const { output, evidence = [] } = await fn(spec, ctx)
-        return { status: "completed", output, evidence, usage: zeroUsage(Date.now() - startedAt) }
+        try {
+          const { output, evidence = [] } = await fn(spec, ctx)
+          if (ctx.signal.aborted && isTimeoutAbortReason(ctx.signal.reason)) {
+            throw new Error(stepTimedOutMessage(spec.timeoutMs))
+          }
+          return { status: "completed", output, evidence, usage: zeroUsage(Date.now() - startedAt) }
+        } catch (error) {
+          if (ctx.signal.aborted && isTimeoutAbortReason(ctx.signal.reason)) {
+            throw new Error(stepTimedOutMessage(spec.timeoutMs))
+          }
+          throw error
+        }
       }
       const onAbort = (): Promise<StepResult> => {
         const reason = ctx.signal.reason
-        const timedOut =
-          reason instanceof DOMException
-            ? reason.name === "TimeoutError"
-            : reason instanceof Error
-              ? reason.message.includes("timeout")
-              : false
-        if (timedOut) {
-          return Promise.reject(new Error(`step timed out after ${spec.timeoutMs}ms`))
+        if (isTimeoutAbortReason(reason)) {
+          return Promise.reject(new Error(stepTimedOutMessage(spec.timeoutMs)))
         }
         return Promise.reject(reason instanceof Error ? reason : new Error(String(reason ?? "aborted")))
       }

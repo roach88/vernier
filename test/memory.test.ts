@@ -7,7 +7,7 @@
 
 import { mkdtempSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import { recallExecutor, rememberExecutor } from "../src/executors/memory.js"
 import { noEffects, type RunContext, type StepSpec } from "../src/kernel/types.js"
@@ -67,6 +67,10 @@ describe("memory store", () => {
   it("resolves the root like the ledger does (explicit root wins)", () => {
     expect(resolveMemoryRoot({ root: "/x" })).toBe("/x")
     expect(rulesPath("/x")).toBe("/x/memory/rules.jsonl")
+  })
+
+  it("resolves relative roots against cwd", () => {
+    expect(resolveMemoryRoot({ root: ".vernier" })).toBe(resolve(".vernier"))
   })
 
   it("tokenizes topics into >=4-char keywords — retrieval is keyword overlap, not semantics", () => {

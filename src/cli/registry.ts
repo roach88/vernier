@@ -118,7 +118,7 @@ function userEntry(reg: LoopRegistration, source: string, judgeProvider: JudgePr
           contracts,
           workdir,
           ...(reg.observer === "git" ? { observer: gitObserver } : {}),
-          memory: new Memory(rulesPath(resolveMemoryRoot({})), retrieverFromEnv()),
+          memory: new Memory(rulesPath(resolveMemoryRoot(reg.loop.ledger)), retrieverFromEnv()),
         },
         shutdown: async () => {
           await providers.shutdown()

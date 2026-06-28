@@ -16,7 +16,7 @@
 // `continue` inversion — anything (cron, a human, another agent) can advance
 // a run one step, and the engine, not the caller, knows what is next.
 
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { register as registerModuleHooks } from "node:module"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
@@ -379,6 +379,11 @@ function parseInputs(entry: RegisteredLoop, flags: Flags): Record<string, unknow
   return inputs as Record<string, unknown>
 }
 
+
+function canonicalJournalPath(path: string): string {
+  return existsSync(path) ? realpathSync.native(path) : resolve(path)
+}
+
 function ledgerRoots(registry: ReadonlyMap<string, RegisteredLoop>): readonly string[] {
   const roots = new Set<string>()
   roots.add(resolveLedgerRoot({}))
@@ -401,7 +406,7 @@ function journalIds(roots: readonly string[]): readonly { root: string; runId: s
       ids = []
     }
     for (const runId of ids) {
-      out.push({ root, runId, path: journalPath(root, runId) })
+      out.push({ root, runId, path: canonicalJournalPath(journalPath(root, runId)) })
     }
   }
   return out
@@ -412,13 +417,19 @@ function loadJournal(
   roots: readonly string[],
 ): { runId: string; path: string; entries: LedgerEntry[]; summary: JournalSummary } {
   if (!runId) throw new UsageError("Missing <runId>. See `vernier runs`.")
-  const candidates = roots
-    .map((root) => {
-      const path = journalPath(root, runId)
-      const entries = Ledger.load(path)
-      return { path, entries }
-    })
-    .filter((candidate) => candidate.entries.length > 0)
+  const candidates: { path: string; entries: LedgerEntry[] }[] = []
+  const seen = new Set<string>()
+  for (const root of roots) {
+    const rawPath = journalPath(root, runId)
+    const key = existsSync(rawPath) ? realpathSync.native(rawPath) : resolve(rawPath)
+    if (seen.has(key)) continue
+    seen.add(key)
+    const entries = Ledger.load(rawPath)
+    if (entries.length > 0) {
+      const path = canonicalJournalPath(rawPath)
+      candidates.push({ path, entries })
+    }
+  }
   if (candidates.length === 0) {
     const searched = roots.map((root) => journalPath(root, runId)).join(", ")
     throw new UsageError(`No run \`${runId}\` under searched ledger roots (no journals at ${searched}). See \`vernier runs\`.`)
@@ -462,7 +473,7 @@ function printOutcome(run: Run, outcome: TickOutcome, flags: Flags, extra: Recor
       attempt: state.attempt,
       decision: { kind: decision.kind, classification: decision.classification, summary: decision.summary },
       output,
-      journal: run.ledger.path,
+      journal: canonicalJournalPath(run.ledger.path),
       ...extra,
     })
     return
@@ -769,7 +780,7 @@ async function cmdTickOrResume(flags: Flags, mode: "tick" | "resume"): Promise<n
           status: run.state.status,
           alreadyTerminal: true,
           decision: lastDecision ? { kind: lastDecision.kind, classification: lastDecision.classification, summary: lastDecision.summary } : null,
-          journal: run.ledger.path,
+          journal: canonicalJournalPath(run.ledger.path),
         })
       } else {
         out(`run ${run.state.runId} is already terminal: ${run.state.status}. Nothing to ${mode}.`)
@@ -882,12 +893,12 @@ async function cmdStats(flags: Flags): Promise<number> {
   if (loop !== null) rows = rows.filter((r) => r.loopId === loop)
   if (last !== null) rows = rows.slice(-last)
   const rollups = rollupByLoop(rows)
-  const defaultRoot = resolveLedgerRoot({})
   if (flags.json) {
     const withCost = <T extends { totals: RunStatsRow["totals"] }>(item: T): T & { costUsd?: number } =>
       prices === null ? item : { ...item, costUsd: computedCostUsd(item.totals, prices) }
     json({
-      ledgerRoot: defaultRoot,
+      ledgerRoot: resolveLedgerRoot({}),
+      ledgerRoots: roots,
       filters: { loop, last },
       prices,
       runs: rows.map(withCost),

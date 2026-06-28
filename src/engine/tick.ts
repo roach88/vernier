@@ -7,8 +7,8 @@
 // run() stays `while (tick)` so the simple case is one call.
 
 import { randomBytes } from "node:crypto"
-import { existsSync } from "node:fs"
-import { dirname, isAbsolute, join, relative, resolve } from "node:path"
+import { existsSync, realpathSync } from "node:fs"
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
 import type { Contract, ContractContext, ContractRegistry, ContractResult } from "../kernel/contract.js"
 import { failedCheckMessages } from "../kernel/contract.js"
 import { hashObserver, type EffectObservation, type EffectsObserver } from "../kernel/effects.js"
@@ -75,8 +75,47 @@ export interface Run {
 
 const now = (): string => new Date().toISOString()
 
+function canonicalPath(path: string): string {
+  let resolved = resolve(path)
+  if (!existsSync(resolved)) {
+    const suffix: string[] = []
+    while (!existsSync(resolved)) {
+      suffix.unshift(basename(resolved))
+      const parent = dirname(resolved)
+      if (parent === resolved) return resolve(path)
+      resolved = parent
+    }
+    return join(realpathSync.native(resolved), ...suffix)
+  }
+  return realpathSync.native(resolved)
+}
+
+function isTimeoutAbortReason(reason: unknown): boolean {
+  if (reason instanceof DOMException && reason.name === "TimeoutError") return true
+  if (reason instanceof Error && reason.message.includes("timeout")) return true
+  return false
+}
+
+function stepTimedOutMessage(timeoutMs: number): string {
+  return `step timed out after ${timeoutMs}ms`
+}
+
+function isStepTimeoutError(error: unknown, timeoutMs: number, signal: AbortSignal): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message === stepTimedOutMessage(timeoutMs) || (signal.aborted && isTimeoutAbortReason(signal.reason))
+}
+
+function interruptedResult(timeoutMs: number, startedAt: number): StepResult {
+  return {
+    status: "interrupted",
+    output: { error: stepTimedOutMessage(timeoutMs) },
+    evidence: [],
+    usage: zeroUsage(Date.now() - startedAt),
+  }
+}
+
 export function pathInsideOrEqual(parent: string, child: string): boolean {
-  const rel = relative(resolve(parent), resolve(child))
+  const rel = relative(canonicalPath(parent), canonicalPath(child))
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))
 }
 
@@ -107,32 +146,23 @@ async function runExecutorWithTimeout(
 ): Promise<StepResult> {
   const startedAt = Date.now()
   const timeout = AbortSignal.timeout(spec.timeoutMs)
-  const runPromise = executor.run(spec, { ...ctx, signal: timeout }).catch((error) => {
-    const message = error instanceof Error ? error.message : String(error)
-    if (message === `step timed out after ${spec.timeoutMs}ms`) {
+  const runPromise = Promise.resolve()
+    .then(() => executor.run(spec, { ...ctx, signal: timeout }))
+    .catch((error) => {
+      if (isStepTimeoutError(error, spec.timeoutMs, timeout)) {
+        return interruptedResult(spec.timeoutMs, startedAt)
+      }
+      const message = error instanceof Error ? error.message : String(error)
       return {
-        status: "interrupted" as const,
+        status: "failed" as const,
         output: { error: message },
         evidence: [],
         usage: zeroUsage(Date.now() - startedAt),
       }
-    }
-    return {
-      status: "failed" as const,
-      output: { error: message },
-      evidence: [],
-      usage: zeroUsage(Date.now() - startedAt),
-    }
-  })
+    })
   void runPromise.catch(() => undefined)
-  const timeoutResult = new Promise<StepResult>((resolve) => {
-    const finish = () =>
-      resolve({
-        status: "interrupted",
-        output: { error: `step timed out after ${spec.timeoutMs}ms` },
-        evidence: [],
-        usage: zeroUsage(Date.now() - startedAt),
-      })
+  const timeoutResult = new Promise<StepResult>((resolvePromise) => {
+    const finish = () => resolvePromise(interruptedResult(spec.timeoutMs, startedAt))
     if (timeout.aborted) {
       finish()
       return
@@ -397,13 +427,13 @@ function replayTick(run: Run, deps: EngineDeps, step: Step, key: string, journal
   const outputParse = step.signature.output.safeParse(output)
   const outputValid = outputParse.success
 
-  const contract = step.contract ? deps.contracts.lookup(step.contract) : null
   let contractResult: ContractResult | null = null
-  if (contract) {
+  if (step.contract) {
     const ledgered = run.replayed?.contracts.get(key)
     if (ledgered) {
       contractResult = ledgered.result
     } else {
+      const contract = deps.contracts.lookup(step.contract)
       contractResult = validateContract(contract, output, {
         traceId: state.traceId,
         loopId: loop.id,
