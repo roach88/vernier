@@ -58,6 +58,17 @@ export {
 // The Contract seam: deterministic semantic validation of a step's output.
 export { type Contract, type ContractCheck, type ContractContext, type ContractResult } from "./kernel/contract.js"
 
+// Deterministic static checks for loop definitions before promotion.
+export {
+  evaluateLoopQuality,
+  type LoopQualityCheck,
+  type LoopQualityReport,
+  type LoopQualityRuleId,
+  type LoopQualitySeverity,
+  type LoopQualityStatus,
+  type LoopQualityTarget,
+} from "./kernel/loop-quality.js"
+
 // Out-of-tree registration: what a vernier.config.{ts,js,mjs} and the loop
 // modules it names export.
 export { defineConfig, defineLoop, type VernierConfig, type LoopRegistration } from "./cli/config.js"
