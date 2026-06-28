@@ -26,7 +26,7 @@ const vernierHome = mkdtempSync(join(tmpdir(), "vernier-home-"))
 const realConsumerDir = realpathSync(consumerDir)
 const realVernierHome = realpathSync(vernierHome)
 
-const packJson = run("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", packDir])
+const packJson = run("npm", ["pack", "--json", "--pack-destination", packDir])
 const pack = JSON.parse(packJson)[0]
 assert(pack?.filename, "npm pack did not return a package filename")
 

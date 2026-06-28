@@ -177,6 +177,25 @@ describe("projectRunEvidence", () => {
     expect(projection.diagnostics).toContainEqual({ severity: "degraded", code: "MISSING_EFFECTS", detail: "completed step write has no effects entry" })
   })
 
+  it("rejects successful journals with no step evidence", () => {
+    const projection = projectRunEvidence({ entries: [meta(), decision("route", "stop", "success")] })
+
+    expect(projection.strict.usableForTrust).toBe(false)
+    expect(projection.totals.steps).toBe(0)
+    expect(projection.diagnostics).toContainEqual({ severity: "degraded", code: "NO_STEP_EVIDENCE", detail: "successful journal has no step_result entries" })
+  })
+
+  it("marks absent required contract entries as missing", () => {
+    const projection = projectRunEvidence({
+      requiredContractSteps: ["write"],
+      entries: [meta(), started("write"), result("write"), effects("write", true), decision("write", "stop", "success")],
+    })
+
+    expect(projection.strict.usableForTrust).toBe(false)
+    expect(projection.totals.contractsMissing).toBe(1)
+    expect(projection.steps[0]).toMatchObject({ contract: "missing" })
+  })
+
   it("marks explicitly unobserved effects as degraded/unknown evidence", () => {
     const projection = projectRunEvidence({
       entries: [

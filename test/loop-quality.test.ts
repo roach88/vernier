@@ -79,7 +79,7 @@ describe("loop-quality evaluator", () => {
     ])
   })
 
-  it("rejects prompt-backed LLM steps with no contract, structured output, observed projection, or downstream verifier", () => {
+  it("rejects prompt-backed LLM steps with no contract, structured output, or observed projection", () => {
     expectFails(
       {
         loop: loop({
@@ -90,6 +90,33 @@ describe("loop-quality evaluator", () => {
               executor: "agent",
               effects: noEffects(),
               prompt: () => "Answer freely.",
+            },
+          ],
+        }),
+        live: true,
+      },
+      "LQ003_PROMPT_STEP_HAS_ENFORCEMENT",
+    )
+  })
+
+  it("does not treat an unrelated later contract as enforcement for a prompt-backed step", () => {
+    expectFails(
+      {
+        loop: loop({
+          steps: [
+            {
+              id: "draft",
+              signature: sig(z.object({ input: z.string() }), z.object({ text: z.string() })),
+              executor: "agent",
+              effects: noEffects(),
+              prompt: () => "Draft freely.",
+            },
+            {
+              id: "archive",
+              signature: sig(z.object({ text: z.string() }), z.object({ ok: z.boolean() })),
+              executor: "script",
+              effects: noEffects(),
+              contract: "archive.v1",
             },
           ],
         }),
