@@ -400,6 +400,14 @@ function ledgerRoots(registry: ReadonlyMap<string, RegisteredLoop>): readonly st
   return [...roots]
 }
 
+async function inspectionLedgerRoots(): Promise<readonly string[]> {
+  try {
+    return ledgerRoots(loopRegistry(await loadConfig()))
+  } catch {
+    return [resolveLedgerRoot({})]
+  }
+}
+
 function journalIds(roots: readonly string[]): readonly { root: string; runId: string; path: string }[] {
   const out: { root: string; runId: string; path: string }[] = []
   for (const root of roots) {
@@ -810,8 +818,7 @@ async function cmdTickOrResume(flags: Flags, mode: "tick" | "resume"): Promise<n
 }
 
 async function cmdRuns(flags: Flags): Promise<number> {
-  const config = await loadConfig()
-  const roots = ledgerRoots(loopRegistry(config))
+  const roots = await inspectionLedgerRoots()
   const summaries = journalIds(roots)
     .map(({ runId, path }) => ({ runId, path, summary: summarizeJournal(Ledger.load(path)) }))
     .filter((r) => r.summary.meta !== undefined)
@@ -841,8 +848,7 @@ async function cmdRuns(flags: Flags): Promise<number> {
 }
 
 async function cmdShow(flags: Flags): Promise<number> {
-  const config = await loadConfig()
-  const { runId, path, entries, summary } = loadJournal(flags.positionals[0], ledgerRoots(loopRegistry(config)))
+  const { runId, path, entries, summary } = loadJournal(flags.positionals[0], await inspectionLedgerRoots())
   // The timeline is a pure derivation of the journal (ledger/stats.ts);
   // this command only loads and renders.
   const timeline = buildTimeline(entries)
@@ -895,9 +901,8 @@ function parseStatsFlags(flags: Flags): { loop: string | null; last: number | nu
 }
 
 async function cmdStats(flags: Flags): Promise<number> {
-  const config = await loadConfig()
   const { loop, last, prices } = parseStatsFlags(flags)
-  const roots = ledgerRoots(loopRegistry(config))
+  const roots = await inspectionLedgerRoots()
   let rows = journalIds(roots)
     .map(({ runId, path }) => ({ row: runStatsRow(runId, Ledger.load(path)), journal: path }))
     .filter((entry): entry is { row: RunStatsRow; journal: string } => entry.row !== null)

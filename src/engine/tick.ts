@@ -99,6 +99,8 @@ function stepTimedOutMessage(timeoutMs: number): string {
   return `step timed out after ${timeoutMs}ms`
 }
 
+const EXECUTOR_ABORT_CLEANUP_GRACE_MS = 1_000
+
 function isStepTimeoutError(error: unknown, timeoutMs: number, signal: AbortSignal): boolean {
   const message = error instanceof Error ? error.message : String(error)
   return message === stepTimedOutMessage(timeoutMs) || (signal.aborted && isTimeoutAbortReason(signal.reason))
@@ -163,8 +165,14 @@ async function runExecutorWithTimeout(
     })
   void runPromise.catch(() => undefined)
   let removeAbortListener = (): void => undefined
+  let cleanupGraceId: ReturnType<typeof setTimeout> | undefined
   const timeoutResult = new Promise<StepResult>((resolvePromise) => {
-    const finish = () => resolvePromise(interruptedResult(spec.timeoutMs, startedAt))
+    const finish = () => {
+      cleanupGraceId = setTimeout(
+        () => resolvePromise(interruptedResult(spec.timeoutMs, startedAt)),
+        EXECUTOR_ABORT_CLEANUP_GRACE_MS,
+      )
+    }
     if (timeout.aborted) {
       finish()
       return
@@ -176,6 +184,7 @@ async function runExecutorWithTimeout(
     return await Promise.race([runPromise, timeoutResult])
   } finally {
     clearTimeout(timeoutId)
+    if (cleanupGraceId !== undefined) clearTimeout(cleanupGraceId)
     removeAbortListener()
   }
 }

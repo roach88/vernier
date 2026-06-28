@@ -204,6 +204,29 @@ export default {
     expect(statsDoc.runs).toEqual(expect.arrayContaining([expect.objectContaining({ runId: outcome.runId, journal: outcome.journal })]))
   })
 
+  it("ledger inspection commands still read the default root when config is broken", async () => {
+    const root = home()
+    const ran = await cli(root, "run", "control-plane-smoke-test", "--json")
+    expect(ran.code).toBe(0)
+    const outcome = JSON.parse(ran.stdout) as { runId: string; journal: string }
+    const configDir = mkdtempSync(join(tmpdir(), "vernier-cli-bad-config-"))
+    const badConfig = join(configDir, "vernier.config.mjs")
+    writeFileSync(badConfig, "import './missing-module.mjs';\nexport default { loops: [] };\n", "utf8")
+
+    const show = await cli({ home: root, config: badConfig }, "show", outcome.runId, "--json")
+    expect(show.code).toBe(0)
+    expect(JSON.parse(show.stdout)).toMatchObject({ runId: outcome.runId, journal: outcome.journal })
+
+    const runs = await cli({ home: root, config: badConfig }, "runs", "--json")
+    expect(runs.code).toBe(0)
+    expect(JSON.parse(runs.stdout)).toEqual(expect.arrayContaining([expect.objectContaining({ runId: outcome.runId, journal: outcome.journal })]))
+
+    const stats = await cli({ home: root, config: badConfig }, "stats", "--json")
+    expect(stats.code).toBe(0)
+    const statsDoc = JSON.parse(stats.stdout) as { runs: Array<{ runId: string; journal: string }> }
+    expect(statsDoc.runs).toEqual(expect.arrayContaining([expect.objectContaining({ runId: outcome.runId, journal: outcome.journal })]))
+  })
+
 
   it("does not treat explicit relative ledger roots as duplicate default roots", async () => {
     const project = mkdtempSync(join(tmpdir(), "vernier-cli-relative-ledger-"))
