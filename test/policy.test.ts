@@ -74,6 +74,13 @@ describe("decideNextStep", () => {
     expect(decision.notes.join("\n")).toContain("scripts/pilot1_runner.py")
   })
 
+  it("escalates when effects were not observed", () => {
+    const decision = decideNextStep(observation({ effectsObserved: false }))
+    expect(decision.kind).toBe("escalate")
+    expect(decision.classification).toBe("failure")
+    expect(decision.notes.join("\n")).toContain("unknown post-step effects")
+  })
+
   it("is pure: identical observations yield identical decisions", () => {
     const obs = observation({ contractValid: false, contractFailedChecks: ["x"] })
     expect(decideNextStep(obs)).toEqual(decideNextStep(obs))

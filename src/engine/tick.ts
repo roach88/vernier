@@ -15,7 +15,7 @@ import { hashObserver, type EffectObservation, type EffectsObserver } from "../k
 import type { Decision, Observation } from "../kernel/policy.js"
 import type { Executor, Loop, MemoryStore, RunContext, Step, StepResult, StepSkill, StepSpec } from "../kernel/types.js"
 import { derivedOutputSchema, zeroUsage } from "../kernel/types.js"
-import { journalPath, Ledger, resolveLedgerRoot, resumeKey, KEY_VERSION, type Replay, type StepResultEntry } from "../ledger/ledger.js"
+import { assertSafePathComponent, journalPath, Ledger, resolveLedgerRoot, resumeKey, KEY_VERSION, type Replay, type StepResultEntry, type StepStartedEntry } from "../ledger/ledger.js"
 import { embedSkillsInPrompt, nativeSkillsDirective, skillBody, snapshotSkills } from "../skills/skills.js"
 
 export type RunStatus = "running" | "done" | "needs_human" | "stopped"
@@ -221,6 +221,7 @@ function applyFinalOutputGuard(
 
 /** Fresh run id: loopId + timestamp + entropy. Exposed so a driver can lease the run dir BEFORE the first journal write. */
 export function newRunId(loop: Loop): string {
+  assertSafePathComponent(loop.id, "loop id")
   return `${loop.id}-${now().replace(/[-:T]/g, "").slice(0, 14)}-${randomBytes(3).toString("hex")}`
 }
 
@@ -271,13 +272,15 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
   const inputs = step.signature.input.parse(state.values) as Record<string, unknown>
   const key = resumeKey(step.id, inputs, state.iteration, state.attempt)
 
-  // RESUME IS REPLAY: when the ledger already holds a completed result for
+  // RESUME IS REPLAY: when the ledger already holds a terminal result for
   // this exact (stepId, iteration, attempt, inputs) slot — a crash landed
   // after the step_result but before its decision — the slot is replayed
   // from the ledger, never re-executed. LLM steps are non-deterministic and
   // side-effecting steps (codex writes, `remember`) must not double-apply.
-  const journaled = run.replayed?.completed.get(key)
+  const journaled = run.replayed?.terminal.get(key)
   if (journaled) return replayTick(run, deps, step, key, journaled)
+  const started = run.replayed?.started.get(key)
+  if (started) return recoverStartedTick(run, deps, step, key, started)
 
   const executor = deps.executors.get(step.executor)
   if (!executor) throw new Error(`Unknown executor id \`${step.executor}\` for step \`${step.id}\`.`)
@@ -373,7 +376,18 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
     workdir: deps.workdir,
     ...(deps.memory ? { memory: deps.memory } : {}),
   })
-  const effects: EffectObservation = await observer.assess(deps.workdir, before, step.effects)
+  let effects: EffectObservation
+  try {
+    effects = await observer.assess(deps.workdir, before, step.effects)
+  } catch (error) {
+    effects = {
+      changed: [],
+      allowed: false,
+      unexpected: ["<effects unknown: observer failed after executor>"],
+      observed: false,
+      reason: `effect observer failed after executor: ${error instanceof Error ? error.message : String(error)}`,
+    }
+  }
 
   // 5. Project engine-observed fields over the executor's output (e.g. an
   //    artifact path from effect attribution — the projection wins on
@@ -417,6 +431,7 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
     contractFailedChecks: contractResult ? failedCheckMessages(contractResult) : [],
     effectsAllowed: effects.allowed,
     unexpectedChanges: effects.unexpected,
+    effectsObserved: effects.observed !== false,
     output: validatedOutput,
   }
   const decision = applyFinalOutputGuard(loop, state, loop.policy(observation), validatedOutput)
@@ -435,14 +450,14 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
  * (signature parse; the contract, when its entry is missing) are recomputed;
  * non-deterministic and side-effecting pieces are never re-run.
  */
-function replayTick(run: Run, deps: EngineDeps, step: Step, key: string, journaled: StepResultEntry): TickOutcome {
+function replayTick(run: Run, deps: EngineDeps, step: Step, key: string, journaled: StepResultEntry, recoveredEffects?: EffectObservation): TickOutcome {
   const { loop, ledger, state } = run
   // Tolerant lookup: replaying must not require the executor to be wired.
   const executorId = deps.executors.get(step.executor)?.id ?? step.executor
 
   const output = journaled.output
   const outputParse = step.signature.output.safeParse(output)
-  const outputValid = outputParse.success
+  const outputValid = journaled.status === "completed" && journaled.outputValid && outputParse.success
 
   let contractResult: ContractResult | null = null
   if (step.contract) {
@@ -465,9 +480,13 @@ function replayTick(run: Run, deps: EngineDeps, step: Step, key: string, journal
 
   // Effects: replay the ledgered observation. If the crash landed before the
   // effects entry was written, the before-snapshot is gone and observation is
-  // impossible — assume a clean scope rather than re-executing the step.
+  // impossible. Fail loud instead of assuming a clean scope.
+  const ledgeredEffects = run.replayed?.effects.get(key)?.observation
   const effects: EffectObservation =
-    run.replayed?.effects.get(key)?.observation ?? { changed: [], allowed: true, unexpected: [] }
+    ledgeredEffects ?? recoveredEffects ?? { changed: [], allowed: false, unexpected: ["<effects unknown: crash before observation>"], observed: false, reason: "crash before effects journal entry" }
+  if (!ledgeredEffects) {
+    ledger.append({ type: "effects", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, observation: effects, at: now() })
+  }
 
   const validatedOutput = outputValid ? (outputParse.data as Record<string, unknown>) : null
   const observation: Observation = {
@@ -488,12 +507,39 @@ function replayTick(run: Run, deps: EngineDeps, step: Step, key: string, journal
     contractFailedChecks: contractResult ? failedCheckMessages(contractResult) : [],
     effectsAllowed: effects.allowed,
     unexpectedChanges: effects.unexpected,
+    effectsObserved: effects.observed !== false,
     output: validatedOutput,
   }
   const decision = applyFinalOutputGuard(loop, state, loop.policy(observation), validatedOutput)
   ledger.append({ type: "decision", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, decision, at: now() })
   run.state = nextState(loop, state, decision, validatedOutput ?? {})
   return { state: run.state, decision }
+}
+
+function recoverStartedTick(run: Run, deps: EngineDeps, step: Step, key: string, started: StepStartedEntry): TickOutcome {
+  const { ledger } = run
+  const journaled: StepResultEntry = {
+    type: "step_result",
+    key,
+    stepId: step.id,
+    attempt: started.attempt,
+    iteration: started.iteration,
+    status: "interrupted",
+    output: { error: "crash after step_started before step_result" },
+    outputValid: false,
+    evidence: [],
+    usage: zeroUsage(),
+    at: now(),
+  }
+  const effects: EffectObservation = {
+    changed: [],
+    allowed: false,
+    unexpected: ["<effects unknown: crash after step_started before step_result>"],
+    observed: false,
+    reason: "crash after step_started before step_result",
+  }
+  ledger.append(journaled)
+  return replayTick(run, deps, step, key, journaled, effects)
 }
 
 /** The journal-to-state projection. Exported for the resume fold (engine/resume.ts); not a public API. */

@@ -44,6 +44,8 @@ export interface Observation {
   readonly contractValid: boolean
   readonly contractFailedChecks: readonly string[]
   readonly effectsAllowed: boolean
+  /** False when post-step effects are unknowable because the run crashed or observation failed. */
+  readonly effectsObserved?: boolean
   readonly unexpectedChanges: readonly string[]
   /** The signature-validated output value of this step; null when outputValid is false. */
   readonly output: Readonly<Record<string, unknown>> | null
@@ -80,6 +82,17 @@ export function decideNextStep(obs: Observation): Decision {
     }
   }
 
+  if (obs.effectsObserved === false) {
+    const reason = `step \`${obs.stepId}\` has unknown post-step effects.`
+    return {
+      kind: "escalate",
+      classification: "failure",
+      summary: `${reason} Human review is required before continuing.`,
+      notes: [reason],
+      improvement: "Recover or rerun in a clean worktree so effect attribution is explicit before promotion.",
+    }
+  }
+
   if (obs.stepStatus !== "completed") {
     const reason = `executor \`${obs.executorId}\` ${obs.stepStatus === "interrupted" ? "was interrupted" : "failed"} on step \`${obs.stepId}\`.`
     return {
@@ -105,6 +118,7 @@ export function decideNextStep(obs: Observation): Decision {
       retryHint: retryHint(obs, reason),
     }
   }
+
 
   if (!obs.effectsAllowed || obs.unexpectedChanges.length > 0) {
     const notes: string[] = []

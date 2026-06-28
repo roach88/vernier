@@ -1,9 +1,10 @@
-import { appendFileSync, mkdtempSync } from "node:fs"
+import { appendFileSync, mkdirSync, mkdtempSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import {
   canonical,
+  journalPath,
   Ledger,
   replay,
   resumeKey,
@@ -113,5 +114,31 @@ describe("Ledger", () => {
     expect(view.meta?.runId).toBe("run-1")
     expect(view.completed.get(key)?.status).toBe("completed")
     expect(view.lastDecision?.decision.kind).toBe("stop")
+  })
+})
+
+describe("journalPath", () => {
+  it("accepts a safe run id under the ledger runs directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "vernier-ledger-root-"))
+    expect(journalPath(root, "loop-20260628-a1b2c3")).toBe(resolve(root, "runs", "loop-20260628-a1b2c3", "journal.jsonl"))
+  })
+
+  it("rejects run ids that are not a single portable path component", () => {
+    const root = mkdtempSync(join(tmpdir(), "vernier-ledger-root-"))
+    for (const bad of ["../escape", "nested/run", "trailing.", "CON", "nul.txt"]) {
+      expect(() => journalPath(root, bad)).toThrow(/safe path component/)
+    }
+  })
+
+  it("rejects symlinked runs roots and run directories", () => {
+    const root = mkdtempSync(join(tmpdir(), "vernier-ledger-root-"))
+    const outside = mkdtempSync(join(tmpdir(), "vernier-ledger-outside-"))
+    symlinkSync(outside, join(root, "runs"))
+    expect(() => journalPath(root, "run-1")).toThrow(/runs root.*symlink/)
+
+    const rootWithRun = mkdtempSync(join(tmpdir(), "vernier-ledger-root-"))
+    mkdirSync(join(rootWithRun, "runs"))
+    symlinkSync(outside, join(rootWithRun, "runs", "run-1"))
+    expect(() => journalPath(rootWithRun, "run-1")).toThrow(/run directory.*symlink/)
   })
 })
