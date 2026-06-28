@@ -8,7 +8,7 @@
 // (listing, conflict refusal, unknown template).
 
 import { execFile } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs"
 import { hostname, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -169,6 +169,38 @@ describe("vernier CLI", () => {
     ])
   })
 
+  it("skips invalid legacy run directories when listing runs", async () => {
+    const root = home()
+    const result = await cli(root, "run", "control-plane-smoke-test", "--json")
+    expect(result.code).toBe(0)
+    const runId = String((JSON.parse(result.stdout) as Record<string, unknown>).runId)
+    mkdirSync(join(root, "runs", "legacy:run"), { recursive: true })
+
+    const runs = await cli(root, "runs", "--json")
+    expect(runs.code).toBe(0)
+    const listed = JSON.parse(runs.stdout) as Array<Record<string, unknown>>
+    expect(listed.map((run) => run.runId)).toEqual([runId])
+  })
+
+  it("reports unsafe ledger runs roots instead of hiding every run", async () => {
+    const root = home()
+    const unsafeTarget = mkdtempSync(join(tmpdir(), "vernier-cli-unsafe-runs-"))
+    symlinkSync(unsafeTarget, join(root, "runs"))
+
+    const runs = await cli(root, "runs", "--json")
+    expect(runs.code).toBe(1)
+    expect(runs.stderr).toContain("ledger runs root must not be a symlink")
+  })
+
+  it("reports dangling ledger runs root symlinks", async () => {
+    const root = home()
+    symlinkSync(join(root, "missing-runs-target"), join(root, "runs"))
+
+    const runs = await cli(root, "runs", "--json")
+    expect(runs.code).toBe(1)
+    expect(runs.stderr).toContain("ledger runs root must not be a symlink")
+  })
+
   it("discovers runs from loop-specific ledger roots without mirroring into VERNIER_HOME", async () => {
     const homeRoot = home()
     const configDir = mkdtempSync(join(tmpdir(), "vernier-cli-custom-config-"))
@@ -250,6 +282,22 @@ export default {
     const parsed: TrustStatusJson = JSON.parse(trusted.stdout)
     expect(parsed.report.status).toBe("promotable")
     expect(parsed.report.totals.cleanRuns).toBe(1)
+  })
+
+  it("`trust status` rejects configured loops when required contract evidence is missing", async () => {
+    const root = home()
+    const ran = await cli(root, "run", "control-plane-smoke-test", "--json")
+    expect(ran.code).toBe(0)
+    const runId = String((JSON.parse(ran.stdout) as Record<string, unknown>).runId)
+    const path = journalPath(root, runId)
+    const withoutContracts = Ledger.load(path).filter((entry) => entry.type !== "contract")
+    writeFileSync(path, withoutContracts.map((entry) => JSON.stringify(entry)).join("\n") + "\n", "utf8")
+
+    const trusted = await cli(root, "trust", "status", "control-plane-smoke-test", "--min-runs", "1", "--json")
+    expect(trusted.code).toBe(1)
+    const parsed: TrustStatusJson = JSON.parse(trusted.stdout)
+    expect(parsed.report.status).toBe("not_promotable")
+    expect(parsed.report.reasons.join("\n")).toContain("missing contract")
   })
 
   it("`trust status` reports no evidence as usage instead of failed evidence", async () => {

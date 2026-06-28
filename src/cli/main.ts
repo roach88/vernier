@@ -16,7 +16,7 @@
 // `continue` inversion — anything (cron, a human, another agent) can advance
 // a run one step, and the engine, not the caller, knows what is next.
 
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { register as registerModuleHooks } from "node:module"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
@@ -28,8 +28,8 @@ import { resumeRun, summarizeJournal, type JournalSummary } from "../engine/resu
 import { driveRun, finalOutput, newRunId, startRun, tick, type EngineDeps, type Run, type TickOutcome } from "../engine/tick.js"
 import { bindingVocabulary } from "../kernel/bindings.js"
 import type { Executor, Loop } from "../kernel/types.js"
-import { journalPath, Ledger, resolveLedgerRoot, type LedgerEntry } from "../ledger/ledger.js"
-import { projectRunEvidence, type RunEvidenceProjection } from "../ledger/evidence.js"
+import { assertSafePathComponent, journalPath, Ledger, resolveLedgerRoot, type LedgerEntry } from "../ledger/ledger.js"
+import { projectRunEvidence, type ProjectRunEvidenceInput, type RunEvidenceProjection } from "../ledger/evidence.js"
 import { evaluateTrustStatus, type TrustStatusReport } from "../ledger/trust.js"
 import { buildTimeline, computedCostUsd, renderStats, renderTimeline, rollupByLoop, runStatsRow, type PriceModel, type RunStatsRow } from "../ledger/stats.js"
 import { bindSkills, discoverSkills, SKILL_NAME_PATTERN, SkillError, type SkillBindingLayer, type SkillRegistry } from "../skills/skills.js"
@@ -407,12 +407,24 @@ function ledgerRoots(registry: ReadonlyMap<string, RegisteredLoop>): readonly st
   return [...roots]
 }
 
-async function inspectionLedgerRoots(): Promise<readonly string[]> {
+async function inspectionLoopRegistry(): Promise<ReadonlyMap<string, RegisteredLoop>> {
   try {
-    return ledgerRoots(loopRegistry(await loadConfig()))
+    return loopRegistry(await loadConfig())
   } catch {
-    return [resolveLedgerRoot({})]
+    return new Map()
   }
+}
+
+async function inspectionLedgerRoots(): Promise<readonly string[]> {
+  return ledgerRoots(await inspectionLoopRegistry())
+}
+function listedJournalPath(root: string, runId: string): string | null {
+  try {
+    assertSafePathComponent(runId, "run id")
+  } catch {
+    return null
+  }
+  return canonicalJournalPath(journalPath(root, runId))
 }
 
 function journalIds(roots: readonly string[]): readonly { root: string; runId: string; path: string }[] {
@@ -421,14 +433,19 @@ function journalIds(roots: readonly string[]): readonly { root: string; runId: s
     const runsDir = join(root, "runs")
     let ids: string[] = []
     try {
+      if (lstatSync(runsDir).isSymbolicLink()) {
+        throw new Error(`ledger runs root must not be a symlink: \`${runsDir}\`.`)
+      }
       ids = readdirSync(runsDir, { withFileTypes: true })
         .filter((d) => d.isDirectory())
         .map((d) => d.name)
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
       ids = []
     }
     for (const runId of ids) {
-      out.push({ root, runId, path: canonicalJournalPath(journalPath(root, runId)) })
+      const path = listedJournalPath(root, runId)
+      if (path !== null) out.push({ root, runId, path })
     }
   }
   return out
@@ -963,23 +980,24 @@ function parseTrustFlags(flags: Flags): TrustFlags {
   return { loopId, last, minRuns }
 }
 
-function loadEvidenceFromRoots(roots: readonly string[]): RunEvidenceProjection[] {
+function contractStepIds(entry: RegisteredLoop | undefined): readonly string[] | undefined {
+  return entry?.loop.steps.filter((step) => step.contract !== undefined).map((step) => step.id)
+}
+
+function projectEvidence(input: Omit<ProjectRunEvidenceInput, "requiredContractSteps">, requiredContractSteps?: readonly string[]): RunEvidenceProjection {
+  return requiredContractSteps === undefined ? projectRunEvidence(input) : projectRunEvidence({ ...input, requiredContractSteps })
+}
+
+function loadEvidenceFromRoots(roots: readonly string[], requiredContractSteps?: readonly string[]): RunEvidenceProjection[] {
   return journalIds(roots).map(({ path }) => {
     try {
-      return projectRunEvidence({ entries: Ledger.load(path), ledgerPath: path })
+      return projectEvidence({ entries: Ledger.load(path), ledgerPath: path }, requiredContractSteps)
     } catch (error) {
-      return projectRunEvidence({ ledgerPath: path, loadError: error })
+      return projectEvidence({ ledgerPath: path, loadError: error }, requiredContractSteps)
     }
   })
 }
 
-async function registeredLoopVersion(loopId: string): Promise<string | null> {
-  try {
-    return loopRegistry(await loadConfig()).get(loopId)?.loop.version ?? null
-  } catch {
-    return null
-  }
-}
 
 function newestLoopVersion(loopId: string, evidence: readonly RunEvidenceProjection[]): string | null {
   const matching = evidence
@@ -1012,12 +1030,14 @@ function renderTrustReport(report: TrustStatusReport): void {
 
 async function cmdTrust(flags: Flags): Promise<number> {
   const parsed = parseTrustFlags(flags)
-  const roots = await inspectionLedgerRoots()
-  const evidence = loadEvidenceFromRoots(roots)
+  const registry = await inspectionLoopRegistry()
+  const roots = ledgerRoots(registry)
+  const target = registry.get(parsed.loopId)
+  const evidence = loadEvidenceFromRoots(roots, contractStepIds(target))
   if (!evidence.some((item) => item.loopId === parsed.loopId)) {
     throw new UsageError(`No evidence found for loop \`${parsed.loopId}\`. See \`vernier runs\`.`)
   }
-  const loopVersion = (await registeredLoopVersion(parsed.loopId)) ?? newestLoopVersion(parsed.loopId, evidence)
+  const loopVersion = target?.loop.version ?? newestLoopVersion(parsed.loopId, evidence)
   if (loopVersion === null) throw new UsageError(`No evidence found for loop \`${parsed.loopId}\`. See \`vernier runs\`.`)
   const report = evaluateTrustStatus({
     loopId: parsed.loopId,

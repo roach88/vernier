@@ -96,14 +96,14 @@ function promptStepEnforcementCheck(loop: Loop, step: Step): LoopQualityCheck {
   if (!isPromptBacked(step)) {
     return pass("LQ003_PROMPT_STEP_HAS_ENFORCEMENT", subject(loop, step), "deterministic/non-prompt step does not need LLM-specific enforcement")
   }
-  const enforced = Boolean(step.contract || step.structuredOutput || step.outputFrom || downstreamVerifier(loop, step))
+  const enforced = Boolean(step.contract || step.structuredOutput || step.outputFrom)
   if (enforced) {
-    return pass("LQ003_PROMPT_STEP_HAS_ENFORCEMENT", subject(loop, step), "prompt-backed step has a contract, structured output, observed projection, or downstream verifier")
+    return pass("LQ003_PROMPT_STEP_HAS_ENFORCEMENT", subject(loop, step), "prompt-backed step has a contract, structured output, or observed projection")
   }
   return fail(
     "LQ003_PROMPT_STEP_HAS_ENFORCEMENT",
     subject(loop, step),
-    "prompt-backed LLM step has no contract, structured output, observed output projection, or downstream verifier",
+    "prompt-backed LLM step has no contract, structured output, or observed output projection",
   )
 }
 
@@ -139,8 +139,3 @@ function isPromptBacked(step: Step): boolean {
   return typeof step.prompt === "function" || step.structuredOutput === true || hasKey(LLM_EXECUTOR_IDS, step.executor)
 }
 
-function downstreamVerifier(loop: Loop, step: Step): boolean {
-  const index = loop.steps.findIndex((candidate) => candidate.id === step.id)
-  if (index < 0) return false
-  return loop.steps.slice(index + 1).some((candidate) => candidate.executor === "judge" || candidate.structuredOutput === true || Boolean(candidate.contract))
-}

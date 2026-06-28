@@ -4,8 +4,8 @@
 // worktree.ts only answers "did anything change?" — this attributes.
 
 import { createHash } from "node:crypto"
-import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs"
-import { join, relative } from "node:path"
+import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync, type Stats } from "node:fs"
+import { isAbsolute, join, relative } from "node:path"
 import type { EffectScope, OutputProjection } from "./types.js"
 
 const SKIP_DIRS = new Set([".git", "node_modules"])
@@ -15,13 +15,14 @@ export type Snapshot = ReadonlyMap<string, string>
 
 export function snapshotDir(root: string): Snapshot {
   const out = new Map<string, string>()
+  const realRoot = realpathSync(root)
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (SKIP_DIRS.has(entry.name)) continue
       const full = join(dir, entry.name)
       const rel = relative(root, full).split("\\").join("/")
       if (entry.isDirectory()) walk(full)
-      else if (entry.isSymbolicLink()) out.set(rel, symlinkDigest(full))
+      else if (entry.isSymbolicLink()) out.set(rel, symlinkDigest(full, realRoot))
       else if (entry.isFile()) {
         out.set(rel, createHash("sha256").update(readFileSync(full)).digest("hex"))
       } else {
@@ -33,12 +34,14 @@ export function snapshotDir(root: string): Snapshot {
   return out
 }
 
-function symlinkDigest(path: string, seen = new Set<string>()): string {
+function symlinkDigest(path: string, realRoot: string, seen = new Set<string>()): string {
   const target = readlinkSync(path)
   try {
     const stat = statSync(path)
+    const realTarget = realpathSync(path)
+    if (!isContained(realRoot, realTarget)) return `symlink:${target}:outside:${statDigest(stat)}`
     if (stat.isFile()) return `symlink:${target}:file:${createHash("sha256").update(readFileSync(path)).digest("hex")}`
-    if (stat.isDirectory()) return `symlink:${target}:directory:${directoryDigest(path, seen)}`
+    if (stat.isDirectory()) return `symlink:${target}:directory:${directoryDigest(path, realRoot, seen)}`
     return `symlink:${target}:target:${entryType(path, false)}`
   } catch (error) {
     const reason = error instanceof Error ? ((error as NodeJS.ErrnoException).code ?? error.message) : String(error)
@@ -46,8 +49,9 @@ function symlinkDigest(path: string, seen = new Set<string>()): string {
   }
 }
 
-function directoryDigest(path: string, seen: Set<string>): string {
+function directoryDigest(path: string, realRoot: string, seen: Set<string>): string {
   const real = realpathSync(path)
+  if (!isContained(realRoot, real)) return `outside:${statDigest(statSync(path))}`
   if (seen.has(real)) return "cycle"
   seen.add(real)
   const entries = readdirSync(path, { withFileTypes: true })
@@ -55,13 +59,23 @@ function directoryDigest(path: string, seen: Set<string>): string {
     .sort((a, b) => a.name.localeCompare(b.name))
   const parts = entries.map((entry) => {
     const full = join(path, entry.name)
-    if (entry.isDirectory()) return `${entry.name}/:${directoryDigest(full, seen)}`
-    if (entry.isSymbolicLink()) return `${entry.name}:${symlinkDigest(full, seen)}`
+    if (entry.isDirectory()) return `${entry.name}/:${directoryDigest(full, realRoot, seen)}`
+    if (entry.isSymbolicLink()) return `${entry.name}:${symlinkDigest(full, realRoot, seen)}`
     if (entry.isFile()) return `${entry.name}:file:${createHash("sha256").update(readFileSync(full)).digest("hex")}`
     return `${entry.name}:type:${entryType(full)}`
   })
   seen.delete(real)
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex")
+}
+
+function isContained(parent: string, child: string): boolean {
+  const rel = relative(parent, child)
+  return rel === "" || (rel !== ".." && !rel.startsWith("../") && !rel.startsWith("..\\") && !isAbsolute(rel))
+}
+
+function statDigest(stat: Stats): string {
+  const kind = stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "target"
+  return `${kind}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`
 }
 
 function entryType(path: string, noFollow = true): string {

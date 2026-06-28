@@ -78,6 +78,8 @@ export interface ProjectRunEvidenceInput {
   readonly ledgerPath?: string | null
   /** Pass Ledger.load/read errors here so corrupt evidence is represented, not thrown away by tolerant display callers. */
   readonly loadError?: unknown
+  /** Step ids that declare contracts in the loop definition; absent contract ledger entries for these steps are unsafe. */
+  readonly requiredContractSteps?: readonly string[]
 }
 
 export function projectRunEvidence(input: ProjectRunEvidenceInput): RunEvidenceProjection {
@@ -90,6 +92,7 @@ export function projectRunEvidence(input: ProjectRunEvidenceInput): RunEvidenceP
   const summary = summarizeJournal(entries)
   const view = replay(entries)
   const meta = summary.meta ?? view.meta
+  const requiredContractSteps = new Set(input.requiredContractSteps ?? [])
 
   if (!meta) diagnostics.push({ severity: "corrupt", code: "MISSING_META", detail: "journal has no meta entry" })
   else if (meta.keyVersion !== KEY_VERSION) {
@@ -107,7 +110,7 @@ export function projectRunEvidence(input: ProjectRunEvidenceInput): RunEvidenceP
     const effects = view.effects.get(result.key)
     const usage = usageEvidence(result.usage)
     const output = outputEvidence(result)
-    const contractStatus = contractEvidence(contract)
+    const contractStatus = contractEvidence(contract, requiredContractSteps.has(result.stepId))
     const effectsStatus = effectEvidence(effects)
     const unexpectedEffects = effects?.observation.unexpected.map(String) ?? []
     const observedEffects = effects ? effects.observation.observed !== false : null
@@ -145,6 +148,9 @@ export function projectRunEvidence(input: ProjectRunEvidenceInput): RunEvidenceP
     if (!resultByKey.has(key)) diagnostics.push({ severity: "corrupt", code: "ORPHAN_EFFECTS", detail: `effects for ${effects.stepId} has no matching step_result` })
   }
 
+  if (resultByKey.size === 0 && summary.status === "done") {
+    diagnostics.push({ severity: "degraded", code: "NO_STEP_EVIDENCE", detail: "successful journal has no step_result entries" })
+  }
   const totals = steps.reduce(
     (acc, step) => {
       acc.steps += 1
@@ -167,6 +173,7 @@ export function projectRunEvidence(input: ProjectRunEvidenceInput): RunEvidenceP
   const hasDegraded = diagnostics.some((d) => d.severity === "degraded")
   const unsafe = totals.contractsFailed > 0 || totals.contractsMissing > 0 || totals.effectsFailed > 0 || totals.effectsUnknown > 0 || totals.outputInvalid > 0
   const terminalSuccess = summary.status === "done"
+  const hasStepEvidence = totals.steps > 0
   const validCurrentV2 = !hasCorruption && meta?.keyVersion === KEY_VERSION
 
   return {
@@ -182,7 +189,7 @@ export function projectRunEvidence(input: ProjectRunEvidenceInput): RunEvidenceP
     startedAt: summary.startedAt ?? null,
     strict: {
       validCurrentV2,
-      usableForTrust: validCurrentV2 && !hasDegraded && !unsafe && terminalSuccess,
+      usableForTrust: validCurrentV2 && hasStepEvidence && !hasDegraded && !unsafe && terminalSuccess,
     },
     outcome: {
       terminalSuccess,
@@ -226,8 +233,8 @@ function outputEvidence(result: { readonly status: string; readonly outputValid?
   return result.outputValid === true ? "valid" : "invalid"
 }
 
-function contractEvidence(contract: { readonly result: { readonly valid: boolean } } | undefined): ContractEvidenceStatus {
-  if (!contract) return "not_applicable"
+function contractEvidence(contract: { readonly result: { readonly valid: boolean } } | undefined, required: boolean): ContractEvidenceStatus {
+  if (!contract) return required ? "missing" : "not_applicable"
   return contract.result.valid ? "passed" : "failed"
 }
 
