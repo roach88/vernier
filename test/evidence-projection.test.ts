@@ -52,14 +52,14 @@ function contract(stepId: string, valid: boolean, key = `${stepId}-1`): Contract
   }
 }
 
-function effects(stepId: string, allowed: boolean, key = `${stepId}-1`): EffectsEntry {
+function effects(stepId: string, allowed: boolean, key = `${stepId}-1`, observation: Partial<EffectsEntry["observation"]> = {}): EffectsEntry {
   return {
     type: "effects",
     key,
     stepId,
     iteration: 1,
     attempt: 1,
-    observation: { changed: ["docs/a.md"], allowed, unexpected: allowed ? [] : ["secret.txt"] },
+    observation: { changed: ["docs/a.md"], allowed, unexpected: allowed ? [] : ["secret.txt"], ...observation },
     at: at(4),
   }
 }
@@ -175,6 +175,22 @@ describe("projectRunEvidence", () => {
     expect(projection.totals.effectsUnknown).toBe(1)
     expect(projection.steps[0]).toMatchObject({ effects: "unknown", observedEffects: null })
     expect(projection.diagnostics).toContainEqual({ severity: "degraded", code: "MISSING_EFFECTS", detail: "completed step write has no effects entry" })
+  })
+
+  it("marks explicitly unobserved effects as degraded/unknown evidence", () => {
+    const projection = projectRunEvidence({
+      entries: [
+        meta(),
+        started("write"),
+        result("write"),
+        effects("write", false, "write-1", { observed: false, reason: "crash before effects journal entry", unexpected: ["<effects unknown>"] }),
+        decision("write", "escalate", "failure"),
+      ],
+    })
+
+    expect(projection.strict.usableForTrust).toBe(false)
+    expect(projection.totals).toMatchObject({ effectsUnknown: 1, effectsFailed: 0 })
+    expect(projection.steps[0]).toMatchObject({ effects: "unknown", observedEffects: false, unexpectedEffects: ["<effects unknown>"] })
   })
 
   it("keeps missing usage honest rather than fabricating availability or cost", () => {

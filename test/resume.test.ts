@@ -21,7 +21,7 @@ import { executorRegistry, scriptExecutor } from "../src/executors/script.js"
 import { ContractRegistry, type Contract } from "../src/kernel/contract.js"
 import { retryPolicy, until } from "../src/kernel/policy.js"
 import { noEffects, sig, type Loop } from "../src/kernel/types.js"
-import { Ledger, journalPath } from "../src/ledger/ledger.js"
+import { Ledger, journalPath, resumeKey } from "../src/ledger/ledger.js"
 
 function temp(): { workdir: string; ledgerRoot: string } {
   const root = mkdtempSync(join(tmpdir(), "vernier-resume-"))
@@ -138,23 +138,19 @@ describe("resume from the ledger (linear loop)", () => {
     const resumed = resumeRun(loop, crashed.state.runId)
     expect(resumed.state).toMatchObject({ stepIndex: 0, attempt: 1, iteration: 1 })
 
-    // ...but the tick replays the journaled result instead of executing.
+    // ...but the tick replays the journaled result instead of executing and
+    // fails closed because the crash lost the post-step effects observation.
     const replayedTick = await tick(resumed, d)
     expect(counts.double).toBe(1) // NOT re-run
-    expect(replayedTick.decision.kind).toBe("continue")
-    expect(resumed.state.values.n).toBe(6)
+    expect(replayedTick.decision.kind).toBe("escalate")
+    expect(replayedTick.decision.notes.join("\n")).toContain("unknown post-step effects")
+    expect(replayedTick.state.status).toBe("needs_human")
 
-    const outcome = await driveRun(resumed, d)
-    expect(outcome.state.status).toBe("done")
-    expect(counts).toEqual({ double: 1, doubleAgain: 1 })
-    expect(finalOutput(loop, resumed.state, outcome.decision)).toEqual({ n: 12, doubledTwice: true })
-
-    // The replayed tick re-appended the missing pieces: exactly one
-    // step_result for `double`, and its recomputed contract entry.
     const entries = Ledger.load(journal)
     expect(entries.filter((e) => e.type === "step_result" && e.stepId === "double")).toHaveLength(1)
     expect(entries.filter((e) => e.type === "contract" && e.stepId === "double")).toHaveLength(1)
-    expect(summarizeJournal(entries).status).toBe("done")
+    expect(entries.filter((e) => e.type === "effects" && e.stepId === "double")).toHaveLength(1)
+    expect(summarizeJournal(entries).status).toBe("needs_human")
   })
 
   it("a terminal run resumes as terminal; ticking it refuses", async () => {
@@ -305,12 +301,10 @@ describe("resume from the ledger (ITERATING loop)", () => {
 
     const replayed = await tick(resumed, d)
     expect(ex.counts.answer).toBe(2) // replayed from the ledger, NOT re-executed
-    expect(replayed.decision.kind).toBe("continue")
+    expect(replayed.decision.kind).toBe("escalate")
+    expect(replayed.decision.notes.join("\n")).toContain("unknown post-step effects")
+    expect(replayed.state.status).toBe("needs_human")
     expect(resumed.state.values.answer).toBe("revised answer") // iteration 2's output — the v2 key did not collapse passes
-
-    const outcome = await driveRun(resumed, d)
-    expect(outcome.state.status).toBe("done")
-    expect(ex.counts).toEqual({ answer: 2, grade: 2 })
   })
 })
 
@@ -375,6 +369,38 @@ describe("resume never double-applies side effects", () => {
     expect(ex.counts).toEqual({ remember: 1, confirm: 1 })
   })
 
+  it("started-only crash records an interrupted slot and escalates before re-entering it", async () => {
+    const { workdir, ledgerRoot } = temp()
+    const store = join(workdir, "..", "rules.txt")
+    const ex = rememberExecutors(store)
+    const d = deps([ex.remember, ex.confirm], workdir)
+    const loop = rememberLoop(ledgerRoot)
+
+    const crashed = startRun(loop, { rule: "always verify" }, d)
+    const key = resumeKey("remember", { rule: "always verify" }, 1, 1)
+    crashed.ledger.append({
+      type: "step_started",
+      key,
+      stepId: "remember",
+      attempt: 1,
+      iteration: 1,
+      executorId: "script:remember",
+      at: "2026-06-10T00:00:01.000Z",
+    })
+
+    const resumed = resumeRun(loop, crashed.state.runId)
+    const recovered = await tick(resumed, d)
+
+    expect(ex.counts.remember).toBe(0)
+    expect(storeLines(store)).toEqual([])
+    expect(recovered.decision.kind).toBe("escalate")
+    expect(recovered.decision.notes.join("\n")).toContain("unknown post-step effects")
+    expect(recovered.state).toMatchObject({ stepIndex: 0, attempt: 1, status: "needs_human" })
+    const entries = Ledger.load(journalPath(ledgerRoot, crashed.state.runId))
+    expect(entries.filter((e) => e.type === "step_result" && e.stepId === "remember")).toHaveLength(1)
+    expect(entries.filter((e) => e.type === "effects" && e.stepId === "remember")).toHaveLength(1)
+  })
+
   it("torn tick after the remember step's result: the slot is replayed from the ledger — still exactly one append", async () => {
     const { workdir, ledgerRoot } = temp()
     const store = join(workdir, "..", "rules.txt") // OUTSIDE the observed workdir, like the real Memory store
@@ -389,10 +415,10 @@ describe("resume never double-applies side effects", () => {
 
     const resumed = resumeRun(loop, crashed.state.runId)
     expect(resumed.state.stepIndex).toBe(0) // fold lands back on `remember`...
-    const outcome = await driveRun(resumed, d)
-    expect(outcome.state.status).toBe("done")
+    const replayed = await tick(resumed, d)
+    expect(replayed.state.status).toBe("needs_human")
+    expect(replayed.decision.notes.join("\n")).toContain("unknown post-step effects")
     expect(storeLines(store)).toEqual(["always verify"]) // ...but replay, not re-execution: ONE append
-    expect(ex.counts).toEqual({ remember: 1, confirm: 1 })
-    expect(finalOutput(loop, resumed.state, outcome.decision)).toEqual({ stored: true, confirmed: true })
+    expect(ex.counts).toEqual({ remember: 1, confirm: 0 })
   })
 })

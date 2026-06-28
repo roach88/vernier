@@ -110,7 +110,7 @@ export function projectRunEvidence(input: ProjectRunEvidenceInput): RunEvidenceP
     const contractStatus = contractEvidence(contract)
     const effectsStatus = effectEvidence(effects)
     const unexpectedEffects = effects?.observation.unexpected.map(String) ?? []
-    const observedEffects = effects ? true : null
+    const observedEffects = effects ? effects.observation.observed !== false : null
 
     steps.push({
       key: result.key,
@@ -232,7 +232,7 @@ function contractEvidence(contract: { readonly result: { readonly valid: boolean
 }
 
 function effectEvidence(effects: EffectsEntry | undefined): EffectEvidenceStatus {
-  if (!effects) return "unknown"
+  if (!effects || effects.observation.observed === false) return "unknown"
   return effects.observation.allowed ? "passed" : "failed"
 }
 
