@@ -7,7 +7,7 @@
 
 import { mkdtempSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import { recallExecutor, rememberExecutor } from "../src/executors/memory.js"
 import { noEffects, type RunContext, type StepSpec } from "../src/kernel/types.js"
@@ -69,6 +69,10 @@ describe("memory store", () => {
     expect(rulesPath("/x")).toBe("/x/memory/rules.jsonl")
   })
 
+  it("resolves relative roots against cwd", () => {
+    expect(resolveMemoryRoot({ root: ".vernier" })).toBe(resolve(".vernier"))
+  })
+
   it("tokenizes topics into >=4-char keywords — retrieval is keyword overlap, not semantics", () => {
     expect(topicTokens("Why the Apollo 11 mission mattered!")).toEqual(new Set(["apollo", "mission", "mattered"]))
   })
@@ -95,7 +99,7 @@ function spec(stepId: string, inputs: Record<string, unknown>): StepSpec {
 describe("recall/remember executors", () => {
   it("conform to the Executor seam: remember writes, recall reads it back, both deterministic", async () => {
     const memory = freshStore()
-    const ctx: RunContext = { workdir: "/tmp", memory }
+    const ctx: RunContext = { workdir: "/tmp", memory , signal: AbortSignal.timeout(600_000) }
 
     const stored = await rememberExecutor.run(
       spec("remember", { rule: "End with the exact closing sentence.", evidence: "the verified answer", topic: "short note closing" }),
@@ -114,7 +118,7 @@ describe("recall/remember executors", () => {
   })
 
   it("fails loudly without an injected memory store — the handle is required, not optional magic", async () => {
-    const ctx: RunContext = { workdir: "/tmp" }
+    const ctx: RunContext = { workdir: "/tmp" , signal: AbortSignal.timeout(600_000) }
     await expect(recallExecutor.run(spec("recall", { topic: "x" }), ctx)).rejects.toThrow(/without a memory store/)
     await expect(rememberExecutor.run(spec("remember", { rule: "r", evidence: "e", topic: "t" }), ctx)).rejects.toThrow(
       /without a memory store/,

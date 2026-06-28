@@ -7,13 +7,13 @@
 // run() stays `while (tick)` so the simple case is one call.
 
 import { randomBytes } from "node:crypto"
-import { existsSync } from "node:fs"
-import { dirname, join } from "node:path"
-import type { ContractRegistry, ContractResult } from "../kernel/contract.js"
+import { existsSync, realpathSync } from "node:fs"
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
+import type { Contract, ContractContext, ContractRegistry, ContractResult } from "../kernel/contract.js"
 import { failedCheckMessages } from "../kernel/contract.js"
 import { hashObserver, type EffectObservation, type EffectsObserver } from "../kernel/effects.js"
 import type { Decision, Observation } from "../kernel/policy.js"
-import type { Executor, Loop, MemoryStore, Step, StepResult, StepSkill } from "../kernel/types.js"
+import type { Executor, Loop, MemoryStore, RunContext, Step, StepResult, StepSkill, StepSpec } from "../kernel/types.js"
 import { derivedOutputSchema, zeroUsage } from "../kernel/types.js"
 import { journalPath, Ledger, resolveLedgerRoot, resumeKey, KEY_VERSION, type Replay, type StepResultEntry } from "../ledger/ledger.js"
 import { embedSkillsInPrompt, nativeSkillsDirective, skillBody, snapshotSkills } from "../skills/skills.js"
@@ -75,6 +75,150 @@ export interface Run {
 
 const now = (): string => new Date().toISOString()
 
+function canonicalPath(path: string): string {
+  let resolved = resolve(path)
+  if (!existsSync(resolved)) {
+    const suffix: string[] = []
+    while (!existsSync(resolved)) {
+      suffix.unshift(basename(resolved))
+      const parent = dirname(resolved)
+      if (parent === resolved) return resolve(path)
+      resolved = parent
+    }
+    return join(realpathSync.native(resolved), ...suffix)
+  }
+  return realpathSync.native(resolved)
+}
+
+function isTimeoutAbortReason(reason: unknown): boolean {
+  const message = reason instanceof Error ? reason.message : String(reason)
+  return message.includes("timeout") || message.includes("timed out")
+}
+
+function stepTimedOutMessage(timeoutMs: number): string {
+  return `step timed out after ${timeoutMs}ms`
+}
+
+const EXECUTOR_ABORT_CLEANUP_GRACE_MS = 1_000
+
+function isStepTimeoutError(error: unknown, timeoutMs: number, signal: AbortSignal): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message === stepTimedOutMessage(timeoutMs) || (signal.aborted && isTimeoutAbortReason(signal.reason))
+}
+
+function interruptedResult(timeoutMs: number, startedAt: number): StepResult {
+  return {
+    status: "interrupted",
+    output: { error: stepTimedOutMessage(timeoutMs) },
+    evidence: [],
+    usage: zeroUsage(Date.now() - startedAt),
+  }
+}
+
+export function pathInsideOrEqual(parent: string, child: string): boolean {
+  const rel = relative(canonicalPath(parent), canonicalPath(child))
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))
+}
+
+export function assertRunDirOutsideWorkdir(runDir: string, workdir: string): void {
+  if (pathInsideOrEqual(workdir, runDir)) {
+    throw new Error(
+      `Run ledger directory \`${runDir}\` is inside workdir \`${workdir}\`. Set VERNIER_HOME or loop.ledger.root outside the workdir so runner state cannot be hidden from effect observation.`,
+    )
+  }
+}
+
+function validateContract(contract: Contract, output: Record<string, unknown>, ctx: ContractContext): ContractResult {
+  try {
+    return contract.validate(output, ctx)
+  } catch (error) {
+    return {
+      contractId: contract.id,
+      valid: false,
+      checks: [{ label: "contract validator threw", passed: false, detail: error instanceof Error ? error.message : String(error) }],
+    }
+  }
+}
+
+async function runExecutorWithTimeout(
+  executor: Executor,
+  spec: StepSpec,
+  ctx: Omit<RunContext, "signal">,
+): Promise<StepResult> {
+  const startedAt = Date.now()
+  const controller = new AbortController()
+  const timeout = controller.signal
+  const timeoutId = setTimeout(() => controller.abort(stepTimedOutMessage(spec.timeoutMs)), spec.timeoutMs)
+  const runPromise = Promise.resolve()
+    .then(() => executor.run(spec, { ...ctx, signal: timeout }))
+    .catch((error) => {
+      if (isStepTimeoutError(error, spec.timeoutMs, timeout)) {
+        return interruptedResult(spec.timeoutMs, startedAt)
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      return {
+        status: "failed" as const,
+        output: { error: message },
+        evidence: [],
+        usage: zeroUsage(Date.now() - startedAt),
+      }
+    })
+  void runPromise.catch(() => undefined)
+  let removeAbortListener = (): void => undefined
+  let cleanupGraceId: ReturnType<typeof setTimeout> | undefined
+  const timeoutResult = new Promise<StepResult>((resolvePromise) => {
+    const finish = () => {
+      cleanupGraceId = setTimeout(
+        () => resolvePromise(interruptedResult(spec.timeoutMs, startedAt)),
+        EXECUTOR_ABORT_CLEANUP_GRACE_MS,
+      )
+    }
+    if (timeout.aborted) {
+      finish()
+      return
+    }
+    timeout.addEventListener("abort", finish, { once: true })
+    removeAbortListener = () => timeout.removeEventListener("abort", finish)
+  })
+  try {
+    return await Promise.race([runPromise, timeoutResult])
+  } finally {
+    clearTimeout(timeoutId)
+    if (cleanupGraceId !== undefined) clearTimeout(cleanupGraceId)
+    removeAbortListener()
+  }
+}
+
+function finalOutputIssues(
+  loop: Loop<any, any>,
+  state: RunState,
+  decision: Decision,
+  validatedOutput: Record<string, unknown> | null,
+): readonly string[] {
+  if (decision.kind !== "stop" || decision.classification !== "success") return []
+  const terminalValues = { verdict: decision.classification, ...nextState(loop, state, decision, validatedOutput ?? {}).values }
+  const parsed = loop.signature.output.safeParse(terminalValues)
+  if (parsed.success) return []
+  return parsed.error.issues.map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
+}
+
+function applyFinalOutputGuard(
+  loop: Loop<any, any>,
+  state: RunState,
+  decision: Decision,
+  validatedOutput: Record<string, unknown> | null,
+): Decision {
+  const issues = finalOutputIssues(loop, state, decision, validatedOutput)
+  if (issues.length === 0) return decision
+  return {
+    kind: "escalate",
+    classification: "failure",
+    summary: "final loop output does not satisfy the loop output signature",
+    notes: issues,
+    improvement: "Fix the final step output, output projection, or loop.signature.output so terminal values match the promised loop output.",
+  }
+}
+
 /** Fresh run id: loopId + timestamp + entropy. Exposed so a driver can lease the run dir BEFORE the first journal write. */
 export function newRunId(loop: Loop): string {
   return `${loop.id}-${now().replace(/[-:T]/g, "").slice(0, 14)}-${randomBytes(3).toString("hex")}`
@@ -90,6 +234,7 @@ export function startRun<I>(loop: Loop<I, any>, inputs: I, deps: EngineDeps, opt
   if (existsSync(path)) {
     throw new Error(`Run \`${runId}\` already has a journal at \`${path}\`. Resume it instead of starting it again.`)
   }
+  assertRunDirOutsideWorkdir(dirname(path), deps.workdir)
   const ledger = new Ledger(path)
   ledger.append({
     type: "meta",
@@ -120,6 +265,7 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
   if (state.status !== "running") throw new Error(`Run \`${state.runId}\` is ${state.status}; nothing to tick.`)
   const step = loop.steps[state.stepIndex]
   if (!step) throw new Error(`Run \`${state.runId}\` has no step at index ${state.stepIndex}.`)
+  assertRunDirOutsideWorkdir(dirname(ledger.path), deps.workdir)
 
   // 1. Render the spec: validate inputs against the step signature.
   const inputs = step.signature.input.parse(state.values) as Record<string, unknown>
@@ -168,6 +314,8 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
   // snapshot at a known place under the run dir.
   const deliveredSkills =
     skillsDelivery === "prompt" ? snapshotSkills(stepSkills, join(dirname(ledger.path), "skills-snapshot")) : stepSkills
+
+  const contract = step.contract ? deps.contracts.lookup(step.contract) : null
 
   ledger.append({
     type: "step_started",
@@ -221,17 +369,10 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
     ...(prompt !== undefined ? { prompt } : {}),
     ...(skillsDelivery === "native" ? { skills: stepSkills } : {}),
   }
-  let result: StepResult
-  try {
-    result = await executor.run(spec, { workdir: deps.workdir, ...(deps.memory ? { memory: deps.memory } : {}) })
-  } catch (error) {
-    result = {
-      status: "failed",
-      output: { error: error instanceof Error ? error.message : String(error) },
-      evidence: [],
-      usage: zeroUsage(),
-    }
-  }
+  const result = await runExecutorWithTimeout(executor, spec, {
+    workdir: deps.workdir,
+    ...(deps.memory ? { memory: deps.memory } : {}),
+  })
   const effects: EffectObservation = await observer.assess(deps.workdir, before, step.effects)
 
   // 5. Project engine-observed fields over the executor's output (e.g. an
@@ -241,17 +382,15 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
   const output = step.outputFrom ? { ...result.output, ...step.outputFrom(result, effects) } : result.output
   const outputParse = step.signature.output.safeParse(output)
   const outputValid = result.status === "completed" && outputParse.success
-  let contractResult: ContractResult | null = null
-  if (step.contract) {
-    contractResult = deps.contracts.lookup(step.contract).validate(output, {
-      traceId: state.traceId,
-      loopId: loop.id,
-      loopVersion: loop.version,
-      workdir: deps.workdir,
-      executorId: executor.id,
-      runDir: dirname(ledger.path),
-    })
+  const contractCtx: ContractContext = {
+    traceId: state.traceId,
+    loopId: loop.id,
+    loopVersion: loop.version,
+    workdir: deps.workdir,
+    executorId: executor.id,
+    runDir: dirname(ledger.path),
   }
+  const contractResult = contract ? validateContract(contract, output, contractCtx) : null
 
   ledger.append({ type: "step_result", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, status: result.status, output, outputValid, evidence: result.evidence, usage: result.usage, at: now() })
   if (contractResult) ledger.append({ type: "contract", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, result: contractResult, at: now() })
@@ -280,7 +419,7 @@ export async function tick(run: Run, deps: EngineDeps): Promise<TickOutcome> {
     unexpectedChanges: effects.unexpected,
     output: validatedOutput,
   }
-  const decision = loop.policy(observation)
+  const decision = applyFinalOutputGuard(loop, state, loop.policy(observation), validatedOutput)
   ledger.append({ type: "decision", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, decision, at: now() })
 
   // 7. Advance state. The journal is the only durable state; this is its projection.
@@ -311,8 +450,8 @@ function replayTick(run: Run, deps: EngineDeps, step: Step, key: string, journal
     if (ledgered) {
       contractResult = ledgered.result
     } else {
-      // Crash landed before the contract entry: recompute (deterministic) and append it.
-      contractResult = deps.contracts.lookup(step.contract).validate(output, {
+      const contract = deps.contracts.lookup(step.contract)
+      contractResult = validateContract(contract, output, {
         traceId: state.traceId,
         loopId: loop.id,
         loopVersion: loop.version,
@@ -351,7 +490,7 @@ function replayTick(run: Run, deps: EngineDeps, step: Step, key: string, journal
     unexpectedChanges: effects.unexpected,
     output: validatedOutput,
   }
-  const decision = loop.policy(observation)
+  const decision = applyFinalOutputGuard(loop, state, loop.policy(observation), validatedOutput)
   ledger.append({ type: "decision", key, stepId: step.id, attempt: state.attempt, iteration: state.iteration, decision, at: now() })
   run.state = nextState(loop, state, decision, validatedOutput ?? {})
   return { state: run.state, decision }

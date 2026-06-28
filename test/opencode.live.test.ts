@@ -35,7 +35,7 @@ describe("opencode live proof", () => {
     "runs a no-effects opencode step through the Executor seam",
     async () => {
       const executor = new OpencodeExecutor()
-      const result = await executor.run(spec(), { workdir: mkdtempSync(join(tmpdir(), "vernier-opencode-live-work-")) })
+      const result = await executor.run(spec(), { workdir: mkdtempSync(join(tmpdir(), "vernier-opencode-live-work-")) , signal: AbortSignal.timeout(600_000) })
       expect(result.status).toBe("completed")
       expect(String(result.output.text).length).toBeGreaterThan(0)
       expect(result.usage.inputTokens).toBeGreaterThan(0)

@@ -16,7 +16,7 @@
 // `continue` inversion — anything (cron, a human, another agent) can advance
 // a run one step, and the engine, not the caller, knows what is next.
 
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { register as registerModuleHooks } from "node:module"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
@@ -386,12 +386,75 @@ function parseInputs(entry: RegisteredLoop, flags: Flags): Record<string, unknow
   return inputs as Record<string, unknown>
 }
 
-function loadJournal(runId: string | undefined): { runId: string; path: string; entries: LedgerEntry[]; summary: JournalSummary } {
+
+function canonicalJournalPath(path: string): string {
+  return existsSync(path) ? realpathSync.native(path) : resolve(path)
+}
+
+function ledgerRoots(registry: ReadonlyMap<string, RegisteredLoop>): readonly string[] {
+  const roots = new Set<string>()
+  roots.add(resolveLedgerRoot({}))
+  for (const entry of registry.values()) {
+    roots.add(resolveLedgerRoot(entry.loop.ledger))
+  }
+  return [...roots]
+}
+
+async function inspectionLedgerRoots(): Promise<readonly string[]> {
+  try {
+    return ledgerRoots(loopRegistry(await loadConfig()))
+  } catch {
+    return [resolveLedgerRoot({})]
+  }
+}
+
+function journalIds(roots: readonly string[]): readonly { root: string; runId: string; path: string }[] {
+  const out: { root: string; runId: string; path: string }[] = []
+  for (const root of roots) {
+    const runsDir = join(root, "runs")
+    let ids: string[] = []
+    try {
+      ids = readdirSync(runsDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name)
+    } catch {
+      ids = []
+    }
+    for (const runId of ids) {
+      out.push({ root, runId, path: canonicalJournalPath(journalPath(root, runId)) })
+    }
+  }
+  return out
+}
+
+function loadJournal(
+  runId: string | undefined,
+  roots: readonly string[],
+): { runId: string; path: string; entries: LedgerEntry[]; summary: JournalSummary } {
   if (!runId) throw new UsageError("Missing <runId>. See `vernier runs`.")
-  const root = resolveLedgerRoot({})
-  const path = journalPath(root, runId)
-  const entries = Ledger.load(path)
-  if (entries.length === 0) throw new UsageError(`No run \`${runId}\` under \`${root}\` (no journal at ${path}). See \`vernier runs\`.`)
+  const candidates: { path: string; entries: LedgerEntry[] }[] = []
+  const seen = new Set<string>()
+  for (const root of roots) {
+    const rawPath = journalPath(root, runId)
+    const key = existsSync(rawPath) ? realpathSync.native(rawPath) : resolve(rawPath)
+    if (seen.has(key)) continue
+    seen.add(key)
+    const entries = Ledger.load(rawPath)
+    if (entries.length > 0) {
+      const path = canonicalJournalPath(rawPath)
+      candidates.push({ path, entries })
+    }
+  }
+  if (candidates.length === 0) {
+    const searched = roots.map((root) => journalPath(root, runId)).join(", ")
+    throw new UsageError(`No run \`${runId}\` under searched ledger roots (no journals at ${searched}). See \`vernier runs\`.`)
+  }
+  if (candidates.length > 1) {
+    throw new UsageError(
+      `Run \`${runId}\` exists in multiple ledger roots: ${candidates.map((c) => c.path).join(", ")}. Pass a unique run id or move one journal.`,
+    )
+  }
+  const { path, entries } = candidates[0]!
   return { runId, path, entries, summary: summarizeJournal(entries) }
 }
 
@@ -425,7 +488,7 @@ function printOutcome(run: Run, outcome: TickOutcome, flags: Flags, extra: Recor
       attempt: state.attempt,
       decision: { kind: decision.kind, classification: decision.classification, summary: decision.summary },
       output,
-      journal: run.ledger.path,
+      journal: canonicalJournalPath(run.ledger.path),
       ...extra,
     })
     return
@@ -699,7 +762,7 @@ interface ResumeTarget {
 }
 
 function resumeTarget(flags: Flags, registry: ReadonlyMap<string, RegisteredLoop>): ResumeTarget {
-  const { runId, path, summary } = loadJournal(flags.positionals[0])
+  const { runId, path, summary } = loadJournal(flags.positionals[0], ledgerRoots(registry))
   const meta = summary.meta
   if (!meta) throw new UsageError(`Run \`${runId}\` has a journal but no meta entry; it cannot be resumed.`)
   const entry = lookupLoop(registry, meta.loopId)
@@ -738,7 +801,7 @@ async function cmdTickOrResume(flags: Flags, mode: "tick" | "resume"): Promise<n
           status: run.state.status,
           alreadyTerminal: true,
           decision: lastDecision ? { kind: lastDecision.kind, classification: lastDecision.classification, summary: lastDecision.summary } : null,
-          journal: run.ledger.path,
+          journal: canonicalJournalPath(run.ledger.path),
         })
       } else {
         out(`run ${run.state.runId} is already terminal: ${run.state.status}. Nothing to ${mode}.`)
@@ -754,36 +817,28 @@ async function cmdTickOrResume(flags: Flags, mode: "tick" | "resume"): Promise<n
   }
 }
 
-function cmdRuns(flags: Flags): number {
-  const root = resolveLedgerRoot({})
-  const runsDir = join(root, "runs")
-  let ids: string[] = []
-  try {
-    ids = readdirSync(runsDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name)
-  } catch {
-    ids = [] // no runs yet
-  }
-  const summaries = ids
-    .map((id) => ({ runId: id, summary: summarizeJournal(Ledger.load(journalPath(root, id))) }))
+async function cmdRuns(flags: Flags): Promise<number> {
+  const roots = await inspectionLedgerRoots()
+  const summaries = journalIds(roots)
+    .map(({ runId, path }) => ({ runId, path, summary: summarizeJournal(Ledger.load(path)) }))
     .filter((r) => r.summary.meta !== undefined)
     .sort((a, b) => (a.summary.startedAt ?? "").localeCompare(b.summary.startedAt ?? ""))
   if (flags.json) {
     json(
-      summaries.map(({ runId, summary }) => ({
+      summaries.map(({ runId, path, summary }) => ({
         runId,
         loopId: summary.meta?.loopId,
         loopVersion: summary.meta?.loopVersion,
         status: summary.status,
         lastStep: summary.lastStep ?? null,
         startedAt: summary.startedAt,
+        journal: path,
       })),
     )
     return EXIT.ok
   }
   if (summaries.length === 0) {
-    note(`no runs under ${runsDir}`)
+    note(`no runs under ${roots.map((root) => join(root, "runs")).join(", ")}`)
     return EXIT.ok
   }
   for (const { runId, summary } of summaries) {
@@ -792,8 +847,8 @@ function cmdRuns(flags: Flags): number {
   return EXIT.ok
 }
 
-function cmdShow(flags: Flags): number {
-  const { runId, path, entries, summary } = loadJournal(flags.positionals[0])
+async function cmdShow(flags: Flags): Promise<number> {
+  const { runId, path, entries, summary } = loadJournal(flags.positionals[0], await inspectionLedgerRoots())
   // The timeline is a pure derivation of the journal (ledger/stats.ts);
   // this command only loads and renders.
   const timeline = buildTimeline(entries)
@@ -845,32 +900,23 @@ function parseStatsFlags(flags: Flags): { loop: string | null; last: number | nu
   return { loop: flags.loop ?? null, last, prices }
 }
 
-function cmdStats(flags: Flags): number {
+async function cmdStats(flags: Flags): Promise<number> {
   const { loop, last, prices } = parseStatsFlags(flags)
-  const root = resolveLedgerRoot({})
-  const runsDir = join(root, "runs")
-  let ids: string[] = []
-  try {
-    ids = readdirSync(runsDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name)
-  } catch {
-    ids = [] // no runs yet
-  }
-  let rows = ids
-    .map((id) => runStatsRow(id, Ledger.load(journalPath(root, id))))
-    .filter((r): r is RunStatsRow => r !== null)
+  const roots = await inspectionLedgerRoots()
+  let rows = journalIds(roots)
+    .map(({ runId, path }) => ({ row: runStatsRow(runId, Ledger.load(path)), journal: path }))
+    .filter((entry): entry is { row: RunStatsRow; journal: string } => entry.row !== null)
+    .map(({ row, journal }) => ({ ...row, journal }))
     .sort((a, b) => (a.startedAt ?? "").localeCompare(b.startedAt ?? "") || a.runId.localeCompare(b.runId))
   if (loop !== null) rows = rows.filter((r) => r.loopId === loop)
   if (last !== null) rows = rows.slice(-last)
   const rollups = rollupByLoop(rows)
   if (flags.json) {
-    // Computed cost appears ONLY when prices were supplied; reportedCostUsd
-    // (inside totals) is what executors themselves billed, always present.
     const withCost = <T extends { totals: RunStatsRow["totals"] }>(item: T): T & { costUsd?: number } =>
       prices === null ? item : { ...item, costUsd: computedCostUsd(item.totals, prices) }
     json({
-      ledgerRoot: root,
+      ledgerRoot: resolveLedgerRoot({}),
+      ledgerRoots: roots,
       filters: { loop, last },
       prices,
       runs: rows.map(withCost),
@@ -879,7 +925,7 @@ function cmdStats(flags: Flags): number {
     return EXIT.ok
   }
   if (rows.length === 0) {
-    note(`no runs under ${runsDir}${loop === null ? "" : ` for loop \`${loop}\``}`)
+    note(`no runs under ${roots.map((root) => join(root, "runs")).join(", ")}${loop === null ? "" : ` for loop \`${loop}\``}`)
     return EXIT.ok
   }
   for (const line of renderStats(rows, rollups, prices)) out(line)

@@ -14,13 +14,53 @@ export interface ScriptOutcome {
 
 export type ScriptFn = (spec: StepSpec, ctx: RunContext) => ScriptOutcome | Promise<ScriptOutcome>
 
+function isTimeoutAbortReason(reason: unknown): boolean {
+  const message = reason instanceof Error ? reason.message : String(reason)
+  return message.includes("timeout") || message.includes("timed out")
+}
+
+function stepTimedOutMessage(timeoutMs: number): string {
+  return `step timed out after ${timeoutMs}ms`
+}
+
 export function scriptExecutor(id: string, fn: ScriptFn): Executor {
   return {
     id,
     async run(spec, ctx): Promise<StepResult> {
       const startedAt = Date.now()
-      const { output, evidence = [] } = await fn(spec, ctx)
-      return { status: "completed", output, evidence, usage: zeroUsage(Date.now() - startedAt) }
+      const complete = async (): Promise<StepResult> => {
+        try {
+          const { output, evidence = [] } = await fn(spec, ctx)
+          if (ctx.signal.aborted && isTimeoutAbortReason(ctx.signal.reason)) {
+            throw new Error(stepTimedOutMessage(spec.timeoutMs))
+          }
+          return { status: "completed", output, evidence, usage: zeroUsage(Date.now() - startedAt) }
+        } catch (error) {
+          if (ctx.signal.aborted && isTimeoutAbortReason(ctx.signal.reason)) {
+            throw new Error(stepTimedOutMessage(spec.timeoutMs))
+          }
+          throw error
+        }
+      }
+      const onAbort = (): Promise<StepResult> => {
+        const reason = ctx.signal.reason
+        if (isTimeoutAbortReason(reason)) {
+          return Promise.reject(new Error(stepTimedOutMessage(spec.timeoutMs)))
+        }
+        return Promise.reject(reason instanceof Error ? reason : new Error(String(reason ?? "aborted")))
+      }
+      if (ctx.signal.aborted) return onAbort()
+      let removeAbortListener = (): void => undefined
+      const abort = new Promise<StepResult>((_, reject) => {
+        const listener = () => void onAbort().catch(reject)
+        ctx.signal.addEventListener("abort", listener, { once: true })
+        removeAbortListener = () => ctx.signal.removeEventListener("abort", listener)
+      })
+      try {
+        return await Promise.race([complete(), abort])
+      } finally {
+        removeAbortListener()
+      }
     },
   }
 }

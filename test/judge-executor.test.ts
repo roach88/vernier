@@ -62,7 +62,7 @@ const canned: AgentResult = {
 describe("JudgeExecutor", () => {
   it("maps the provider's structured verdict onto StepResult.output", async () => {
     const { worker } = recordingWorker(canned)
-    const result = await new JudgeExecutor({ worker }).run(spec(), { workdir: workdir() })
+    const result = await new JudgeExecutor({ worker }).run(spec(), { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(result.status).toBe("completed")
     expect(result.output).toEqual(verdict)
     expect(result.usage.inputTokens).toBe(10)
@@ -72,7 +72,7 @@ describe("JudgeExecutor", () => {
     const { worker, seen } = recordingWorker(canned)
     const judge = new JudgeExecutor({ worker })
     expect(judge.provider).toBe("codex")
-    await judge.run(spec(), { workdir: workdir() })
+    await judge.run(spec(), { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(seen[0]!.provider).toBe("codex")
   })
 
@@ -90,7 +90,7 @@ describe("JudgeExecutor", () => {
     const judge = new JudgeExecutor({ worker: claudeBacked })
     // The injected worker's identity wins; doctor probes THIS provider's binary.
     expect(judge.provider).toBe("claude-code")
-    const result = await judge.run(spec(), { workdir: workdir() })
+    const result = await judge.run(spec(), { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(result.output).toEqual(verdict)
     expect(seen[0]).toMatchObject({ provider: "claude-code", sandbox: "read-only", approval: "never" })
   })
@@ -103,14 +103,14 @@ describe("JudgeExecutor", () => {
 
   it("pins the sandbox to read-only regardless of the step's effect scope — a judge never writes", async () => {
     const { worker, seen } = recordingWorker(canned)
-    await new JudgeExecutor({ worker }).run(spec({ effects: fsScope("anything/**") }), { workdir: workdir() })
+    await new JudgeExecutor({ worker }).run(spec({ effects: fsScope("anything/**") }), { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(seen[0]!.sandbox).toBe("read-only")
     expect(seen[0]!.approval).toBe("never")
   })
 
   it("hands the engine-derived outputSchema to the provider unchanged", async () => {
     const { worker, seen } = recordingWorker(canned)
-    await new JudgeExecutor({ worker }).run(spec(), { workdir: workdir() })
+    await new JudgeExecutor({ worker }).run(spec(), { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(seen[0]!.schema).toEqual(verdictSchema)
   })
 
@@ -118,7 +118,7 @@ describe("JudgeExecutor", () => {
     const { worker } = recordingWorker(canned)
     const promptless = { ...spec() } as Record<string, unknown>
     delete promptless.outputSchema
-    await expect(new JudgeExecutor({ worker }).run(promptless as unknown as StepSpec, { workdir: workdir() })).rejects.toThrow(
+    await expect(new JudgeExecutor({ worker }).run(promptless as unknown as StepSpec, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })).rejects.toThrow(
       /structuredOutput: true/,
     )
   })
@@ -127,7 +127,7 @@ describe("JudgeExecutor", () => {
     const { worker } = recordingWorker(canned)
     const promptless = { ...spec() } as Record<string, unknown>
     delete promptless.prompt
-    await expect(new JudgeExecutor({ worker }).run(promptless as unknown as StepSpec, { workdir: workdir() })).rejects.toThrow(
+    await expect(new JudgeExecutor({ worker }).run(promptless as unknown as StepSpec, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })).rejects.toThrow(
       /without a rendered prompt/,
     )
   })
@@ -135,7 +135,7 @@ describe("JudgeExecutor", () => {
   it("writes judge evidence (prompt, events, verdict) under runDir, never the workdir", async () => {
     const { worker } = recordingWorker(canned)
     const s = spec()
-    const result = await new JudgeExecutor({ worker }).run(s, { workdir: workdir() })
+    const result = await new JudgeExecutor({ worker }).run(s, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(result.evidence.map((e) => e.role)).toEqual(["judge-prompt", "judge-events", "judge-verdict"])
     for (const ref of result.evidence) {
       expect(ref.path.startsWith(s.runDir)).toBe(true)
@@ -147,13 +147,13 @@ describe("JudgeExecutor", () => {
   it("prefixes evidence by iteration so loop-back passes never overwrite earlier verdicts", async () => {
     const { worker } = recordingWorker(canned)
     const s = spec({ iteration: 2 })
-    await new JudgeExecutor({ worker }).run(s, { workdir: workdir() })
+    await new JudgeExecutor({ worker }).run(s, { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(existsSync(join(s.runDir, "iter-2-judge-verdict.json"))).toBe(true)
   })
 
   it("fails the step when the provider returns no structured verdict despite the schema", async () => {
     const { worker } = recordingWorker({ text: "just prose", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
-    const result = await new JudgeExecutor({ worker }).run(spec(), { workdir: workdir() })
+    const result = await new JudgeExecutor({ worker }).run(spec(), { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(result.status).toBe("failed")
     expect(String(result.output.error)).toContain("no structured verdict")
   })
@@ -166,7 +166,7 @@ describe("JudgeExecutor", () => {
       },
       async shutdown() {},
     }
-    const result = await new JudgeExecutor({ worker: failing }).run(spec(), { workdir: workdir() })
+    const result = await new JudgeExecutor({ worker: failing }).run(spec(), { workdir: workdir() , signal: AbortSignal.timeout(600_000) })
     expect(result.status).toBe("failed")
     expect(result.output).toMatchObject({ code: "turn_failed", retryable: true })
     expect(result.usage.inputTokens).toBe(7)

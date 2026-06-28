@@ -11,6 +11,7 @@ import { execFile } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { hostname, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { pathToFileURL } from "node:url"
 import { promisify } from "node:util"
 import { describe, expect, it } from "vitest"
 import { startRun } from "../src/engine/tick.js"
@@ -156,6 +157,111 @@ describe("vernier CLI", () => {
       "effects",
       "decision",
     ])
+  })
+
+  it("discovers runs from loop-specific ledger roots without mirroring into VERNIER_HOME", async () => {
+    const homeRoot = home()
+    const configDir = mkdtempSync(join(tmpdir(), "vernier-cli-custom-config-"))
+    const customLedger = join(configDir, "custom-ledger")
+    mkdirSync(customLedger, { recursive: true })
+    const smokeLoopPath = join(TEMPLATES, "smoke", "smoke-loop.mjs")
+    writeFileSync(
+      join(configDir, "vernier.config.mjs"),
+      `import smoke from ${JSON.stringify(pathToFileURL(smokeLoopPath).href)};
+const entry = smoke;
+export default {
+  loops: [{
+    ...entry,
+    loop: { ...entry.loop, ledger: { root: ${JSON.stringify(customLedger)} } },
+  }],
+};
+`,
+      "utf8",
+    )
+
+    const run = await cli({ home: homeRoot, config: join(configDir, "vernier.config.mjs") }, "run", "control-plane-smoke-test", "--json")
+    expect(run.code).toBe(0)
+    const outcome = JSON.parse(run.stdout) as { runId: string; journal: string }
+    expect(outcome.journal).toContain(customLedger)
+    expect(existsSync(journalPath(homeRoot, outcome.runId))).toBe(false)
+
+    const show = await cli({ home: homeRoot, config: join(configDir, "vernier.config.mjs") }, "show", outcome.runId, "--json")
+    expect(show.code).toBe(0)
+    expect(JSON.parse(show.stdout)).toMatchObject({ runId: outcome.runId, journal: outcome.journal })
+
+    const resume = await cli({ home: homeRoot, config: join(configDir, "vernier.config.mjs") }, "resume", outcome.runId, "--json")
+    expect(resume.code).toBe(0)
+    expect(JSON.parse(resume.stdout)).toMatchObject({ runId: outcome.runId, alreadyTerminal: true })
+
+    const runs = await cli({ home: homeRoot, config: join(configDir, "vernier.config.mjs") }, "runs", "--json")
+    expect(runs.code).toBe(0)
+    const listed = JSON.parse(runs.stdout) as Array<{ runId: string; journal: string }>
+    expect(listed).toEqual(expect.arrayContaining([expect.objectContaining({ runId: outcome.runId, journal: outcome.journal })]))
+
+    const stats = await cli({ home: homeRoot, config: join(configDir, "vernier.config.mjs") }, "stats", "--json")
+    expect(stats.code).toBe(0)
+    const statsDoc = JSON.parse(stats.stdout) as { runs: Array<{ runId: string; journal: string }> }
+    expect(statsDoc.runs).toEqual(expect.arrayContaining([expect.objectContaining({ runId: outcome.runId, journal: outcome.journal })]))
+  })
+
+  it("ledger inspection commands still read the default root when config is broken", async () => {
+    const root = home()
+    const ran = await cli(root, "run", "control-plane-smoke-test", "--json")
+    expect(ran.code).toBe(0)
+    const outcome = JSON.parse(ran.stdout) as { runId: string; journal: string }
+    const configDir = mkdtempSync(join(tmpdir(), "vernier-cli-bad-config-"))
+    const badConfig = join(configDir, "vernier.config.mjs")
+    writeFileSync(badConfig, "import './missing-module.mjs';\nexport default { loops: [] };\n", "utf8")
+
+    const show = await cli({ home: root, config: badConfig }, "show", outcome.runId, "--json")
+    expect(show.code).toBe(0)
+    expect(JSON.parse(show.stdout)).toMatchObject({ runId: outcome.runId, journal: outcome.journal })
+
+    const runs = await cli({ home: root, config: badConfig }, "runs", "--json")
+    expect(runs.code).toBe(0)
+    expect(JSON.parse(runs.stdout)).toEqual(expect.arrayContaining([expect.objectContaining({ runId: outcome.runId, journal: outcome.journal })]))
+
+    const stats = await cli({ home: root, config: badConfig }, "stats", "--json")
+    expect(stats.code).toBe(0)
+    const statsDoc = JSON.parse(stats.stdout) as { runs: Array<{ runId: string; journal: string }> }
+    expect(statsDoc.runs).toEqual(expect.arrayContaining([expect.objectContaining({ runId: outcome.runId, journal: outcome.journal })]))
+  })
+
+
+  it("does not treat explicit relative ledger roots as duplicate default roots", async () => {
+    const project = mkdtempSync(join(tmpdir(), "vernier-cli-relative-ledger-"))
+    const ledgerRoot = join(project, ".vernier")
+    mkdirSync(ledgerRoot, { recursive: true })
+    const smokeLoopPath = join(TEMPLATES, "smoke", "smoke-loop.mjs")
+    const configPath = join(project, "vernier.config.mjs")
+    writeFileSync(
+      configPath,
+      `import smoke from ${JSON.stringify(pathToFileURL(smokeLoopPath).href)};
+const entry = smoke;
+export default {
+  loops: [{
+    ...entry,
+    loop: { ...entry.loop, ledger: { root: ".vernier" } },
+  }],
+};
+`,
+      "utf8",
+    )
+
+    const run = await cli({ home: ledgerRoot, config: configPath, cwd: project }, "run", "control-plane-smoke-test", "--json")
+    expect(run.code).toBe(0)
+    const outcome = JSON.parse(run.stdout) as { runId: string; journal: string }
+    const show = await cli({ home: ledgerRoot, config: configPath, cwd: project }, "show", outcome.runId, "--json")
+    expect(show.code).toBe(0)
+    const shown = JSON.parse(show.stdout) as { runId: string; journal: string }
+    expect(shown.runId).toBe(outcome.runId)
+    expect(shown.journal).toContain(`${outcome.runId}/journal.jsonl`)
+
+    const stats = await cli({ home: ledgerRoot, config: configPath, cwd: project }, "stats", "--json")
+    expect(stats.code).toBe(0)
+    const statsJson = JSON.parse(stats.stdout) as { ledgerRoots: string[]; runs: Array<{ runId: string }> }
+    expect(statsJson.ledgerRoots).toContain(ledgerRoot)
+    expect(statsJson.runs.map((r) => r.runId)).toContain(outcome.runId)
   })
 
   it("`run` accepts --input and honors it", async () => {

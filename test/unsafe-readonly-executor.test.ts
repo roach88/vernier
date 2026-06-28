@@ -75,7 +75,7 @@ describe.each(cases)("$label", (c) => {
   it("maps a worker text turn onto StepResult and writes evidence under runDir", async () => {
     const { worker } = recordingWorker(c.provider, { text: `${c.provider} ok`, status: "completed", usage: { inputTokens: 1, outputTokens: 2, costUsd: 0 } })
     const s = spec(c.provider)
-    const result = await c.make(worker).run(s, { workdir: workdir(c.provider) })
+    const result = await c.make(worker).run(s, { workdir: workdir(c.provider), signal: AbortSignal.timeout(600_000) })
 
     expect(result.status).toBe("completed")
     expect(result.output).toEqual({ text: `${c.provider} ok` })
@@ -104,7 +104,7 @@ describe.each(cases)("$label", (c) => {
           required: ["passed"],
         },
       }),
-      { workdir: workdir(c.provider) },
+      { workdir: workdir(c.provider), signal: AbortSignal.timeout(600_000) },
     )
 
     expect(result.status).toBe("completed")
@@ -114,7 +114,7 @@ describe.each(cases)("$label", (c) => {
   it("hands the worker its only accepted sandbox (danger-full-access) for noEffects steps", async () => {
     const { worker, seen } = recordingWorker(c.provider, { text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
     const wd = workdir(c.provider)
-    await c.make(worker, c.model).run(spec(c.provider), { workdir: wd })
+    await c.make(worker, c.model).run(spec(c.provider), { workdir: wd, signal: AbortSignal.timeout(600_000) })
 
     expect(seen[0]).toMatchObject({
       provider: c.provider,
@@ -136,7 +136,7 @@ describe.each(cases)("$label", (c) => {
       async shutdown() {},
     }
     const s = spec(c.provider, { effects: fsScope("docs/**") })
-    const result = await c.make(worker).run(s, { workdir: workdir(c.provider) })
+    const result = await c.make(worker).run(s, { workdir: workdir(c.provider), signal: AbortSignal.timeout(600_000) })
 
     expect(invoked).toBe(false)
     expect(result.status).toBe("failed")
@@ -149,7 +149,7 @@ describe.each(cases)("$label", (c) => {
   it("labels retry-attempt evidence with the same retry prefix as other executors", async () => {
     const { worker } = recordingWorker(c.provider, { text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
     const s = spec(c.provider, { attempt: 2 })
-    await c.make(worker).run(s, { workdir: workdir(c.provider) })
+    await c.make(worker).run(s, { workdir: workdir(c.provider), signal: AbortSignal.timeout(600_000) })
     expect(existsSync(join(s.runDir, `retry-2-${c.provider}-final.md`))).toBe(true)
   })
 
@@ -168,7 +168,7 @@ describe.each(cases)("$label", (c) => {
       async shutdown() {},
     }
     const s = spec(c.provider)
-    const result = await c.make(failing).run(s, { workdir: workdir(c.provider) })
+    const result = await c.make(failing).run(s, { workdir: workdir(c.provider), signal: AbortSignal.timeout(600_000) })
 
     expect(result.status).toBe("failed")
     expect(result.output).toMatchObject({ code: c.failure.code, retryable: c.failure.retryable })
@@ -188,7 +188,7 @@ describe.each(cases)("$label", (c) => {
       async shutdown() {},
     }
 
-    const timedOut = await c.make(hanging).run(spec(c.provider, { timeoutMs: 50 }), { workdir: workdir(c.provider) })
+    const timedOut = await c.make(hanging).run(spec(c.provider, { timeoutMs: 50 }), { workdir: workdir(c.provider), signal: AbortSignal.timeout(600_000) })
     expect(timedOut.status).toBe("interrupted")
 
     const caller = new AbortController()
@@ -202,7 +202,7 @@ describe.each(cases)("$label", (c) => {
     const { worker } = recordingWorker(c.provider, { text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
     const promptless = { ...spec(c.provider) } as Record<string, unknown>
     delete promptless.prompt
-    await expect(c.make(worker).run(promptless as unknown as StepSpec, { workdir: workdir(c.provider) })).rejects.toThrow(
+    await expect(c.make(worker).run(promptless as unknown as StepSpec, { workdir: workdir(c.provider), signal: AbortSignal.timeout(600_000) })).rejects.toThrow(
       /without a rendered prompt/,
     )
   })

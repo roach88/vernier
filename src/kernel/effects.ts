@@ -8,7 +8,7 @@ import { readdirSync, readFileSync } from "node:fs"
 import { join, relative } from "node:path"
 import type { EffectScope, OutputProjection } from "./types.js"
 
-const SKIP_DIRS = new Set([".git", "node_modules", ".vernier"])
+const SKIP_DIRS = new Set([".git", "node_modules"])
 
 /** Map of workdir-relative posix path -> sha256 of contents. */
 export type Snapshot = ReadonlyMap<string, string>
