@@ -8,7 +8,7 @@ Vernier validates inputs and outputs, observes file effects, and records an
 append-only `journal.jsonl` so every run can be inspected, resumed, and
 audited.
 
-[Walkthrough](docs/walkthrough.md) · [Provider details](docs/provider-executors.md) · [Templates](templates) · [Examples](examples/getting-started) · [License notices](NOTICE)
+[Walkthrough](docs/walkthrough.md) · [Provider details](docs/provider-executors.md) · [Templates](templates) · [Agent Skills](.agents/skills) · [License notices](NOTICE)
 
 ## Install
 
@@ -163,8 +163,8 @@ scaffolded loop. Once your project installs dependencies, the project's
 
 - First principles and a full guided tour: [docs/walkthrough.md](docs/walkthrough.md)
 - Provider-specific behavior and live Cursor proof gates: [docs/provider-executors.md](docs/provider-executors.md)
-- Small runnable modules: [examples/getting-started](examples/getting-started)
 - Template source and template-local READMEs: [templates](templates)
+- Agent Skill references for operating and extending Vernier: [.agents/skills](.agents/skills)
 - Vendored licenses and attribution: [NOTICE](NOTICE)
 
 ## Development

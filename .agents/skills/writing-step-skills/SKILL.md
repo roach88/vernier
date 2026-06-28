@@ -35,7 +35,7 @@ my-skill/
 anywhere inside the tree is refused at delivery (it would break the
 byte-for-byte snapshot and could exfiltrate out-of-tree files into a
 provider plugin). The skill DIRECTORY itself may be a symlink — the
-`.claude/skills` marketplace install shape — it is resolved first.
+`.agents/skills` marketplace install shape — it is resolved first.
 
 ## Registering and binding
 
@@ -43,7 +43,8 @@ Discovery tiers (earlier wins name collisions):
 
 1. `vernier.config` `skills` paths — a `SKILL.md`, a skill dir, or a
    parent dir of skill dirs. Duplicates within this tier are an error.
-2. `<project>/.claude/skills/` 3. `~/.claude/skills/`
+2. `<project>/.agents/skills/`
+3. `~/.agents/skills/`
 
 Binding mirrors executors exactly — keys are a step id or an executor
 role id (the loop's DECLARED vocabulary):
@@ -59,7 +60,7 @@ flags for one key ACCUMULATE (a step can carry several skills);
 prompt template.
 
 ```json
-{ "skills": ["./skills"], "skillBindings": { "implement": ["house-style"] } }
+{ "skills": ["./.agents/skills"], "skillBindings": { "implement": ["house-style"] } }
 ```
 
 ## How delivery works (write for both modes)
@@ -105,7 +106,7 @@ first journal write, listing the discovered inventory.
 
 | symptom | cause |
 |---|---|
-| "Unresolved skill binding(s)" (exit 2) | name not discovered — register the path in config `skills` or place under `.claude/skills`; the error lists what WAS discovered |
+| "Unresolved skill binding(s)" (exit 2) | name not discovered — register the path in config `skills` or place under `.agents/skills`; the error lists what WAS discovered |
 | skill listed `!!` in `vernier skills` | spec violation — message names the rule (frontmatter missing, name/dir mismatch, length) |
 | "contains a symlink" failure | a symlink inside the skill tree — ship real files instead |
 | "declares skills but no prompt template" | skills travel through the prompt seam — give the step a prompt |

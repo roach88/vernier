@@ -207,9 +207,9 @@ describe("ClaudeExecutor", () => {
     expect(result.evidence.map((e) => e.role)).not.toContain("skills-plugin")
   })
 
-  it("a SYMLINKED skill dir (the .claude/skills marketplace install shape) is resolved and copied as a real tree, not a bare link", async () => {
+  it("a SYMLINKED skill dir (the .agents/skills marketplace install shape) is resolved and copied as a real tree, not a bare link", async () => {
     const { worker, seen } = recordingWorker({ text: "ok", status: "completed", usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
-    // The real skill lives in a "cache"; ~/.claude/skills/<name> would be a link to it.
+    // The real skill lives in a "cache"; ~/.agents/skills/<name> would be a link to it.
     const cache = mkdtempSync(join(tmpdir(), "vernier-skill-cache-"))
     const real = join(cache, "aliased-skill")
     mkdirSync(join(real, "scripts"), { recursive: true })

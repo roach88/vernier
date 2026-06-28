@@ -46,7 +46,6 @@ const allTemplatesRegistry = () => loopRegistry(ALL_TEMPLATES)
 const probes = (over: Partial<DoctorProbes> = {}): DoctorProbes => ({
   which: () => undefined,
   env: () => ({}),
-  zodInstalls: () => [],
   ...over,
 })
 
@@ -165,6 +164,7 @@ describe("diagnose()", () => {
   it("ZERO loops registered: the baseline executor set is still probed, loops say none, exit-0 semantics", async () => {
     const report = await diagnose(loopRegistry(), undefined, probes())
     expect(report.loops).toEqual([])
+    expect(report.warnings).toEqual([])
     expect(report.ok).toBe(true) // nothing registered = nothing broken
     // The environment question is still answered: what could this machine run?
     for (const id of ["codex", "cursor-agent", "claude", "opencode", "pi"]) {
@@ -288,7 +288,7 @@ describe("diagnose()", () => {
   it("a broken-runtime loop STILL reports its declared skills, so a user-tier skill it needs is not elided from the inventory", async () => {
     // A user-tier skill referenced ONLY by a loop whose runtime throws.
     const home = mkdtempSync(join(tmpdir(), "vernier-doctor-skill-home-"))
-    const skillDir = join(home, ".claude", "skills", "broken-only-skill")
+    const skillDir = join(home, ".agents", "skills", "broken-only-skill")
     mkdirSync(skillDir, { recursive: true })
     writeFileSync(
       join(skillDir, "SKILL.md"),
@@ -337,7 +337,7 @@ describe("diagnose()", () => {
     expect(lines).not.toMatch(/\+ 1 more spec-valid skill/)
   })
 
-  describe("zod-skew derive-probe + shadow warning", () => {
+  describe("structuredOutput derive-probe", () => {
     // A registered loop with ONE structuredOutput step carrying `output`, on an
     // in-process executor that always probes ok — so schema derivation is the
     // only thing that can block the step.
@@ -392,59 +392,6 @@ describe("diagnose()", () => {
       expect(loopById(report, "structured")!.runnable).toBe(true)
     })
 
-    it("warns (without failing the doctor) when a second zod resolves above the project", async () => {
-      const shadowed = probes({
-        zodInstalls: () => [
-          { path: "/proj/node_modules/zod", version: "4.0.0" },
-          { path: "/shadow/node_modules/zod", version: "3.23.0" },
-        ],
-      })
-      const report = await diagnose(loopRegistry(), undefined, shadowed)
-      expect(report.warnings).toHaveLength(1)
-      expect(report.warnings[0]).toContain("/shadow/node_modules/zod")
-      expect(report.ok).toBe(true) // a shadow is a warning, not a failure
-      expect(renderDoctor(report).join("\n")).toContain("WARNINGS")
-    })
-
-    it("surfaces a shadow warning on the normal (non-empty registry) return path too, without blocking the loop", async () => {
-      const report = await diagnose(
-        structuredRegistry(z.object({ verdict: z.string() })),
-        undefined,
-        allFound({
-          zodInstalls: () => [
-            { path: "/proj/node_modules/zod", version: "4.0.0" },
-            { path: "/shadow/node_modules/zod", version: "3.23.0" },
-          ],
-        }),
-      )
-      expect(report.warnings).toHaveLength(1)
-      expect(loopById(report, "structured")!.runnable).toBe(true) // a shadow warning never blocks a loop
-    })
-
-    it("no warning when only the project's own zod is on the resolution path", async () => {
-      const report = await diagnose(
-        loopRegistry(),
-        undefined,
-        probes({ zodInstalls: () => [{ path: "/proj/node_modules/zod", version: "4.0.0" }] }),
-      )
-      expect(report.warnings).toEqual([])
-      expect(renderDoctor(report).join("\n")).not.toContain("WARNINGS")
-    })
-
-    it("does not warn when the zod install(s) above are the SAME version (not a skew)", async () => {
-      const report = await diagnose(
-        loopRegistry(),
-        undefined,
-        probes({
-          zodInstalls: () => [
-            { path: "/proj/node_modules/zod", version: "4.0.0" },
-            { path: "/workspace/node_modules/zod", version: "4.0.0" },
-          ],
-        }),
-      )
-      expect(report.warnings).toEqual([])
-      expect(renderDoctor(report).join("\n")).not.toContain("WARNINGS")
-    })
   })
 })
 

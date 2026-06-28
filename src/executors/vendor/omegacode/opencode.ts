@@ -283,8 +283,8 @@ export class OpencodeWorker implements Worker {
     if (ctx.signal.aborted) throw new AgentInterrupted()
     if (exit.code !== 0) {
       // Concurrent one-shot runs can race on opencode's local database ("database is locked",
-      // observed live with two parallel agents) — transient contention, so let withRetry back off
-      // instead of failing the agent on the first collision.
+      // observed live with two parallel agents) — surface it as retryable so the loop policy
+      // decides whether to try again instead of treating the first collision as terminal.
       if (/database is locked/i.test(exit.stderrTail)) {
         throw new AgentError({
           provider: PROVIDER,

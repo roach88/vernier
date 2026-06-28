@@ -68,5 +68,5 @@ export { scriptExecutor, type ScriptFn, type ScriptOutcome } from "./executors/s
 // The Memory seam: the durable rule store and its pluggable Retriever.
 // Lexical BM25 is the built-in default; construct Memory with your own
 // Retriever only after measured recall quality needs a different ranker.
-export { Memory, resolveMemoryRoot, retrieverFromEnv, rulesPath, type MemorySpec } from "./memory/memory.js"
+export { Memory, resolveMemoryRoot, rulesPath, type MemorySpec } from "./memory/memory.js"
 export { LexicalRetriever, lexicalRetriever, topicTokens, type Retriever } from "./memory/retriever.js"

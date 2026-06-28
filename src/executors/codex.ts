@@ -32,7 +32,7 @@ import type { AgentSpec, Sandbox } from "./vendor/omegacode/types.js"
 import { beginWorkerStep, requirePrompt, runWorkerStep } from "./worker-step.js"
 
 export interface CodexExecutorOpts {
-  /** Injectable worker (tests pass omegacode's FakeWorker). Default: a real CodexWorker. */
+  /** Injectable worker (tests pass scripted workers). Default: a real CodexWorker. */
   readonly worker?: Worker
   /** Codex binary when constructing the default worker. */
   readonly bin?: string

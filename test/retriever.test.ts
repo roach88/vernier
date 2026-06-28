@@ -8,7 +8,7 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { recallExecutor } from "../src/executors/memory.js"
 import { noEffects, type RuleRecord, type StepSpec } from "../src/kernel/types.js"
-import { Memory, retrieverFromEnv, rulesPath } from "../src/memory/memory.js"
+import { Memory, rulesPath } from "../src/memory/memory.js"
 import { lexicalRetriever } from "../src/memory/retriever.js"
 
 let seq = 0
@@ -94,10 +94,23 @@ describe("the seam, end-to-end", () => {
     expect(result.usage.costUsd).toBe(0) // still a deterministic store read, not an LLM turn
   })
 
-  it("retrieverFromEnv: lexical default, unknown named loudly", () => {
-    expect(retrieverFromEnv({}).id).toBe("lexical")
-    expect(retrieverFromEnv({ VERNIER_RETRIEVER: "lexical" }).id).toBe("lexical")
-    expect(() => retrieverFromEnv({ VERNIER_RETRIEVER: "embedding" })).toThrow(/valid value: lexical/)
-    expect(() => retrieverFromEnv({ VERNIER_RETRIEVER: "vibes" })).toThrow(/VERNIER_RETRIEVER/)
+  it("custom retrievers are injected through the Memory constructor", async () => {
+    const retrieved: RuleRecord[] = []
+    const memory = new Memory(rulesPath(mkdtempSync(join(tmpdir(), "vernier-custom-retriever-"))), {
+      id: "custom",
+      retrieve: (_topic, records) => {
+        retrieved.push(...records)
+        return []
+      },
+    })
+    await memory.remember({
+      rule: "Keep it direct.",
+      evidence: "e",
+      topic: "style guidance",
+      sourceRunId: "r",
+      loopId: "l",
+    })
+    expect(await memory.recall("style")).toEqual([])
+    expect(retrieved.map((r) => r.rule)).toEqual(["Keep it direct."])
   })
 })

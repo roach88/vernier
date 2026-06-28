@@ -29,9 +29,9 @@
 // Exit 0 iff every registered loop is runnable; an unusable executor no
 // step resolves to is reported but does not fail the doctor.
 
-import { mkdtempSync, readFileSync, statSync } from "node:fs"
+import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import { ClaudeExecutor } from "../executors/claude.js"
 import { CodexExecutor } from "../executors/codex.js"
 import { defaultWhich, resolveCursorBin } from "../executors/cursor-bin.js"
@@ -49,20 +49,12 @@ import type { RegisteredLoop } from "./registry.js"
 
 // ------------------------------------------------------------------- probes
 
-/** A node_modules/zod install on the resolution chain: its dir and the version its package.json declares (`""` when unreadable). */
-export interface ZodInstall {
-  readonly path: string
-  readonly version: string
-}
-
 /** The two environment questions doctor asks, injectable for tests. */
 export interface DoctorProbes {
   /** PATH lookup: absolute path of the first executable match, or undefined. Never runs the binary. */
   which(bin: string): string | undefined
   /** Environment relevant to executor probing. Tests inject this so local VERNIER_* vars do not leak into reports. */
   env(): NodeJS.ProcessEnv
-  /** Every node_modules/zod on the upward dir chain from cwd, nearest first, each with its declared version — the zod-skew shadow probe. Never imports zod. */
-  zodInstalls(): readonly ZodInstall[]
 }
 
 export const defaultProbes: DoctorProbes = {
@@ -70,33 +62,6 @@ export const defaultProbes: DoctorProbes = {
   env() {
     return process.env
   },
-  zodInstalls() {
-    const found: ZodInstall[] = []
-    let dir = process.cwd()
-    for (;;) {
-      const here = join(dir, "node_modules", "zod")
-      const manifest = join(here, "package.json")
-      try {
-        if (statSync(manifest).isFile()) found.push({ path: here, version: zodVersion(manifest) })
-      } catch {
-        // no zod install at this level; keep climbing
-      }
-      const parent = dirname(dir)
-      if (parent === dir) break
-      dir = parent
-    }
-    return found
-  },
-}
-
-/** A zod install's declared version; "" when its package.json is unreadable/unparseable (treated as a skew, never silently equal). */
-function zodVersion(manifest: string): string {
-  try {
-    const version = (JSON.parse(readFileSync(manifest, "utf8")) as { version?: unknown }).version
-    return typeof version === "string" ? version : ""
-  } catch {
-    return ""
-  }
 }
 
 // ------------------------------------------------------------------- report
@@ -152,7 +117,7 @@ export interface DoctorReport {
   /** The discovered skill inventory (config > project > user) plus standard-location skills that fail the spec. */
   readonly skills: readonly SkillReport[]
   readonly loops: readonly LoopReport[]
-  /** Non-fatal environment advisories — e.g. a second zod resolvable above the project (a skew shadow). Never affects `ok`. */
+  /** Non-fatal advisories, such as legacy `.claude/skills` fallback discovery. */
   readonly warnings: readonly string[]
   /** True iff every registered loop is runnable. The doctor's exit code. */
   readonly ok: boolean
@@ -230,40 +195,7 @@ function checkExecutor(executor: Executor, fromConfig: boolean, probes: DoctorPr
 }
 
 /** The empty skill registry: what diagnose assumes when the caller skipped discovery. */
-export const NO_SKILLS: SkillRegistry = { skills: new Map(), invalid: [] }
-
-/**
- * Turn the zod-install probe into a skew advisory. The NEAREST node_modules/zod
- * is what this project resolves (nearest wins — a correctly installed project is
- * never shadowed). Any install ABOVE it never reaches THIS project, but it DOES
- * catch a dependency-less dir under it — a loop scaffolded but not yet
- * `npm install`ed, or a globally installed vernier driving a bare loop file —
- * which then resolves a DIFFERENT zod than the kernel converts with. A v3/v4
- * skew there fails schema derivation (z.toJSONSchema rejects a foreign schema).
- * Surfaced before it bites; a warning, never a doctor failure. NOTE: this walks
- * from cwd, not from each loop module's own resolution path, so it can miss a
- * global-install skew — the per-step derive-probe is the AUTHORITATIVE check
- * (it catches a foreign-zod schema by the derivation throw, wherever the stray
- * install sits). This is the cheaper proactive hint. SAME-version installs above
- * are not a skew (z.toJSONSchema accepts a same-version schema), so they are
- * suppressed — only a genuine version divergence from the nearest zod is surfaced.
- */
-function zodSkewWarnings(installs: readonly ZodInstall[]): string[] {
-  const [nearest, ...rest] = installs
-  if (!nearest || rest.length === 0) return []
-  // Only a DIFFERENT version above can fail derivation; a same-version shadow is benign.
-  // Unknown versions ("") stay in — never claim a sameness we can't prove.
-  const skews = rest.filter((s) => s.version !== nearest.version || nearest.version === "")
-  if (skews.length === 0) return []
-  const plural = skews.length === 1 ? "" : "s"
-  const list = skews.map((s) => `${s.path} (zod ${s.version || "version unknown"})`).join(", ")
-  return [
-    `zod resolves here from ${nearest.path} (zod ${nearest.version || "version unknown"}), but ${skews.length} ` +
-      `version-skewed zod install${plural} sit above it (${list}). A dependency-less dir under those — a freshly ` +
-      `scaffolded loop run before \`npm install\`, or a global vernier driving a bare loop file — resolves that zod ` +
-      `instead, and the skew against the kernel's zod then fails schema derivation. Remove the stray install${plural}.`,
-  ]
-}
+export const NO_SKILLS: SkillRegistry = { skills: new Map(), invalid: [], warnings: [] }
 
 /**
  * Resolve a step's skills (config skillBindings > declared default; --skill
@@ -277,7 +209,11 @@ function stepSkillReports(step: Step, skillBindings: readonly SkillBindingLayer[
     const found = skills.skills.get(name)
     return found !== undefined
       ? { name, ok: true, detail: found.dir }
-      : { name, ok: false, detail: `skill \`${name}\` is not discovered (vernier.config skills, <project>/.claude/skills, ~/.claude/skills)` }
+      : {
+          name,
+          ok: false,
+          detail: `skill \`${name}\` is not discovered (vernier.config skills, <project>/.agents/skills, <project>/.claude/skills, ~/.agents/skills, ~/.claude/skills)`,
+        }
   })
 }
 
@@ -296,8 +232,6 @@ export async function diagnose(
 ): Promise<DoctorReport> {
   const bindings: BindingLayer[] = [config?.bindings ?? new Map<string, string>()]
   const skillBindings: SkillBindingLayer[] = [config?.skillBindings ?? new Map<string, readonly string[]>()]
-  // Environment advisory, loop-independent: a second zod resolvable above the project.
-  const warnings = zodSkewWarnings(probes.zodInstalls())
   const skillRows: SkillReport[] = [
     ...[...skills.skills.values()].map((s) => ({ name: s.name, ok: true, origin: s.origin, detail: s.dir })),
     ...skills.invalid.map((i) => ({ name: i.path, ok: false, origin: i.origin, detail: i.reason })),
@@ -335,7 +269,7 @@ export async function diagnose(
     for (const executor of baseline) check(executor)
     for (const executor of config?.executors ?? []) check(executor)
     for (const executor of baseline) await (executor as { shutdown?: () => Promise<void> }).shutdown?.()
-    return { executors: [...checked.values()], skills: skillRows, loops: [], warnings, ok: true }
+    return { executors: [...checked.values()], skills: skillRows, loops: [], warnings: skills.warnings, ok: true }
   }
 
   const loops: LoopReport[] = []
@@ -428,7 +362,7 @@ export async function diagnose(
     executors: [...checked.values()],
     skills: skillRows,
     loops,
-    warnings,
+    warnings: skills.warnings,
     ok: loops.every((l) => l.runnable),
   }
 }
@@ -443,7 +377,7 @@ export function renderDoctor(report: DoctorReport): string[] {
   }
   if (report.skills.length > 0) {
     // Config/project skills and every invalid skill print in full; valid
-    // user-tier (~/.claude/skills) skills that no step references collapse
+    // User-tier skills that no step references collapse
     // to a count — a big personal skill library must not drown the report
     // (--json always carries every row).
     const referenced = new Set(report.loops.flatMap((l) => l.steps.flatMap((s) => (s.skills ?? []).map((sk) => sk.name))))
@@ -453,7 +387,11 @@ export function renderDoctor(report: DoctorReport): string[] {
     for (const s of shown) {
       lines.push(`  ${mark(s.ok)}  ${s.name.padEnd(28)} ${s.origin}: ${s.detail}`)
     }
-    if (elided > 0) lines.push(`      (+ ${elided} more spec-valid skill${elided === 1 ? "" : "s"} under ~/.claude/skills; see --json)`)
+    if (elided > 0) lines.push(`      (+ ${elided} more spec-valid user skill${elided === 1 ? "" : "s"}; see --json)`)
+  }
+  if (report.warnings.length > 0) {
+    lines.push("", "WARNINGS")
+    for (const warning of report.warnings) lines.push(`  !!  ${warning}`)
   }
   lines.push("", "LOOPS")
   if (report.loops.length === 0) {
@@ -471,10 +409,6 @@ export function renderDoctor(report: DoctorReport): string[] {
         lines.push(`          skill ${sk.name}${sk.ok ? "" : `  (${sk.detail})`}`)
       }
     }
-  }
-  if (report.warnings.length > 0) {
-    lines.push("", "WARNINGS")
-    for (const w of report.warnings) lines.push(`  !!  ${w}`)
   }
   lines.push(
     "",

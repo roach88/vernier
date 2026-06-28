@@ -4,7 +4,7 @@
 // fixture's vernier.config.json. The executor echoes the rendered prompt,
 // so whatever the engine delivered comes back as the loop output — skill
 // embedding is observable from outside the process. HOME points at scratch
-// so the user tier (~/.claude/skills) is hermetic per test.
+// so the user tier (~/.agents/skills) is hermetic per test.
 
 import { execFile } from "node:child_process"
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
@@ -51,6 +51,13 @@ async function cli(opts: CliOpts, ...args: string[]): Promise<CliResult> {
 
 const scratch = (label: string): string => mkdtempSync(join(tmpdir(), `vernier-skills-cli-${label}-`))
 
+function writeLegacyUserSkill(home: string, name: string, body: string): string {
+  const dir = join(home, ".claude", "skills", name)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: A legacy user-tier skill. Use when testing migration.\n---\n\n${body}\n`, "utf8")
+  return dir
+}
+
 describe("vernier run --skill (spawned CLI)", () => {
   it("delivers the step's declared skill: the SKILL.md body arrives embedded in the prompt, and the journal records it", async () => {
     const home = scratch("home")
@@ -76,9 +83,9 @@ describe("vernier run --skill (spawned CLI)", () => {
     expect(started?.skills).toBeUndefined()
   })
 
-  it("resolves a --skill override from the user tier (~/.claude/skills of $HOME)", async () => {
+  it("resolves a --skill override from the user tier (~/.agents/skills of $HOME)", async () => {
     const userHome = scratch("user-tier")
-    const dir = join(userHome, ".claude", "skills", "home-greeting")
+    const dir = join(userHome, ".agents", "skills", "home-greeting")
     mkdirSync(dir, { recursive: true })
     writeFileSync(
       join(dir, "SKILL.md"),
@@ -90,6 +97,18 @@ describe("vernier run --skill (spawned CLI)", () => {
     const outcome = JSON.parse(result.stdout) as { output: { text: string } }
     expect(outcome.output.text).toContain("Open with AHOY instead.")
     expect(outcome.output.text).not.toContain(SKILL_BODY_MARKER) // the override REPLACED the declared skill
+  })
+
+  it("resolves a legacy ~/.claude/skills user skill for migration and warns on stderr", async () => {
+    const userHome = scratch("legacy-user-tier")
+    writeLegacyUserSkill(userHome, "legacy-greeting", "Open with HOWDY instead.")
+    const result = await cli({ home: scratch("home"), userHome }, "run", "skill-echo", "--skill", "speak=legacy-greeting", "--json")
+    expect(result.code).toBe(0)
+    const outcome = JSON.parse(result.stdout) as { output: { text: string } }
+    expect(outcome.output.text).toContain("Open with HOWDY instead.")
+    expect(result.stderr).toContain("warning:")
+    expect(result.stderr).toContain(".claude/skills")
+    expect(result.stderr).toContain("legacy-greeting")
   })
 
   it("exit 2 with the discovered inventory named when a bound skill cannot be resolved", async () => {
@@ -125,7 +144,7 @@ describe("vernier run --skill (spawned CLI)", () => {
   it("repeated --skill flags for one key accumulate and de-dupe; a later empty value clears, winning over accumulation", async () => {
     // A second resolvable skill in the user tier so accumulation is observable.
     const userHome = scratch("accum-user")
-    const dir = join(userHome, ".claude", "skills", "home-greeting")
+    const dir = join(userHome, ".agents", "skills", "home-greeting")
     mkdirSync(dir, { recursive: true })
     writeFileSync(
       join(dir, "SKILL.md"),
@@ -212,6 +231,61 @@ describe("vernier run --skill (spawned CLI)", () => {
     expect(human.stdout).toContain("[config]")
   })
 
+  it("`vernier skills --json` keeps JSON on stdout and warns on stderr for legacy ~/.claude/skills", async () => {
+    const userHome = scratch("legacy-skills-list")
+    writeLegacyUserSkill(userHome, "legacy-listing", "List me during migration.")
+    const result = await cli({ home: scratch("home"), userHome, cwd: scratch("no-config") }, "skills", "--json")
+    expect(result.code).toBe(0)
+    const rows = JSON.parse(result.stdout) as Array<{ name: string | null; origin: string; ok: boolean; dir: string }>
+    expect(rows).toContainEqual(expect.objectContaining({ name: "legacy-listing", origin: "user", ok: true }))
+    expect(result.stderr).toContain("warning:")
+    expect(result.stderr).toContain(".claude/skills")
+    expect(result.stderr).toContain("legacy-listing")
+  })
+
+  it("doctor reports legacy ~/.claude/skills warnings in both JSON and human output", async () => {
+    const broken = scratch("legacy-doctor")
+    writeFileSync(join(broken, "vernier.config.json"), JSON.stringify({ loops: ["./skill-loop.mjs"] }), "utf8")
+    writeFileSync(join(broken, "skill-loop.mjs"), readFileSync(join(FIXTURE, "skill-loop.mjs"), "utf8"), "utf8")
+    const userHome = scratch("legacy-doctor-home")
+    writeLegacyUserSkill(userHome, "greeting-style", "Always open with HOWDY during migration.")
+
+    const json = await cli({ home: scratch("home"), userHome, cwd: broken }, "doctor", "--json")
+    expect(json.code).toBe(0)
+    const report = JSON.parse(json.stdout) as { warnings: string[]; skills: Array<{ name: string; origin: string; ok: boolean }> }
+    expect(report.skills).toContainEqual(expect.objectContaining({ name: "greeting-style", origin: "user", ok: true }))
+    expect(report.warnings).toEqual([expect.stringContaining("greeting-style")])
+    expect(report.warnings[0]).toContain(".claude/skills")
+    expect(json.stderr).toContain("warning:")
+    expect(json.stderr).toContain(".claude/skills")
+
+    const human = await cli({ home: scratch("home"), userHome, cwd: broken }, "doctor")
+    expect(human.code).toBe(0)
+    expect(human.stdout).toContain("WARNINGS")
+    expect(human.stdout).toContain(".claude/skills")
+    expect(human.stdout).toContain("greeting-style")
+  })
+
+  it("warns when vernier.config explicitly registers a legacy .claude/skills parent", async () => {
+    const project = scratch("legacy-config")
+    writeFileSync(join(project, "vernier.config.json"), JSON.stringify({ skills: ["./.claude/skills"] }), "utf8")
+    const dir = join(project, ".claude", "skills", "legacy-configured")
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, "SKILL.md"),
+      "---\nname: legacy-configured\ndescription: A config-registered legacy skill. Use when testing migration.\n---\n\nConfigured legacy body.\n",
+      "utf8",
+    )
+
+    const result = await cli({ home: scratch("home"), cwd: project }, "skills", "--json")
+    expect(result.code).toBe(0)
+    const rows = JSON.parse(result.stdout) as Array<{ name: string | null; origin: string; ok: boolean }>
+    expect(rows).toContainEqual(expect.objectContaining({ name: "legacy-configured", origin: "config", ok: true }))
+    expect(result.stderr).toContain("warning:")
+    expect(result.stderr).toContain(".claude/skills")
+    expect(result.stderr).toContain("legacy-configured")
+  })
+
   it("a --json output larger than the 64KB pipe buffer arrives COMPLETE (exit discipline: drain, never process.exit)", async () => {
     // A user tier big enough that `skills --json` exceeds the pipe buffer:
     // process.exit() after writing would truncate mid-document (the bug this
@@ -220,7 +294,7 @@ describe("vernier run --skill (spawned CLI)", () => {
     const filler = "x".repeat(900)
     for (let i = 0; i < 90; i++) {
       const name = `bulk-skill-${String(i).padStart(2, "0")}`
-      const dir = join(userHome, ".claude", "skills", name)
+      const dir = join(userHome, ".agents", "skills", name)
       mkdirSync(dir, { recursive: true })
       writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: Bulk fixture ${i}. ${filler}\n---\n\nbody\n`, "utf8")
     }

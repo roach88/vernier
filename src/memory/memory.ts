@@ -39,17 +39,6 @@ export function rulesPath(root: string): string {
   return join(root, "memory", "rules.jsonl")
 }
 
-/**
- * The retriever-selection knob for registry-built runtimes. Only lexical is
- * built in; construct Memory with a custom Retriever when measured recall
- * quality needs a different ranker.
- */
-export function retrieverFromEnv(env: NodeJS.ProcessEnv = process.env): Retriever {
-  const choice = env.VERNIER_RETRIEVER?.trim() ?? ""
-  if (choice === "" || choice === "lexical") return lexicalRetriever()
-  throw new Error(`Unknown VERNIER_RETRIEVER \`${choice}\`; valid value: lexical (default).`)
-}
-
 export class Memory implements MemoryStore {
   readonly retriever: Retriever
 
