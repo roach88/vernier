@@ -42,6 +42,16 @@ interface CliEnv {
   readonly cwd?: string
 }
 
+interface TrustStatusJson {
+  readonly report: {
+    readonly status: "promotable" | "not_promotable"
+    readonly reasons: readonly string[]
+    readonly totals: {
+      readonly cleanRuns: number
+    }
+  }
+}
+
 async function cli(env: string | CliEnv, ...args: string[]): Promise<CliResult> {
   const opts: CliEnv = typeof env === "string" ? { home: env, config: SMOKE_CONFIG } : env
   const spawnEnv: NodeJS.ProcessEnv = { ...process.env, VERNIER_HOME: opts.home }
@@ -226,6 +236,52 @@ export default {
     const statsDoc = JSON.parse(stats.stdout) as { runs: Array<{ runId: string; journal: string }> }
     expect(statsDoc.runs).toEqual(expect.arrayContaining([expect.objectContaining({ runId: outcome.runId, journal: outcome.journal })]))
   })
+
+  it("`trust status` inspects default-root evidence when config is broken", async () => {
+    const root = home()
+    const ran = await cli(root, "run", "control-plane-smoke-test", "--json")
+    expect(ran.code).toBe(0)
+    const configDir = mkdtempSync(join(tmpdir(), "vernier-cli-trust-bad-config-"))
+    const badConfig = join(configDir, "vernier.config.mjs")
+    writeFileSync(badConfig, "import './missing-module.mjs';\nexport default { loops: [] };\n", "utf8")
+
+    const trusted = await cli({ home: root, config: badConfig }, "trust", "status", "control-plane-smoke-test", "--min-runs", "1", "--json")
+    expect(trusted.code).toBe(0)
+    const parsed: TrustStatusJson = JSON.parse(trusted.stdout)
+    expect(parsed.report.status).toBe("promotable")
+    expect(parsed.report.totals.cleanRuns).toBe(1)
+  })
+
+  it("`trust status` reports no evidence as usage instead of failed evidence", async () => {
+    const result = await cli(home(), "trust", "status", "control-plane-smoke-test", "--json")
+
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain("No evidence found for loop `control-plane-smoke-test`")
+  })
+
+  it("`trust status` returns promotable only after the configured clean-run threshold", async () => {
+    const root = home()
+    const first = await cli(root, "run", "control-plane-smoke-test", "--json")
+    expect(first.code).toBe(0)
+
+    const insufficient = await cli(root, "trust", "status", "control-plane-smoke-test", "--min-runs", "2", "--json")
+    expect(insufficient.code).toBe(1)
+    const insufficientJson: TrustStatusJson = JSON.parse(insufficient.stdout)
+    expect(insufficientJson.report.status).toBe("not_promotable")
+    expect(insufficientJson.report.reasons.join("\n")).toContain("insufficient evidence")
+
+    for (let i = 0; i < 2; i++) {
+      const result = await cli(root, "run", "control-plane-smoke-test", "--json")
+      expect(result.code).toBe(0)
+    }
+
+    const promotable = await cli(root, "trust", "status", "control-plane-smoke-test", "--min-runs", "3", "--json")
+    expect(promotable.code).toBe(0)
+    const promotableJson: TrustStatusJson = JSON.parse(promotable.stdout)
+    expect(promotableJson.report.status).toBe("promotable")
+    expect(promotableJson.report.totals.cleanRuns).toBe(3)
+  })
+
 
 
   it("does not treat explicit relative ledger roots as duplicate default roots", async () => {
